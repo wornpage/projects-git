@@ -14,9 +14,10 @@ export function createDemoApi(){
   };
 }
 
-export function installDemoGuide(document){
+export function installDemoGuide(document,{onOpen}){
   const guide=document.getElementById('demo-guide-steps');
-  if(!guide)throw Error('Demo document is missing its guide.');
+  const body=document.getElementById('demo-guide-body'),trigger=document.getElementById('open-demo-guide');
+  if(!guide||!body||!trigger||typeof onOpen!=='function')throw Error('Demo document is missing its guide or inspector port.');
   const stages=[['overview','','1 · Requirements'],['work','','2 · Agent work'],['review','candidate-changes','3 · Changes'],
     ['review','verification','4 · Checks'],['review','code-review','5 · Independent review'],['review','review-decision','6 · Owner decision'],['evidence','','7 · Merge record']];
   const nav=document.createElement('nav');nav.setAttribute('aria-label','Guided example');
@@ -24,12 +25,13 @@ export function installDemoGuide(document){
     link.href='?'+new URLSearchParams({view,task:exampleIds.task,candidate:exampleIds.safe})+(section?'#'+section:'');
     nav.append(link);}
   guide.append(nav);
+  trigger.addEventListener('click',()=>{body.hidden=false;onOpen(body);});
 }
 
 export function updateDemoGuide(document,{view,taskId,runId,hash}){
-  for(const link of document.querySelectorAll('#demo-guide .demo-step')){
+  for(const link of document.querySelectorAll('.demo-step')){
     const target=new URL(link.href);
-    const active=taskId===exampleIds.task&&runId===exampleIds.safe&&target.searchParams.get('view')===view&&target.hash===hash;
+    const active=taskId===exampleIds.task&&(!['review','evidence'].includes(view)||runId===exampleIds.safe)&&target.searchParams.get('view')===view&&target.hash===hash;
     if(active)link.setAttribute('aria-current','step');else link.removeAttribute('aria-current');
   }
 }

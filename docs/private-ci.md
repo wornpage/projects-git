@@ -29,6 +29,10 @@ local image ID and supplies that exact ID to `PROJECTS_SANDBOX_TEST_IMAGE`,
 container. A missing Docker runtime fails the job; it does not produce a reduced
 passing denominator.
 
+Each invocation owns a unique temporary image tag. Rebuilding another checkout
+cannot replace the reference that keeps this run's immutable image available.
+The image ID and build log remain part of the private receipt.
+
 The suite discovers new tests automatically. The receipt records the actual
 total, passed, failed, skipped, cancelled and todo counts. No fixed count is
 treated as timeless, and newly added tests do not change historical denominators.

@@ -4,6 +4,7 @@ if ($PSVersionTable.PSVersion.Major -lt 7) { throw "CI requires PowerShell 7." }
 $OutputEncoding = [Console]::OutputEncoding
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $false
+$ciImageTag = "projects-git-ci:verification-" + [Guid]::NewGuid().ToString("N")
 New-Item -ItemType Directory -Force qa/ci | Out-Null
 node scripts/ci-receipt.mjs init
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -28,9 +29,9 @@ $installed = Invoke-CiCheck "install" { npm ci }
 if ($installed) {
     Invoke-CiCheck "audit" { npm audit --json --audit-level=high } | Out-Null
     $imagesReady = Invoke-CiCheck "images" {
-        docker build --network none --platform linux/amd64 --tag projects-git-ci:verification containers/verification
+        docker build --network none --platform linux/amd64 --tag $ciImageTag containers/verification
         if ($LASTEXITCODE -eq 0) {
-            $runtimeImage = (docker image inspect projects-git-ci:verification --format "{{.Id}}").Trim()
+            $runtimeImage = (docker image inspect $ciImageTag --format "{{.Id}}").Trim()
             if ($LASTEXITCODE -ne 0 -or $runtimeImage -notmatch "^sha256:[a-f0-9]{64}$") { throw "Docker did not return an immutable image ID." }
             node scripts/ci-receipt.mjs image $runtimeImage
         }

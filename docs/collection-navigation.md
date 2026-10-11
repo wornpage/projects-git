@@ -65,5 +65,6 @@ yet bound transfer size for an unusually large individual project. Exports
 continue to include full retained records.
 
 The public example uses invented records and the same collection components.
-Its compact notice stays visible; **Example guide** expands the guided links.
+Its compact notice stays visible; **Example guide** opens the guided links in the
+existing side panel without moving the trigger or the work content.
 It does not expose private workspace data or delegate reads to the live API.

@@ -1,9 +1,10 @@
 const guide=entrance=>`<section id="demo-guide" class="demo-guide" aria-labelledby="demo-guide-title">
   <h2 id="demo-guide-title" class="sr-only">Explore a completed project</h2>
   <p><strong>Read-only example.</strong> Invented records.</p>
-  <details class="demo-guide-details"><summary>Example guide</summary><p>Browsing runs no agents, checks or Git operations.</p><div id="demo-guide-steps"></div>
+  <button id="open-demo-guide" class="text-link" type="button" aria-haspopup="dialog" aria-controls="inspector-dialog">Example guide</button>
+  <div id="demo-guide-body" class="demo-guide-content" hidden><p>Browsing runs no agents, checks or Git operations.</p><div id="demo-guide-steps"></div>
     <p class="demo-return"><a href="/">About Projects Git</a> · ${entrance ? '<a href="/workspace/">Sign in to private workspace</a>' : '<a href="https://github.com/wornpage/projects-git-challenge">Source and run instructions</a>'}</p>
-  </details>
+  </div>
 </section>`;
 
 // One workbench document and renderer; the demo adds only its labeled entry context.

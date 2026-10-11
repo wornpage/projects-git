@@ -28,7 +28,10 @@ import { localAgentInstructions, hostedAgentInstructions } from './agent-instruc
 
 const content = $("#content");
 const demo = document.body.dataset.demo === 'read-only' ? await import('./demo/client.js') : null;
-if(demo)demo.installDemoGuide(document);
+if(demo)demo.installDemoGuide(document,{onOpen:body=>{
+  openInspector('Example guide',body);
+  demo.updateDemoGuide(document,{view,taskId:selectedTask,runId:selectedRun,hash:location.hash});
+}});
 const errorNotice = createErrorNotice(document);
 const drafts = new Map();
 const disclosures = new Map();
