@@ -1378,6 +1378,7 @@ textarea {
   background: var(--worn-danger-bg);
   border-color: var(--worn-danger-border);
 }
+.review-record + .button { margin-top: 16px; }
 .review-record h3 {
   font-size: 13px;
   color: var(--worn-success-text);
@@ -3331,6 +3332,12 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
   .review-grid[data-active-section=verification] > .review-verification { display:grid; }
 }
 @media (max-width:600px) {
+  #project-header .shell-project-picker { grid-column:1; grid-row:1; display:block; }
+  #project-header .shell-project-picker > label { display:none; }
+  .project-shell-actions { grid-column:2; grid-row:1; }
+  .project-shell-title { grid-column:1 / -1; grid-row:2; }
+  #shell-project-controls { font-size:0; width:44px; min-height:44px; padding:0; }
+  #shell-project-controls::before { content:"⚙"; font-size:20px; }
   .review-jumps { grid-template-columns:repeat(2,minmax(0,1fr)); }
   dialog.task-composer-dialog { width:100%; max-width:100%; height:100%; max-height:100dvh; margin:0; border-radius:0; padding:18px; }
   .task-stack { grid-template-columns:minmax(0,1fr); gap:18px; }

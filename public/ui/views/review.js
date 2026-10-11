@@ -145,7 +145,7 @@ export function createReviewView({
       el('li',{},el('strong',{},'Owner'),el('span',{},'Accepts or rejects; merge is separate')));
     return panel('Independent code review',el('div',{class:'panel-body'},boundaries,
       el('p',{role:'status'},state.label),
-      demo ? el('p',{class:'small'},'This read-only example contains an illustrative review. It did not authenticate a reviewer or run these checks. Open the hosted proof from the welcome page to inspect recorded qualification results.')
+      demo ? el('p',{class:'small'},'This read-only example contains an illustrative review. Its records are invented; browsing does not authenticate a reviewer or run checks.')
       : !hosted ? el('p',{class:'small'},'Local loopback decisions are attribution. This mode does not authenticate an independent reviewer or establish a security boundary between local processes.')
       : el('p',{class:'small'},'Reviewer credentials cannot claim work, edit code, run checks, accept candidates or merge. A changed commit, requirements, owner or verification policy makes the assessment stale.'),
       !demo && hosted && !workspace.authentication?.reviewerClientIds?.length && !workspace.authentication?.reviewerSubjects?.length ? el('p',{class:'small'},'No independent reviewer is configured. Allowlist a separate Access reviewer identity before owner acceptance.') : null,

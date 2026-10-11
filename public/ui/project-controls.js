@@ -16,7 +16,7 @@ export function automaticMergeControls({project, hosted, canManage, busy, onChan
 export function createProjectControls({id, onOpen}, ...body) {
   const panel = el('section', {id, class: 'project-controls-panel', 'aria-labelledby': 'shell-project-controls'}, ...body);
   const trigger = el('button', {id: 'shell-project-controls', type: 'button', class: 'button button-small',
-    'aria-controls':'inspector-dialog', 'aria-haspopup':'dialog', onclick: () => {
+    'aria-label':'Project settings',title:'Project settings','aria-controls':'inspector-dialog', 'aria-haspopup':'dialog', onclick: () => {
       if (!trigger.isConnected) return;
       onOpen(panel,trigger);
     }}, 'Project settings');
