@@ -1,11 +1,11 @@
 import {el, panel} from '../dom.js';
 import {taskOutcome, taskQueued, taskBriefing, projectContext} from '../../workbench-state.js';
-import {projectCoordinationView} from '../project-coordination.js';
+import {projectCoordinationView,projectActivityDetails} from '../project-coordination.js';
 
-export function createQueueView({
+export function createTaskViews({
   getContext,
   parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
-  switchView, selectProject, openTaskComposer, openRevision, openInspector
+  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff
 }) {
   const {prerequisitesPanel, timeline} = parts;
   function metric(label, value, denominator, note, icon) {
@@ -56,12 +56,15 @@ export function createQueueView({
   }
 
   function focusedTask(task) {
-    const {workspace, busy} = getContext();
+    const {workspace, busy, demo} = getContext();
     const brief = taskBriefing(workspace, task), change = brief.change;
     const directionChanged = change && (change.purposeChanged || change.added.length || change.removed.length);
     const next = brief.outcome;
     const body = el('div', { class: 'panel-body focused-task-body' },
       el('p', { class: 'task-intent' }, task.purpose),
+      demo ? null : el('button', { class:'button button-small', disabled:busy || !workspace.capabilities?.handoff,
+        title:busy ? 'Wait for the current action.' : !workspace.capabilities?.handoff ? 'Task handoff export needs the updated server.' : 'Export this task, its requirements and all retained candidates.',
+        onclick:()=>downloadHandoff(task) }, 'Download task handoff'),
       prerequisitesPanel(task),
       el('div', { class: 'task-next-step' }, el('strong', {}, next.label), el('p', {}, next.detail),
         el('button', { class: 'button button-primary button-small', onclick: () => switchView(next.view, task.id, next.runId ?? null) }, next.action + ' →')),
@@ -108,14 +111,14 @@ export function createQueueView({
         el('p', {}, 'A task request for ' + pendingProject.name + ' is awaiting confirmation. Its destination and request ID are preserved.'),
         el('button', { class: 'button button-small', onclick: () => { selectProject(pendingProject.id); openTaskComposer('project:' + pendingProject.id); } }, 'Return to saved request')) : null),
       project ? projectCoordinationView({workspace,projectId:project.id,
-        onOpenTask:id=>{const selected=workspace.tasks.find(item=>item.id===id);if(selected){const outcome=taskOutcome(workspace,selected);switchView(outcome.view,id,outcome.runId);}},
-        onOpenRun:id=>{const run=workspace.runs.find(item=>item.id===id);if(run)switchView(['assigned','running'].includes(run.status)?'work':'review',run.taskId,run.id);}}) : null,
-      task ? disclosure('queue-task-brief-'+task.id,'Selected task brief · '+task.title,focusedTask(task)) : null,
+        onOpenTask:id=>switchView('overview',id,null),
+        onOpenCandidates:id=>switchView('work',id,null)}) : null,
+
       el('div',{class:'secondary-actions'},
         project ? el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Project activity and totals',projectHome(project),
-          el('p',{class:'small'},'Latest '+Math.min(5,events.length)+' / '+events.length+' events'),timeline(events,5))},'Project activity') : null,
+          projectActivityDetails({workspace,projectId:project.id}),el('p',{class:'small'},'Latest '+Math.min(5,events.length)+' / '+events.length+' events'),timeline(events,5))},'Project activity') : null,
         el('button',{type:'button',class:'text-link',onclick:()=>openInspector(workspace.page?'Loaded project summary':'Workspace summary',workflow(),metrics(),
           el('p',{class:'definition-note'},(workspace.page?'These totals cover the loaded projects. The workspace has '+workspace.page.totalProjects+' projects; execution capacity remains workspace-wide. ':'Workspace totals include every project and retained candidate. ')+'Latest reported checks sums each candidate’s latest report; earlier history is separate.'))},workspace.page?'Loaded project summary':'Workspace summary')));
   }
-  return overview;
+  return {queue:overview,task:()=>{const task=currentTask();return task ? focusedTask(task) : panel('Task',el('p',{},'Select a task from its project queue.'));}};
 }

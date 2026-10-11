@@ -2,7 +2,7 @@ import {el, panel, shortSha} from '../dom.js';
 import {projectBrief} from '../../workbench-state.js';
 
 // Workspace discovery is a read-only projection of the same project selectors.
-export function createProjectsView({getContext, getProjectSelection, selectProject, switchView, openTaskComposer, changeProjectPage}) {
+export function createProjectsView({getContext, getProjectSelection, selectProject, switchView, openTaskComposer, changeProjectPage, createStarter}) {
   function projectCard(project) {
     const {workspace}=getContext(),brief=projectBrief(workspace,project.id);
     const code=project.codeConnected===false ? 'Code unavailable' : workspace.provider==='cloudflare-artifacts' ? 'Artifacts code' : 'Workspace Git copy';
@@ -13,7 +13,7 @@ export function createProjectsView({getContext, getProjectSelection, selectProje
     return el('article',{class:'project-card','aria-labelledby':'project-title-'+project.id},
       el('div',{class:'project-card-top'},el('span',{class:'section-kicker'},code),
         el('span',{class:'project-admission '+(project.acceptingWork?'on':'paused')},project.acceptingWork?'Admission on':'Admission paused')),
-      el('h2',{id:'project-title-'+project.id},openTaskId ? el('a',{href:'?view=overview&task='+encodeURIComponent(openTaskId)+(savedRun?'&candidate='+encodeURIComponent(savedRun.id):''),
+      el('h2',{id:'project-title-'+project.id},openTaskId ? el('a',{href:'?view=queue&project='+encodeURIComponent(project.id),
         onclick:event=>{if(event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();selectProject(project.id);}},project.name) : project.name),
       el('p',{class:'project-code'},(project.defaultBranch??(workspace.provider==='local-git'?'main':'default branch'))+' · '+shortSha(project.mainCommit)),
       el('dl',{class:'project-card-counts'},[['Needs decision',brief.decisions],['Active tasks',brief.active],['Waiting',brief.waiting],['Ready to claim',brief.eligibleQueued]].map(([label,value])=>
@@ -34,14 +34,19 @@ export function createProjectsView({getContext, getProjectSelection, selectProje
         el('button',{class:'button button-small',disabled:busy||page.nextOffset===null,onclick:()=>changeProjectPage(page.nextOffset)},'Next projects'),
         el('button',{class:'button button-small',disabled:busy,onclick:()=>changeProjectPage(0,true)},'Refresh projects'))) : null;
     return el('div',{class:'projects-home'},
+      workspace.personalWorkspace ? panel('Your isolated workspace', el('div',{class:'panel-body'},
+        el('p',{},'Your projects, tasks and repositories are separate from other visitors and the working workspace. Start with a fresh checkout project, then edit its task queue, requirements and project policy.'),
+        el('p',{class:'small muted'},'This trial has no connected agents or model key. It does not run agents or manufacture completed work.'),
+        !projects.length && (!page || page.totalProjects === 0) && workspace.personalWorkspace.starterAvailable
+          ? el('button',{type:'button',class:'button button-primary',disabled:busy,onclick:createStarter},busy?'Preparing starter…':'Create my starter project') : null)) : null,
       el('section',{class:'workspace-intro','aria-label':'Workspace overview'},
         el('div',{},el('p',{class:'section-kicker'},workspace.name),
           el('h2',{},'Work moves through projects.'),
           el('p',{},'Queue agreed tasks, follow agent changes, and decide what becomes part of the project.')),
         workspace.authentication && !workspace.authentication.permissions.manage ? null : el('button',{type:'button',class:'button button-primary',onclick:()=>openTaskComposer('repository')},'+ New project')),
       pagination(),
-      projects.length ? el('div',{class:'project-directory'},projects.map(projectCard))
-        : panel('Your first project',el('div',{class:'panel-body'},
+      projects.length ? el('ul',{class:'project-directory collection-list','aria-label':'Projects'},projects.map(project=>el('li',{},projectCard(project))))
+        : workspace.personalWorkspace ? null : panel('Your first project',el('div',{class:'panel-body'},
           el('p',{},workspace.authentication && !workspace.authentication.permissions.manage ? 'The workspace owner connects projects and queues tasks. Your assigned work will appear here.' : 'Start with New project. Connect committed code, then describe one useful task.'),
           el('ol',{class:'journey-steps'},
             el('li',{},workspace.provider==='cloudflare-artifacts' ? 'Have the existing Artifacts repository name and full base commit ready. The current setup does not browse repositories for you.' : 'Have the local repository path and full base commit ready.'),

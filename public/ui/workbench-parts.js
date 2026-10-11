@@ -37,7 +37,7 @@ export function earlierReportPanel(workspace, run, disclosure) {
 
 export function createWorkbenchParts({
   getContext,
-  disclosure, currentRun, taskRuns, tasksInProject, taskLabel,
+  disclosure, currentRun, taskRuns,
   switchView, showError, announce, independentlyVerified, checksFailed, openInspector
 }) {
   const diffPanel = createDiffView({getContext});
@@ -56,13 +56,6 @@ export function createWorkbenchParts({
     return shown.length ? el("div", { class: "timeline" }, shown.map((event) => el("div", { class: "timeline-item" }, el("span", { class: `timeline-dot ${/accept|merge|verif/.test(event.type) ? "good" : /start|assign|creat/.test(event.type) ? "accent" : ""}`, "aria-hidden": "true" }), el("div", { class: "timeline-message" }, event.message), el("time", { class: "timeline-time", datetime: event.at, title: dateTime(event.at) }, timeOnly(event.at))))) : el("div", { class: "timeline-empty" }, "Your workspace history starts when you create a task. Every transition is retained.");
   }
 
-  function taskSwitcher(task) {
-    const {workspace} = getContext();
-    const project = workspace.projects?.[task.projectId];
-    const select = el('select', { id: 'task-selection', onchange: event => switchView(getContext().view, event.target.value, null, {preservePosition:true}) },
-      (project ? tasksInProject(project) : workspace.tasks).map(entry => el('option', { value: entry.id, selected: entry.id === task.id }, taskLabel(entry))));
-    return el('div',{class:'task-selector mobile-task-selector'},el('label',{for:'task-selection'},'Task'),select);
-  }
   function taskHeader(task) {
     const {workspace}=getContext();
     const outcome=taskOutcome(workspace,task);
@@ -79,20 +72,6 @@ export function createWorkbenchParts({
         task.criteria.length+' requirement'+(task.criteria.length===1?'':'s')+' · Read task brief'));
   }
 
-
-  function taskList(task) {
-    const {workspace,view}=getContext();
-    const tasks=workspace.tasks.filter(entry=>entry.projectId===task.projectId);
-    const groups=[['Ongoing',tasks.filter(entry=>!entry.mergedCommit)],['Integrated',tasks.filter(entry=>entry.mergedCommit)]];
-    return el('aside',{id:'project-queue',class:'project-task-rail','aria-label':'Tasks in this project','data-project-key':workspace.id+':'+task.projectId},
-      el('div',{class:'task-rail-heading'},el('h2',{},'Tasks'),el('span',{class:'small'},tasks.length+' total')),
-      groups.filter(([,items])=>items.length).map(([title,items])=>el('section',{'aria-label':title},
-        el('h3',{class:'queue-group-title'},title,el('span',{},items.length+' / '+tasks.length)),
-        items.map(entry=>el('button',{id:'queue-task-'+entry.id,type:'button',
-          class:'queue-task '+(entry.id===task.id?'selected':''),'aria-pressed':entry.id===task.id,
-          onclick:()=>switchView(view,entry.id,null,{preservePosition:true})},el('strong',{},entry.title),
-          el('span',{class:'small'},taskOutcome(workspace,entry).label))))));
-  }
 
   function prerequisitesPanel(task) {
     const {workspace} = getContext();
@@ -114,18 +93,12 @@ export function createWorkbenchParts({
   }
 
   function candidateNav(task, action = null) {
-    const run = currentRun();
-    const candidates=taskRuns(task.id);
-    if (candidates.length === 1) return el('section',{class:'candidate-surface single-candidate','aria-label':'Task change'},
-      el('div',{class:'candidate-surface-header'},el('span',{class:'section-kicker'},'TASK CHANGE · 1 CANDIDATE'),action),
-      el('div',{class:'candidate-identity'},el('strong',{},candidates[0].label),runStatus(candidates[0])));
-    return el('section',{class:'candidate-surface','aria-label':'Retained candidates'},
-      el('div',{class:'candidate-surface-header'},el('span',{class:'section-kicker'},'RETAINED CANDIDATES · '+candidates.length),action),
-      el('div', { class: 'candidate-nav', role:'group', 'aria-label': 'Select candidate' }, candidates.map(candidate => el('button', {
-      id: 'candidate-select-' + candidate.id, class: 'candidate-button ' + (candidate.id === run?.id ? 'selected' : ''),
-      'aria-pressed': candidate.id === run?.id,
-      onclick: () => { const {view, selectedRun} = getContext(); if (candidate.id === selectedRun) return; switchView(view, task.id, candidate.id, {preservePosition:true}); }
-    }, el('span', {}, candidate.label), runStatus(candidate)))));
+    const run = currentRun(), candidates=taskRuns(task.id);
+    if (!run) return null;
+    return el('section',{class:'candidate-surface','aria-label':'Selected candidate'},
+      el('div',{class:'candidate-surface-header'},el('span',{class:'section-kicker'},'CANDIDATE '+(candidates.findIndex(item=>item.id===run.id)+1)+' OF '+candidates.length+' · THIS TASK'),action),
+      el('div',{class:'candidate-identity'},el('strong',{},run.label),runStatus(run)),
+      el('button',{class:'text-link',onclick:()=>switchView('work',task.id,null)},'Back to all '+candidates.length+' candidates'));
   }
 
   function evidenceChecks(run) {
@@ -152,5 +125,5 @@ export function createWorkbenchParts({
       evidence.commit !== run.headCommit ? el("p", { class: "inline-error" }, "The report belongs to a different commit. It cannot authorize acceptance.") : null,
       evidence.source === "hosted-harness-report" ? el("p", { class: "inline-error" }, "This hosted report has not been independently verified. Acceptance remains unavailable.") : null));
   }
-  return {runStatus, emptyState, timeline, taskHeader, taskList, taskSwitcher, prerequisitesPanel, commitValue, candidateNav, diffPanel, evidenceChecks};
+  return {runStatus, emptyState, timeline, taskHeader, prerequisitesPanel, commitValue, candidateNav, diffPanel, evidenceChecks};
 }

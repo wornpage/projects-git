@@ -70,8 +70,8 @@ test('all query terms match across declared fields with literal case-insensitive
 test('result links select the exact task and candidate, or the queued task', () => {
   const { workspace } = fixture();
   const [brief, candidate] = searchRetainedWork(workspace, 'alpha').items;
-  assert.deepEqual(readLocation(brief.href), { view: 'work', taskId: 'queued', runId: null });
-  assert.deepEqual(readLocation(candidate.href), { view: 'review', taskId: 'task-a', runId: 'run-a' });
+  assert.deepEqual(readLocation(brief.href), { view: 'work', projectId:null, taskId: 'queued', runId: null });
+  assert.deepEqual(readLocation(candidate.href), { view: 'review', projectId:null, taskId: 'task-a', runId: 'run-a' });
 });
 
 test('search uses the canonical outcome and never promotes stale or failed checks', () => {

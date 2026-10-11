@@ -63,7 +63,7 @@ export function createWorkView({
     return el('section', { class: 'task-progress' },
       el('h2', {}, state.label),
       el('p', {}, active.length ? active.filter(run => run.status === 'running').length + ' running · ' + active.filter(run => run.status === 'assigned').length + ' waiting' : state.detail),
-      el('p', {}, runs.filter(run => run.headCommit).length + ' / ' + runs.length + ' commits · ' + runs.filter(independentlyVerified).length + ' / ' + runs.length + ' current independent reports'),
+      runs.length ? el('p', {}, runs.filter(run => run.headCommit).length + ' / ' + runs.length + ' candidates have commits · ' + runs.filter(independentlyVerified).length + ' / ' + runs.length + ' have current independent reports') : el('p',{},'No candidates have been created for this task.'),
       taskLifecycle(workspace, currentRun(), switchView),
       state.view !== 'work' ? el('worn-button', {label: state.action, variant: 'primary', onclick: () => switchView(state.view, task.id, state.runId ?? null)}) : null);
   }
@@ -74,13 +74,20 @@ export function createWorkView({
     if (!task) return panel('Agent work', emptyState('No task yet', 'Open Projects to connect code and queue a task.'));
     const runs = taskRuns(task.id);
     const prerequisites = dependencyState(workspace,task);
+    const admissionPaused = workspace.projects?.[task.projectId]?.acceptingWork === false;
+    const agentsUnavailable = workspace.personalWorkspace?.agentConnections === false;
+    const emptyTitle = admissionPaused ? 'New work paused' : !prerequisites.ready ? 'Waiting for integration' : agentsUnavailable ? 'Agents not connected' : 'Ready for work';
+    const emptyText = admissionPaused ? 'This task stays in the queue. New agent work can begin after project admission is enabled and an agent is connected.'
+      : !prerequisites.ready ? 'This task becomes eligible after its prerequisites are integrated. Other eligible work can proceed.'
+      : agentsUnavailable ? 'Your task is saved. This isolated trial has no connected agents or model key, so no agent work has started.'
+      : 'No agent has been assigned. Start with one checkout for this task.';
     const assignment = repositoryAgents(task);
-    return el('div', {}, taskHeader(task), taskProgress(task, runs), runs.length ? null : assignment,
-      el('div', { class: 'section-heading' }, el('h2', {}, runs.length > 1 ? 'Retained candidates' : 'Task change'), el('span', { class: 'section-kicker' }, runs.length + ' CANDIDATE' + (runs.length === 1 ? '' : 'S') + ' · THIS TASK')),
-      runs.length ? el('div', { class: 'run-grid' }, runs.map(agentCard)) : panel(prerequisites.ready?'Ready for work':'Waiting for integration',
-        el('p', { class: 'no-candidate' }, prerequisites.ready?'No agent has been assigned. Start with one checkout for this task.':'This task becomes eligible after its prerequisites are integrated. Other eligible work can proceed.')),
+    return el('div', {}, taskHeader(task), taskProgress(task, runs), runs.length || agentsUnavailable ? null : assignment,
+      el('div', { class: 'section-heading' }, el('h2', {}, 'Candidates'), el('span', { class: 'section-kicker' }, runs.length + ' CANDIDATE' + (runs.length === 1 ? '' : 'S') + ' · THIS TASK')),
+      runs.length ? el('ul', { class: 'run-grid collection-list', 'aria-label':'Candidates for this task' }, runs.map((run,index)=>el('li',{},agentCard(run,index)))) : panel(emptyTitle,
+        el('p', { class: 'no-candidate' }, emptyText)),
       el('div',{class:'work-task-actions'},
-        runs.length && assignment ? el('button',{type:'button',class:'button button-small',onclick:()=>openInspector('Prepare another candidate',assignment)},'Prepare another candidate') : null,
+        runs.length && assignment && !agentsUnavailable ? el('button',{type:'button',class:'button button-small',onclick:()=>openInspector('Prepare another candidate',assignment)},'Prepare another candidate') : null,
         demo ? null : taskSettings(task),
         el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Task activity',timeline(workspace.events.filter(event=>event.taskId===task.id),10))},'View task activity')));
   }

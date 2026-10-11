@@ -88,9 +88,9 @@ test('review draft context changes with requirements, owner, evidence, and compa
 
 test('navigation URLs round trip task and candidate and refuse unknown views', () => {
   const search = locationSearch('review', 'task-a', 'candidate-b');
-  assert.deepEqual(readLocation(search), { view: 'review', taskId: 'task-a', runId: 'candidate-b' });
+  assert.deepEqual(readLocation(search), { view: 'review', projectId:null, taskId: 'task-a', runId: 'candidate-b' });
   assert.equal(readLocation('?view=unknown').view, 'projects');
-  assert.deepEqual(readLocation(''),{view:'projects',taskId:null,runId:null});
+  assert.deepEqual(readLocation(''),{view:'projects',projectId:null,taskId:null,runId:null});
   assert.equal(locationSearch('projects','task-a','candidate-b'),'?view=projects');
 });
 
@@ -217,4 +217,13 @@ test('steering shows earlier assignments and shared files without treating retai
   brief = taskBriefing(state, task);
   assert.equal(brief.passing, 0, 'Rejected and superseded reports do not become current options');
   assert.equal(brief.total, 3, 'Retained alternatives remain in the denominator');
+});
+
+test('collection URLs retain only project scope and never silently select an item',()=>{
+ const list=locationSearch('queue','task-a','candidate-b','project-c');
+ assert.equal(list,'?view=queue&project=project-c');
+ assert.deepEqual(readLocation(list),{view:'queue',projectId:'project-c',taskId:null,runId:null});
+ assert.equal(locationSearch('work','task-a','candidate-b'),'?view=work&task=task-a');
+ assert.equal(readLocation('?view=queue&project=p&task=t&candidate=r').taskId,null);
+ assert.equal(readLocation('?view=history&project=p&candidate=r').runId,null);
 });

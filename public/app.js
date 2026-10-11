@@ -1,6 +1,6 @@
 import {createWorkbenchParts, mergeStatusNotice} from './ui/workbench-parts.js';
 import {createRetainedSearch} from './ui/retained-search.js';
-import {createQueueView} from './ui/views/queue.js';
+import {createTaskViews} from './ui/views/queue.js';
 import {createWorkView} from './ui/views/work.js';
 import {createReviewView} from './ui/views/review.js';
 import {createEvidenceView} from './ui/views/evidence.js';
@@ -43,10 +43,12 @@ const initialLocation = readLocation(location.search);
 let workspace = null;
 let view = initialLocation.view;
 let selectedTask = initialLocation.taskId;
+let selectedProject = initialLocation.projectId;
 let selectedRun = initialLocation.runId;
 let projectOffset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
 let pageRevision = null;
 function workspacePath() {
+  if (['queue','history'].includes(view) && selectedProject) return '/api/workspace?limit=1&project='+encodeURIComponent(selectedProject);
   if (view !== 'projects' && selectedTask) return '/api/workspace?limit=1&task='+encodeURIComponent(selectedTask);
   return '/api/workspace?limit=10&offset='+projectOffset+(pageRevision===null?'':'&at='+pageRevision);
 }
@@ -54,7 +56,7 @@ let renderKey = "";
 let lastError = "";
 
 // Compose UI owners here; they receive current state and explicit operations.
-function getContext() { return {workspace, view, selectedTask, selectedRun, demo:Boolean(demo), busy: actions.busy, sessionWarning: browserSession.warning}; }
+function getContext() { return {workspace, view, selectedProject, selectedTask, selectedRun, demo:Boolean(demo), busy: actions.busy, sessionWarning: browserSession.warning}; }
 const api = demo ? demo.createDemoApi() : createApiClient({captureSession: () => connection.captureSession(), onAuthRequired: () => {
   for(const dialog of document.querySelectorAll('dialog[open]')) { dialogs.skipFocusRestore(dialog.id); dialog.close(); }
   $('#auth-panel').hidden = false;
@@ -84,7 +86,7 @@ const browserSession = createBrowserSession({drafts, disclosures, assignmentRequ
 const taskCreation = createTaskCreation({getContext, currentProject,
   selectTask: taskId => { selectedTask = taskId; selectedRun = null; }, switchView, api, refresh,
   render, updateChrome, schedulePoll, saveSession, clearError, showError, announce});
-const parts = createWorkbenchParts({getContext, disclosure, currentRun, taskRuns, tasksInProject, taskLabel,
+const parts = createWorkbenchParts({getContext, disclosure, currentRun, taskRuns,
   switchView, showError, announce, independentlyVerified, checksFailed, openInspector});
 const {loadIndexedSearch, rebuildSearch} = createRetainedSearch({getContext, retainedSearches, currentProject, api, render, announce, showError});
 const {reviewPanel} = createReviewForm({getContext, drafts, api, mutate, refresh, saveSession, showError,
@@ -92,36 +94,43 @@ const {reviewPanel} = createReviewForm({getContext, drafts, api, mutate, refresh
   runCoordination, comparisonKey, comparisonHeads, acceptanceReady, disclosure, evidenceChecks: parts.evidenceChecks, diffPanel: parts.diffPanel, switchView});
 const publicationPanel = createPublicationView({getContext, captureSession:connection.captureSession, api, mutate, refresh, openInspector});
 
+const taskViews = createTaskViews({getContext, parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
+  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff});
 const views = {
-  projects: createProjectsView({getContext, getProjectSelection:id=>projectSelections.get(id), selectProject, switchView, openTaskComposer, changeProjectPage}),
-  overview: createQueueView({getContext, parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
-    switchView, selectProject, openTaskComposer, openRevision, openInspector}),
+  projects: createProjectsView({getContext, getProjectSelection:id=>projectSelections.get(id), selectProject, switchView, openTaskComposer, changeProjectPage, createStarter: async () => {
+    const result = await mutate(() => api("/api/workspace/starter", {expectedWorkspaceId:workspace.id}), "Your starter project is ready.");
+    if (result) await refresh(true);
+  }}),
+  queue: taskViews.queue,
+  overview: taskViews.task,
   work: createWorkView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff,
     switchView, openContinuation, checksFailed, independentlyVerified, openInspector}),
   review: createReviewView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, reviewPanel, publicationPanel, downloadReviewContext,
     verificationDrafts, actionFeedback, actionKey, actionNotice, mutate, runOperation, sha256Text, refresh, finishBaseUpdate, openContinuation, independentlyVerified, openInspector, onSectionChange:updateChrome}),
   evidence: createEvidenceView({getContext, parts, disclosure, currentProject, currentTask, currentRun, taskNumber,
-    retainedSearches, loadIndexedSearch, rebuildSearch, render, announce, switchView, downloadHandoff, downloadEvidence, independentlyVerified, checksFailed}),
+    retainedSearches, loadIndexedSearch, rebuildSearch, render, announce, switchView, downloadEvidence, independentlyVerified, checksFailed}),
 };
+views.history = views.evidence;
 const viewTitles = {
   projects: ["Projects", "Projects", "Your code, queued work and decisions stay together."],
-  overview: ["Queue", "Task queue", "Choose work to see its next step."],
-  work: ["Agent work", "Agent work", "Follow the task’s change, then inspect its checks and review."],
-  review: ["Review", "Review changes", "Inspect the change and its evidence, record your decision, then merge separately."],
-  evidence: ["Evidence", "Evidence", "Commits, check reports and decisions. Workspace and task exports are labeled below."],
+  queue: ["Task queue", "Task queue", "All tasks in this project. Open a task for its requirements and candidates."],
+  history: ["Project history", "Project history", "All retained candidates and activity in this project."],
+  overview: ["Task", "Task", "One task: its requirements, status and candidates."],
+  work: ["Candidates", "Candidates", "All candidates for this task. Open one to inspect its changes and checks."],
+  review: ["Candidate", "Candidate", "One candidate: changes, checks, independent review and integration status."],
+  evidence: ["Candidate record", "Candidate record", "Retained reports and decisions for this candidate."],
 };
 
 function taskNumber(task) { return workspace.page?.taskNumbers?.[task.id] ?? workspace.tasks.findIndex(entry => entry.id === task.id) + 1; }
-function taskLabel(task) { return `Task ${taskNumber(task)} · ${taskOutcome(workspace, task).label} — ${task.title}`; }
 function runCoordination(run) { return workspace.coordination?.[run.id]; }
 function comparisonHeads(run) { return (runCoordination(run)?.overlaps ?? []).map(({ runId, headCommit }) => ({ runId, headCommit })).sort((a, b) => a.runId.localeCompare(b.runId)); }
 function comparisonKey(run) { return JSON.stringify(comparisonHeads(run)); }
 function taskRuns(taskId) { return workspace.runs.filter((run) => run.taskId === taskId); }
-function currentTask() { return workspace.tasks.find((task) => task.id === selectedTask) || workspace.tasks.at(-1); }
+function currentTask() { return workspace.tasks.find((task) => task.id === selectedTask); }
 function currentRun() {
   const task = currentTask();
   const runs = task ? taskRuns(task.id) : [];
-  return runs.find((run) => run.id === selectedRun) || runs.find((run) => run.id === task?.acceptedRunId) || runs.find((run) => run.status === "awaiting_review") || runs[0];
+  return runs.find((run) => run.id === selectedRun);
 }
 function independentlyVerified(run) {
   return verifiedAtCurrentHead(workspace, run);
@@ -192,7 +201,7 @@ function disclosure(key, title, ...body) {
   return node;
 }
 function saveLocation(push = false) {
-  const next = locationSearch(view, selectedTask, selectedRun)+(view==='projects'&&projectOffset?'&offset='+projectOffset:'');
+  const next = locationSearch(view, selectedTask, selectedRun, selectedProject)+(view==='projects'&&projectOffset?'&offset='+projectOffset:'');
   if (next !== location.search) history[push ? 'pushState' : 'replaceState'](null, '', next);
 }
 
@@ -204,12 +213,12 @@ function updateChrome() {
   $('#close-inspector').disabled = actions.busy;
   $('#inspector-pending').hidden = !actions.busy;
   const [label, title, subtitle] = viewTitles[view];
-  const task = workspace ? currentTask() : null,taskView=!['projects','overview'].includes(view);
-  const heading=taskView && task ? task.title : title;
+  const task = workspace ? currentTask() : null,taskView=!['projects','queue','history'].includes(view);
+  const heading = ['review','evidence'].includes(view) && currentRun() ? currentRun().label : taskView && task ? task.title : title;
   if ($("#view-name").textContent!==label) $("#view-name").textContent=label;
   $('#view-crumb').hidden=view==='projects';
   if ($("#page-title").textContent!==heading) $("#page-title").textContent=heading;
-  $("#page-kicker").textContent = taskView && task ? 'TASK '+taskNumber(task)+' · '+label : view==='projects' ? 'WORKSPACE' : 'PROJECT WORK';
+  $("#page-kicker").textContent = taskView && task ? 'TASK '+taskNumber(task)+' · '+label : view==='projects' ? 'PROJECT LIST' : view==='queue' ? 'TASK LIST' : 'PROJECT HISTORY';
   $("#page-subtitle").textContent = taskView ? label+' · '+subtitle : subtitle;
   $('#main').classList.toggle('compact-view', view !== 'overview' || Boolean(workspace?.tasks.length));
   $('#new-project').disabled = !workspace || taskCreation.starting;
@@ -232,8 +241,12 @@ function updateChrome() {
   $("#provider-dot").classList.toggle("connected", !connection.state.error);
   const project = currentProject();
   const context = project ? projectContext(workspace, project.id) : null;
-  $("#work-count").textContent = context?.activeCandidates.length ?? 0;
-  $("#work-count").setAttribute('aria-label',(context?.activeCandidates.length??0)+' assigned or running candidates in this project');
+  $('#task-views').hidden = !currentTask();
+  $('#candidate-views').hidden = !currentRun();
+  $('#task-count').textContent = context?.tasks.length ?? 0;
+  const candidateCount = currentTask() ? taskRuns(currentTask().id).length : 0;
+  $("#work-count").textContent = candidateCount;
+  $("#work-count").setAttribute('aria-label',candidateCount+' retained candidates for this task');
   const pendingTasks = context?.reviewTasks.length ?? 0;
   $("#review-count").textContent = pendingTasks;
   $("#review-count").setAttribute('aria-label', `${pendingTasks} project tasks needing review or merge`);
@@ -251,38 +264,37 @@ function render(force = false) {
   if (!force && key === renderKey) return;
   renderKey = key;
   const focus = captureFocus(content);
-  const previousRail=content.querySelector('#project-queue');
-  const railPosition=previousRail?{key:previousRail.getAttribute('data-project-key'),top:previousRail.scrollTop}:null;
   for (const details of content.querySelectorAll('details[id]')) disclosures.set(details.id, details.open);
-  const node = views[view]();
-  const recovery = recoveryAlert();
-  const task=currentTask(),project=currentProject();
-  const page=project&&task ? el('div',{class:'project-task-layout'},parts.taskList(task),el('div',{class:'task-detail-pane'},parts.taskSwitcher(task),node)) : node;
-  content.replaceChildren(...(recovery ? [recovery, page] : [page]));
-  const nextRail=content.querySelector('#project-queue');
-  if(railPosition&&nextRail?.getAttribute('data-project-key')===railPosition.key)nextRail.scrollTop=railPosition.top;
+  const node = views[view](), recovery = recoveryAlert(), task=currentTask(), project=currentProject();
+  const crumbs = project ? el('nav',{class:'scope-breadcrumbs','aria-label':'Location'},
+    el('button',{class:'text-link',onclick:()=>switchView('projects')},'Projects'),el('span',{'aria-hidden':'true'},'/'),
+    el('button',{class:'text-link',onclick:()=>selectProject(project.id)},project.name+' · '+tasksInProject(project).length+' task'+(tasksInProject(project).length===1?'':'s')),
+    task ? [el('span',{'aria-hidden':'true'},'/'),el('button',{class:'text-link',onclick:()=>switchView('overview',task.id,null)},task.title)] : null,
+    task && view!=='overview' ? [el('span',{'aria-hidden':'true'},'/'),el('button',{class:'text-link',onclick:()=>switchView('work',task.id,null)},'Candidates · '+taskRuns(task.id).length)] : null,
+    currentRun() ? [el('span',{'aria-hidden':'true'},'/'),el('span',{'aria-current':'page'},currentRun().label)] : null) : null;
+  content.replaceChildren(...[recovery,crumbs,node].filter(Boolean));
   content.setAttribute("aria-busy", "false");
   explainDisabledButtons();
   restoreFocus(focus);
 }
 
-async function switchView(next, taskId = selectedTask, runId = selectedRun, {preservePosition=false,section=null}={}) {
+async function switchView(next, taskId = selectedTask, runId = selectedRun, {preservePosition=false,section=null,projectId=null}={}) {
   const reviewSection = next === 'review' && ['candidate-changes','verification','code-review','review-decision'].includes(section) ? section : null;
-  if (next === view && taskId === selectedTask && runId === selectedRun && !reviewSection) return;
+  if (next === view && taskId === selectedTask && runId === selectedRun && (!projectId || projectId===selectedProject) && !reviewSection) return;
   rememberProjectSelection();
   const previousPath = workspacePath();
   if ($('#task-launcher').open) $('#task-launcher').close();
   if ($('#project-connection-dialog').open) $('#project-connection-dialog').close();
   if ($('#continuation-dialog').open) $('#continuation-dialog').close();
   if ($('#inspector-dialog').open) { dialogs.skipFocusRestore('inspector-dialog'); $('#inspector-dialog').close(); }
-  view = next;
-  selectedTask = taskId;
-  selectedRun = runId;
-  if(next==='projects'){selectedTask=null;selectedRun=null;}
+  selectedProject = projectId ?? workspace.tasks.find(task=>task.id===taskId)?.projectId ?? selectedProject;
+  view = next; selectedTask = taskId; selectedRun = ['review','evidence'].includes(next) ? runId : null;
+  if(['projects','queue','history'].includes(next)){selectedTask=null;selectedRun=null;}
+  if(next==='projects') selectedProject=null;
   if ((workspacePath() !== previousPath || next!=='projects' && taskId && !workspace.tasks.some(task=>task.id===taskId)) && !await refresh(true)) return;
   selectedRun = currentRun()?.id ?? null;
   saveLocation(true);
-  if(reviewSection) history.replaceState(history.state, '', locationSearch(view, selectedTask, selectedRun) + '#' + reviewSection);
+  if(reviewSection) history.replaceState(history.state, '', locationSearch(view, selectedTask, selectedRun, selectedProject) + '#' + reviewSection);
   render(true);
   const target = reviewSection && document.getElementById(reviewSection);
   if(target){
@@ -303,7 +315,7 @@ function rememberProjectSelection() {
     saveSession();
   }
 }
-function currentProject() { return view==='projects' ? null : workspace?.projects?.[currentTask()?.projectId]; }
+function currentProject() { return view==='projects' ? null : workspace?.projects?.[currentTask()?.projectId ?? selectedProject]; }
 async function changeProjectPage(offset, fresh=false) {
   if(actions.busy) return;
   const previous = projectOffset;
@@ -317,10 +329,8 @@ function selectProject(projectId) {
   rememberProjectSelection();
   const context = projectContext(workspace, projectId), saved = projectSelections.get(projectId);
   if (!context) { showError('This project is unavailable. Open Projects and select a current project.'); return; }
-  const task = context.tasks.find(task => task.id === saved?.taskId) ?? context.tasks.at(-1);
-  if (!task) { openTaskComposer('project:'+projectId); return; }
   if (!taskCreation.locked) taskCreation.activate('project:' + projectId);
-  switchView('overview', task.id, context.runs.some(run => run.taskId === task.id && run.id === saved?.runId) ? saved.runId : null);
+  switchView('queue', null, null, {projectId});
 }
 function projectPicker() {
   const project = currentProject();
@@ -371,7 +381,7 @@ function updateProjectHeader() {
   projectHeaderKey = key;
   const controlsId = 'project-controls-' + project.id;
   const controls = createProjectControls({id: controlsId, onOpen: (body,opener)=>openInspector('Project settings · '+project.name,body)},
-    demo ? null : el('button', { id: 'shell-connect-agent', class: 'button button-small', onclick: () => {
+    demo || workspace.personalWorkspace?.agentConnections === false ? null : el('button', { id: 'shell-connect-agent', class: 'button button-small', onclick: () => {
       dialogs.skipFocusRestore('inspector-dialog'); $('#inspector-dialog').close();
       $('#project-connection-title').textContent = 'Connect agent · ' + project.name;
       $('#project-connection-content').replaceChildren(projectConnection(project));
@@ -388,7 +398,7 @@ function updateProjectHeader() {
       el('button', { id: 'shell-new-task', class: 'button button-primary button-small', hidden: Boolean(workspace.authentication && !workspace.authentication.permissions.manage), onclick: () => openTaskComposer('project:' + project.id) }, '+ New task'),
       controls.trigger),
 
-    view==='overview' ? el('section', { class: 'project-command-brief', 'aria-label': 'Project command brief' },
+    view==='queue' ? el('section', { class: 'project-command-brief', 'aria-label': 'Project command brief' },
       el('dl', { class: 'command-brief-counts' }, [['Needs decision',brief.decisions],['Active tasks',brief.active],['Waiting',brief.waiting],['Ready to claim',brief.eligibleQueued]].map(([label,value])=>
         el('div',{},el('dt',{},label),el('dd',{},value+' / '+brief.total)))),
       brief.next ? el('div', { class: 'command-brief-next' }, el('span', {}, brief.next.title),
@@ -437,6 +447,7 @@ function repositoryAgents(task) {
   const paused = workspace.projects?.[task.projectId]?.acceptingWork === false;
   const dependency = dependencyState(workspace, task);
   const disabled = actions.busy || paused || !dependency.ready || task.acceptedRunId || task.mergedCommit || workspace.repositoryWorkflow?.busyTaskIds.includes(task.id);
+  if (workspace.personalWorkspace && !workspace.personalWorkspace.agentConnections) return panel('Agent connections', el('div', {class:'panel-body'}, el('p',{},'This isolated trial has no connected agents or model key. You can edit the queue, requirements and project policy; creating tasks does not start an agent.')));
   const pending = assignmentRequests.get(task.id);
   const feedbackKey=actionKey('assignment',task);
   const client = workspace.authentication ? el('select', {id:'agent-client',required:true,disabled:Boolean(pending)}, el('option',{value:''},'Choose an Access agent client'), workspace.authentication.agentClientIds.map(id=>el('option',{value:id,selected:pending?.agentClientId===id},id))) : null;
@@ -587,10 +598,12 @@ function connectionFailed(error) {
   showError(error.message); updateConnectionStatus();
   $('#provider-dot').classList.remove('connected');
   content.setAttribute('aria-busy', 'false');
+  const unavailableItem = ['PROJECT_NOT_FOUND','RUN_NOT_FOUND'].includes(error.code);
   if (!workspace) content.replaceChildren(el('div', {class:'panel'}, el('div', {class:'empty-state'},
-    el('h2', {}, error.auth ? 'Connect to continue' : 'Workspace unavailable'),
-    el('p', {}, error.auth ? 'Sign in through Cloudflare Access to open this workspace.' : 'The app needs its server to load source data. Start the local server, then reconnect.'),
-    !error.auth ? el('button', {class:'button', onclick: () => refresh(true)}, 'Reconnect') : null)));
+    el('h2', {}, error.auth ? 'Connect to continue' : unavailableItem ? 'Work unavailable' : 'Workspace unavailable'),
+    el('p', {}, error.auth ? 'Sign in through Cloudflare Access to open this workspace.' : unavailableItem ? 'That project or task is not available in this workspace. Open Projects to choose available work.' : 'The workspace could not load. Check the connection, then reconnect.'),
+    unavailableItem ? el('a',{class:'button',href:location.pathname+'?view=projects'},'Open Projects')
+      : !error.auth ? el('button', {class:'button', onclick: () => refresh(true)}, 'Reconnect') : null)));
 }
 
 $('#adopt-owner').addEventListener('click',async()=>{
@@ -614,22 +627,26 @@ for(const selector of ['#brand-home','#workspace-return']) $(selector).addEventL
 $('#new-project').addEventListener('click', () => openTaskComposer('repository'));
 $('#close-project-connection').addEventListener('click', () => $('#project-connection-dialog').close());
 function resolveLocation() {
-  if(view==='projects'){selectedTask=null;selectedRun=null;return;}
-  const invalidTask = selectedTask && !workspace.tasks.some(task => task.id === selectedTask);
-  const invalidRun = selectedRun && !workspace.runs.some(run => run.id === selectedRun && run.taskId === selectedTask);
-  if (invalidTask || invalidRun) {
-    view = 'overview'; selectedTask = null; selectedRun = null;
-    showError('The task or candidate in this link is unavailable in this workspace. Select a task to continue.');
+  if(view==='projects'){selectedTask=null;selectedRun=null;selectedProject=null;return;}
+  if(['queue','history'].includes(view)) {
+    selectedTask=null;selectedRun=null;
+    if(!selectedProject || !workspace.projects?.[selectedProject]) {view='projects';selectedProject=null;showError('Select a project to browse its tasks.');}
+    return;
   }
-  selectedTask ??= workspace.tasks.at(-1)?.id ?? null;
-  selectedRun = currentRun()?.id ?? null;
+  const task = workspace.tasks.find(task=>task.id===selectedTask);
+  if (!task) {view='projects';selectedTask=null;selectedRun=null;selectedProject=null;showError('This task is unavailable. Select a project and task.');return;}
+  selectedProject=task.projectId;
+  if(['review','evidence'].includes(view) && !workspace.runs.some(run=>run.id===selectedRun&&run.taskId===task.id)) {
+    view='work';selectedRun=null;
+  }
+  if(!['review','evidence'].includes(view))selectedRun=null;
 }
 window.addEventListener('popstate', async () => {
   rememberProjectSelection();
   if ($('#task-launcher').open) $('#task-launcher').close();
   if ($('#project-connection-dialog').open) $('#project-connection-dialog').close();
   const place = readLocation(location.search);
-  view = place.view; selectedTask = place.taskId; selectedRun = place.runId;
+  view = place.view; selectedProject = place.projectId; selectedTask = place.taskId; selectedRun = place.runId;
   projectOffset=Math.max(0,Number(new URLSearchParams(location.search).get('offset'))||0);pageRevision=null;
   await refresh(true);
 });

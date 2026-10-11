@@ -55,7 +55,6 @@ export function createNavigation({getContext, dialogs, announce, selectProject, 
     dialogs.skipFocusRestore('command-dialog');
     $('#command-dialog').close();
     if (entry.group === 'Projects') {
-      if (!entry.taskId) { openTaskComposer('project:' + entry.projectId); return; }
       selectProject(entry.projectId);
     } else switchView(entry.view, entry.taskId, entry.runId ?? null);
   }

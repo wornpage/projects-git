@@ -67,7 +67,7 @@ async function compareSelectors(f, projectId = f.connected.projectId) {
     const summary = status.candidates.find(item => item.runId === run.id);
     assert.deepEqual(summary.outcome, candidateOutcome(state, run));
     assert.equal(summary.verification.independentlyVerified, independentlyVerified(state, run));
-    assert.deepEqual(readLocation(new URL(summary.browserUrl).search), { view: run.status === 'merged' ? 'evidence' : ['assigned', 'running'].includes(run.status) ? 'work' : 'review', taskId: run.taskId, runId: run.id });
+    assert.deepEqual(readLocation(new URL(summary.browserUrl).search), { view: run.status === 'merged' ? 'evidence' : ['assigned', 'running'].includes(run.status) ? 'work' : 'review', projectId:null, taskId: run.taskId, runId: ['assigned','running'].includes(run.status) ? null : run.id });
     for (const rule of state.coordination[run.id].acceptance.filter(rule => !rule.met)) assert.ok(summary.blockers.some(blocker => blocker.code === rule.code));
     const task = tasks.find(task => task.id === run.taskId);
     if (['accepted', 'merged', 'superseded'].includes(run.status) || task.acceptedRunId && task.acceptedRunId !== run.id) {

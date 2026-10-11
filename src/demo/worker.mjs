@@ -2,7 +2,7 @@ import {demoDocument} from './document.mjs';
 
 const headers={'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Cache-Control':'no-store'};
-const views=new Set(['projects','overview','work','review','evidence']);
+const views=new Set(['projects','queue','overview','work','review','evidence','history']);
 export default {async fetch(request,env){
   const url=new URL(request.url);
   if(!['GET','HEAD'].includes(request.method))return Response.json({error:{code:'DEMO_READ_ONLY',message:'Read-only example; no action was performed.'}},{status:405,headers:{...headers,Allow:'GET, HEAD'}});

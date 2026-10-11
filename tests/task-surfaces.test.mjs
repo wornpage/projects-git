@@ -37,16 +37,14 @@ test('a report row selects exact historical counts and provenance without nested
   assert.equal(JSON.stringify(entries),before);
 });
 
-test('task navigation stays in its project and requests position preservation',async()=>{
-  installFakeDOM();const workspace=createWorkspace('Navigation'),calls=[];
-  const first=createTask(workspace,{title:'First',purpose:'Result',criteria:['One'],owner:'Owner',baseCommit:'a'.repeat(40)});
-  const second=createTask(workspace,{title:'Second',purpose:'Result',criteria:['Two'],owner:'Owner',baseCommit:'a'.repeat(40)});
-  const other=createTask(workspace,{title:'Foreign',purpose:'Result',criteria:['Three'],owner:'Owner',baseCommit:'a'.repeat(40)});
-  first.projectId=second.projectId='one';other.projectId='two';
-  const parts=createWorkbenchParts({getContext:()=>({workspace,view:'review'}),switchView:(...args)=>calls.push(args)});
-  const rail=parts.taskList(first);assert.ok(!rail.textContent.includes('Foreign'));
-  await all(rail).find(n=>n.id==='queue-task-'+second.id).dispatch('click');
-  assert.deepEqual(calls[0],['review',second.id,null,{preservePosition:true}]);
+test('candidate detail names exactly one candidate and links back to its complete collection',async()=>{
+ installFakeDOM();const calls=[],workspace=createWorkspace('Navigation');
+ const task=createTask(workspace,{title:'Task',purpose:'Result',criteria:['One'],owner:'Owner',baseCommit:'a'.repeat(40)});
+ const first={id:'first',taskId:task.id,label:'First',status:'assigned',headCommit:null},second={id:'second',taskId:task.id,label:'Second',status:'assigned',headCommit:null};
+ workspace.runs=[first,second];
+ const parts=createWorkbenchParts({getContext:()=>({workspace}),currentRun:()=>second,taskRuns:()=>workspace.runs,switchView:(...args)=>calls.push(args)});
+ const view=parts.candidateNav(task);assert.match(view.textContent,/CANDIDATE 2 OF 2/);assert.ok(!view.textContent.includes('First'));
+ await all(view).find(n=>n.tagName==='BUTTON'&&n.textContent==='Back to all 2 candidates').dispatch('click');assert.deepEqual(calls,[['work',task.id,null]]);
 });
 
 test('every draft is validated even when another draft is the visible editor',()=>{

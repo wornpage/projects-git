@@ -22,10 +22,16 @@
         <a id="workspace-home" class="nav-item workspace-home" href="/?view=projects" data-view="projects"><span class="nav-icon" aria-hidden="true">◫</span><span>Projects</span><span id="project-total" class="nav-count">0</span></a>
         <div id="project-navigation" class="project-navigation"></div>
         <nav id="project-views" class="main-nav" aria-label="Project views" hidden>
-          <button class="nav-item active" data-view="overview" aria-current="page"><span class="nav-icon" aria-hidden="true">◫</span><span class="nav-label">Queue</span></button>
-          <button class="nav-item" data-view="work"><span class="nav-icon" aria-hidden="true">⇄</span><span class="nav-label">Agent work</span><span id="work-count" class="nav-count">0</span></button>
-          <button class="nav-item" data-view="review"><span class="nav-icon" aria-hidden="true">✓</span><span class="nav-label">Review</span><span id="review-count" class="nav-count">0</span></button>
-          <button class="nav-item" data-view="evidence"><span class="nav-icon" aria-hidden="true">≡</span><span class="nav-label">Evidence</span></button>
+          <button class="nav-item" data-view="queue"><span class="nav-label">Task queue</span><span id="task-count" class="nav-count">0</span></button>
+          <button class="nav-item" data-view="history"><span class="nav-label">Project history</span></button>
+          <div id="task-views" hidden><p class="nav-scope-label">Selected task</p>
+            <button class="nav-item" data-view="overview"><span class="nav-label">Task details</span></button>
+            <button class="nav-item" data-view="work"><span class="nav-label">Candidates</span><span id="work-count" class="nav-count">0</span></button>
+            <div id="candidate-views" hidden><p class="nav-scope-label">Selected candidate</p>
+              <button class="nav-item" data-view="review"><span class="nav-label">Changes & checks</span><span id="review-count" hidden></span></button>
+              <button class="nav-item" data-view="evidence"><span class="nav-label">Candidate record</span></button>
+            </div>
+          </div>
         </nav>
         <button id="new-project" class="button button-small new-project-button" type="button" disabled>+ New project</button>
         <div class="sidebar-bottom">

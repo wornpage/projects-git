@@ -52,7 +52,7 @@ export async function publicEntrance(request, assetBinding) {
   }
   if (path === '/demo/') {
     const view = url.searchParams.get('view');
-    if (view && !['projects','overview','work','review','evidence'].includes(view)) return publicResponse('Unknown example view.',404);
+    if (view && !['projects','queue','overview','work','review','evidence','history'].includes(view)) return publicResponse('Unknown example view.',404);
     const html = demoDocument(await assetDocument(assetBinding, url.origin, '/index.html'),{entrance:true});
     return publicResponse(head ? null : workbenchDocument(html, '/demo/assets/', {demo:true}), 200, {'Content-Type':'text/html;charset=utf-8'});
   }

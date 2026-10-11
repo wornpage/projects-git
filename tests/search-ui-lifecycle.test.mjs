@@ -7,14 +7,14 @@ import {createRetainedSearch} from '../public/ui/retained-search.js';
 function fixture() {
   const project = { id: 'project' };
   const state = { remote: { index: { revision: 1 }, generation: 1, items: [] }, request: 0, draft: 'old', query: 'old', mode: 'literal', loading: false, error: '' };
-  const calls = [], announcements = [];
+  const calls = [], announcements = [], renders = [], errors = [];
   const context = {
-    workspace: { id: 'workspace', projects:{[project.id]:project}, tasks:[],runs:[] }, retainedSearches: new Map([[project.id, state]]), view: 'evidence',
-    currentProject: () => project, render() {}, announce: text => announcements.push(text), showError() {}, indexedSearchResults: () => [],
+    workspace: { id: 'workspace', projects:{[project.id]:project}, tasks:[],runs:[] }, retainedSearches: new Map([[project.id, state]]), view: 'history',
+    currentProject: () => project, render:()=>renders.push(context.view), announce: text => announcements.push(text), showError:message=>errors.push(message), indexedSearchResults: () => [],
     URLSearchParams, api: (path, body) => new Promise((resolve, reject) => calls.push({ path, body, resolve, reject })),
   };
   Object.assign(context,createRetainedSearch({...context,getContext:()=>context}));
-  return { context, state, project, calls, announcements,
+  return { context, state, project, calls, announcements, renders, errors,
     rebuild: () => context.rebuildSearch(project, state),
     clearAndSearch: () => { state.draft = ''; state.query = ''; state.remote = null; state.mode = 'literal'; return context.loadIndexedSearch(project, state); } };
 }
@@ -71,4 +71,17 @@ test('a current rebuild refreshes results and leaves state ownership to its foll
   assert.equal(f.state.remote.generation, 2);
   assert.equal(f.state.error, '');
   assert.equal(f.state.loading, false);
+});
+
+test('current project history search redraws results and clears the visible loading state',async()=>{
+ const f=fixture(),work=f.clearAndSearch();assert.deepEqual(f.renders,['history']);
+ f.calls[0].resolve(response);await work;
+ assert.equal(f.state.loading,false);assert.deepEqual(f.renders,['history','history']);assert.deepEqual(f.announcements,['0 indexed results shown.']);
+});
+
+test('history errors are visible there while late completion cannot redraw an individual candidate record',async()=>{
+ const f=fixture(),failed=f.clearAndSearch();f.calls[0].reject(new Error('History unavailable'));await failed;
+ assert.deepEqual(f.errors,['History unavailable']);assert.deepEqual(f.renders,['history','history']);
+ const later=f.clearAndSearch();const count=f.renders.length;f.context.view='evidence';f.calls[1].resolve(response);await later;
+ assert.equal(f.renders.length,count);assert.deepEqual(f.announcements,[]);assert.equal(f.state.loading,false);
 });

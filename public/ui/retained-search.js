@@ -20,11 +20,11 @@ export function createRetainedSearch({
     } catch (error) {
       if (getContext().workspace.id !== workspaceId || retainedSearches.get(project.id) !== state || state.request !== request) return;
       state.error = error.message;
-      if (getContext().view === 'evidence' && currentProject()?.id === project.id) showError(error.message,{id:'retained-submit'});
+      if (getContext().view === 'history' && currentProject()?.id === project.id) showError(error.message,{id:'retained-submit'});
     } finally {
       if (getContext().workspace.id === workspaceId && retainedSearches.get(project.id) === state && state.request === request) {
         state.loading = false;
-        if (getContext().view === 'evidence' && currentProject()?.id === project.id) { render(true); if(!state.error)announce(`${state.remote.items.length} indexed results shown.`); }
+        if (getContext().view === 'history' && currentProject()?.id === project.id) { render(true); if(!state.error)announce(`${state.remote.items.length} indexed results shown.`); }
       }
     }
   }
@@ -43,12 +43,12 @@ export function createRetainedSearch({
       await loadIndexedSearch(project, state);
     } catch (error) { if (isCurrent()) {
       state.error = error.message;
-      if(getContext().view === 'evidence' && currentProject()?.id === project.id)showError(error.message,{id:'retained-rebuild'});
+      if(getContext().view === 'history' && currentProject()?.id === project.id)showError(error.message,{id:'retained-rebuild'});
     } }
     finally {
       if (isCurrent()) {
         state.loading = false;
-        if (getContext().view === 'evidence' && currentProject()?.id === project.id) render(true);
+        if (getContext().view === 'history' && currentProject()?.id === project.id) render(true);
       }
     }
   }

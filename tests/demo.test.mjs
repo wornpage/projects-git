@@ -28,6 +28,14 @@ test('welcome and guided pages share one workbench document with explicit sample
   assert.deepEqual(f.calls,['/demo/welcome.html','/index.html']);
 });
 
+test('collection deep links survive a full page reload without opening an individual task',async()=>{
+  const f=fixture();
+  for(const view of ['projects','queue','history']){
+    const response=await f.fetch('/?view='+view+'&project='+exampleIds.project);
+    assert.equal(response.status,200);assert.match(await response.text(),/data-demo="read-only"/);
+  }
+});
+
 test('the public demo refuses every non-read method before accessing any binding',async()=>{
   const f=fixture();
   for(const method of ['POST','PUT','PATCH','DELETE','OPTIONS'])for(const path of ['/','/api/tasks','/api/runs/'+exampleIds.safe+'/merge','/app.js']){

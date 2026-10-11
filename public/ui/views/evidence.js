@@ -8,7 +8,7 @@ export function createEvidenceView({
   getContext,
   parts, disclosure, currentProject, currentTask, currentRun, taskNumber,
   retainedSearches, loadIndexedSearch, rebuildSearch, render, announce, switchView,
-  downloadHandoff, downloadEvidence, independentlyVerified, checksFailed
+  downloadEvidence, independentlyVerified, checksFailed
 }) {
   const {taskHeader, candidateNav, runStatus, timeline} = parts;
   function fact(label, value) { return el("div", { class: "fact" }, el("div", { class: "fact-label" }, label), el("div", { class: "fact-value" }, value)); }
@@ -93,7 +93,7 @@ export function createEvidenceView({
 
 
   function evidenceView() {
-    const {workspace, busy, demo} = getContext();
+    const {workspace, view} = getContext();
     const task = currentTask();
     const run = currentRun();
     const evidence = run?.evidence;
@@ -121,11 +121,8 @@ export function createEvidenceView({
           cell("Decision", runStatus(candidate)));
       }))) : el("div", { class: "no-candidate" }, "No candidates or evidence yet. Start a task to create the first records.");
     return el('div', {},
-      task ? el('div', {}, taskHeader(task),
-        el('div', { class: 'section-heading evidence-heading' }, el('h2', {}, 'Task ' + taskNumber(task) + ' record'),
-          demo ? null : el('button', { class: 'button button-small', disabled: busy || !workspace.capabilities?.handoff,
-            title: busy ? 'Wait for the current action.' : !workspace.capabilities?.handoff ? 'Task handoff export needs the updated server.' : 'Export only this task and all its candidates.',
-            onclick: () => downloadHandoff(task) }, 'Download task handoff')),
+      view!=='history' && task ? el('div', {}, taskHeader(task),
+        el('div', { class: 'section-heading evidence-heading' }, el('h2', {}, 'Task ' + taskNumber(task) + ' record')),
         candidateNav(task), run ? el('div', {},
           el('p', { class: 'record-outcome' }, candidateOutcome(workspace, run).label + ' · ' + candidateOutcome(workspace, run).next),
           el('div', { class: 'evidence-facts' }, fact('Full head commit', run.headCommit || 'No commit'), fact('Task base commit', run.baseCommit),
@@ -142,7 +139,7 @@ export function createEvidenceView({
           evidence ? disclosure('output-' + run.id + '-' + (evidence.taskRevision ?? 1), 'Verification command and output',
             el('p', { class: 'head-hint' }, 'Command · ' + evidence.command + ' · Exit code ' + evidence.exitCode),
             el('pre', { class: 'output' }, evidence.output || 'No output retained')) : null) : null) : null,
-      project ? retainedWorkSearch(project) : null,
+      view==='history' ? el('div',{}, project ? retainedWorkSearch(project) : null,
       el('div', { class: 'section-heading evidence-heading' }, el('h2', {}, project ? 'Project record' : 'Workspace record')),
       panel('Retained project candidates · '+runs.length+' total',table),
       el('p', { class: 'definition-note' }, 'Each row shows passed / total from that candidate’s latest report, including stale reports. Earlier reports keep their own counts above and in the task export. Independent verification and human acceptance are separate.'),
@@ -150,8 +147,8 @@ export function createEvidenceView({
       unscopedEvents.length ? disclosure('unscoped-events', 'Workspace activity without project attribution · ' + unscopedEvents.length + (unscopedEvents.length === 1 ? ' event' : ' events'),
         el('p', { class: 'definition-note' }, 'These workspace events have no recorded project identity. Historical records are retained without guessing their project from a name.'), timeline(unscopedEvents, Infinity)) : null,
       disclosure('workspace-export', 'Export the whole workspace',
-        el('p', { class: 'definition-note' }, 'This export includes every project, task and retained candidate. The task handoff above includes one task. Review private content before sharing either file.'),
-        el('worn-button', { label: 'Export workspace evidence JSON', size: 'sm', onclick: downloadEvidence })));
+        el('p', { class: 'definition-note' }, 'This export includes every project, task and retained candidate. Download a single-task handoff from Task details. Review private content before sharing either file.'),
+        el('worn-button', { label: 'Export workspace evidence JSON', size: 'sm', onclick: downloadEvidence }))) : null);
   }
   return evidenceView;
 }

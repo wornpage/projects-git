@@ -225,14 +225,16 @@ export function reviewContext(workspace, run) {
 export function readLocation(search) {
   const params = new URLSearchParams(search);
   const view = params.get('view') ?? (params.has('task') ? 'overview' : 'projects');
-  const selected = ['projects', 'overview', 'work', 'review', 'evidence'].includes(view) ? view : 'projects';
-  return { view: selected, taskId: selected==='projects' ? null : params.get('task'), runId: selected==='projects' ? null : params.get('candidate') };
+  const selected = ['projects', 'queue', 'overview', 'work', 'review', 'evidence', 'history'].includes(view) ? view : 'projects';
+  const collection = ['projects','queue','history'].includes(selected);
+  return { view: selected, projectId: selected==='projects' ? null : params.get('project'), taskId: collection ? null : params.get('task'), runId: ['review','evidence'].includes(selected) ? params.get('candidate') : null };
 }
 
-export function locationSearch(view, taskId, runId) {
+export function locationSearch(view, taskId, runId, projectId = null) {
   const params = new URLSearchParams({ view });
-  if (view !== 'projects' && taskId) params.set('task', taskId);
-  if (view !== 'projects' && runId) params.set('candidate', runId);
+  if (['queue','history'].includes(view) && projectId) params.set('project', projectId);
+  if (!['projects','queue','history'].includes(view) && taskId) params.set('task', taskId);
+  if (['review','evidence'].includes(view) && runId) params.set('candidate', runId);
   return `?${params}`;
 }
 

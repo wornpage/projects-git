@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {installFakeDOM} from './helpers/fake-dom.mjs';
 import {createProjectsView} from '../public/ui/views/projects.js';
-import {createQueueView} from '../public/ui/views/queue.js';
+import {createTaskViews} from '../public/ui/views/queue.js';
+import {projectCoordinationView} from '../public/ui/project-coordination.js';
 import {createWorkbenchParts} from '../public/ui/workbench-parts.js';
 import {el} from '../public/ui/dom.js';
 import {projectBrief,readLocation,locationSearch} from '../public/workbench-state.js';
@@ -82,38 +83,33 @@ test('directory links use exact task identities and modified clicks retain nativ
 });
 
 test('workspace URLs clear task context while project URLs preserve task and candidate',()=>{
-  assert.deepEqual(readLocation(locationSearch('projects','previous-task','previous-run')),{view:'projects',taskId:null,runId:null});
-  assert.deepEqual(readLocation('?view=projects&task=previous-task&candidate=previous-run'),{view:'projects',taskId:null,runId:null});
-  for(const view of ['overview','work','review','evidence'])assert.deepEqual(readLocation(locationSearch(view,'task','run')),{view,taskId:'task',runId:'run'});
+  assert.deepEqual(readLocation(locationSearch('projects','previous-task','previous-run')),{view:'projects',projectId:null,taskId:null,runId:null});
+  assert.deepEqual(readLocation('?view=projects&task=previous-task&candidate=previous-run'),{view:'projects',projectId:null,taskId:null,runId:null});
+  for(const view of ['overview','work','review','evidence'])assert.deepEqual(readLocation(locationSearch(view,'task','run')),{view,projectId:null,taskId:'task',runId:['review','evidence'].includes(view)?'run':null});
 });
 
-test('project directory links restore the saved task without borrowing another project selection',()=>{
-  const f=fixture(),integrated=f.workspace.tasks.find(task=>task.title==='Integrated task');
-  f.ports.getProjectSelection=id=>id===f.project.id?{taskId:integrated.id,runId:null}:{taskId:integrated.id};
-  const view=createProjectsView(f.ports)(),anchors=nodes(view).filter(node=>node.tagName==='A');
-  assert.equal(readLocation(anchors.find(node=>node.textContent===f.project.name).attrs.href).taskId,integrated.id);
-  assert.notEqual(readLocation(anchors.find(node=>node.textContent===f.other.name).attrs.href).taskId,integrated.id);
+test('project directory opens a project collection without silently restoring a task',()=>{
+ const f=fixture();const view=createProjectsView(f.ports)(),anchors=nodes(view).filter(node=>node.tagName==='A');
+ const place=readLocation(anchors.find(node=>node.textContent===f.project.name).attrs.href);
+ assert.equal(place.projectId,f.project.id);assert.equal(place.view,'queue');assert.equal(place.taskId,null);assert.equal(place.runId,null);
 });
 
-test('queue groups ongoing and integrated work with the unchanged project denominator',()=>{
-  const f=fixture(),view=f.ports.parts.taskList(f.task),text=view.textContent;
-  assert.match(text,/Ongoing1 /);assert.match(text,/Integrated1 /);assert.match(text,/2 total/);
-  assert.ok(text.indexOf('Current task')<text.indexOf('Integrated task'));assert.ok(!text.includes('Other queue'));
-  assert.equal(f.workspace.tasks.filter(task=>task.projectId===f.project.id).length,2);
+test('task collection includes ongoing and integrated work with the unchanged project denominator',()=>{
+ const f=fixture(),view=projectCoordinationView({workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}),text=view.textContent;
+ assert.match(text,/Showing all 2 tasks/);assert.ok(text.includes('Current task'));assert.ok(text.includes('Integrated task'));assert.ok(!text.includes('Other queue'));
 });
 
 test('shared task context exposes direct task selection and current requirement identity',()=>{
   const f=fixture(),header=f.ports.parts.taskHeader(f.task),text=header.textContent;
   assert.match(text,/Requirements r1/);assert.match(text,/Coordinator · Owner/);assert.match(text,/1 retained candidate/);assert.match(text,/Read task brief/);
   assert.ok(!nodes(header).some(node=>node.tagName==='DETAILS'),'Primary context has no accordion');
-  const select=nodes(f.ports.parts.taskSwitcher(f.task)).find(node=>node.tagName==='SELECT');assert.equal(select.children.length,2);assert.ok(!select.textContent.includes('Other queue'));
 });
 
 test('loaded project summaries show occupied workspace slots even when all active work is off page',async()=>{
   const f=fixture();f.workspace.runs=[];f.workspace.page={totalProjects:100};
   f.workspace.capacity={limit:4,occupied:4,running:2,reserved:2,queued:3};
   let shown;f.ports.openInspector=(title,...body)=>{shown={title,body};};
-  const view=createQueueView(f.ports)();
+  const view=createTaskViews(f.ports).queue();
   await nodes(view).find(node=>node.tagName==='BUTTON'&&node.textContent==='Loaded project summary').dispatch('click');
   assert.equal(shown.title,'Loaded project summary');
   const tiles=shown.body.flatMap(nodes).filter(node=>node.className==='metric-card');

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {installFakeDOM} from './helpers/fake-dom.mjs';
 import {el} from '../public/ui/dom.js';
 import {createWorkbenchParts} from '../public/ui/workbench-parts.js';
-import {createQueueView} from '../public/ui/views/queue.js';
+import {createTaskViews} from '../public/ui/views/queue.js';
 import {createWorkView} from '../public/ui/views/work.js';
 import {createReviewView} from '../public/ui/views/review.js';
 import {createEvidenceView} from '../public/ui/views/evidence.js';
@@ -55,6 +55,17 @@ function ownerReviewFixture(){
   const view=createReviewView(f.ports);f.page=()=>view();
   return f;
 }
+
+test('task handoff is reachable before any candidates exist and retains capability gating',async()=>{
+  const f=fixture();f.workspace.runs=[];f.workspace.capabilities.handoff=true;
+  f.ports.downloadHandoff=task=>f.calls.push(['handoff',task.id]);
+  const views=createTaskViews(f.ports),nodes=node=>[node,...node.children.flatMap(nodes)];
+  const button=()=>nodes(views.task()).find(node=>node.tagName==='BUTTON'&&node.textContent==='Download task handoff');
+  assert.equal(button().disabled,false);await button().dispatch('click');assert.deepEqual(f.calls,[['handoff',f.task.id]]);
+  f.context.busy=true;assert.equal(button().disabled,true);
+  f.context.busy=false;f.workspace.capabilities.handoff=false;assert.equal(button().disabled,true);
+  f.context.demo=true;assert.equal(button(),undefined);
+});
 
 test('review handoff shows names, roles and actual delivery expectations without granting access',()=>{
   const f=ownerReviewFixture(),before=structuredClone(f.workspace),page=f.page();
@@ -172,16 +183,17 @@ test('an earlier open finding is labeled as historical after a newer resolution'
 
 test('all four page modules render selected project work without leaking another project',()=>{
   const f=fixture();
-  for(const [name,create] of Object.entries({overview:createQueueView,work:createWorkView,review:createReviewView,evidence:createEvidenceView})){
+  for(const [name,create] of Object.entries({overview:ports=>createTaskViews(ports).task,work:createWorkView,review:createReviewView,evidence:createEvidenceView})){
     f.context.view=name;
-    const text=f.ports.parts.taskList(f.task).textContent+create(f.ports)().textContent;
-    assert.match(text,/Selected work/);assert.ok(!text.includes('Foreign work'),name);assert.ok(!text.includes('Foreign candidate'),name);
+    const text=create(f.ports)().textContent;
+    assert.match(text,/Selected candidate/);assert.ok(!text.includes('Foreign work'),name);assert.ok(!text.includes('Foreign candidate'),name);
   }
 });
 
 test('project history exposes recorded filenames and opens the exact candidate changes without a mutation',async()=>{
   const f=fixture(),project=f.ports.currentProject(),before=structuredClone(f.workspace);
-  const page=createEvidenceView(f.ports)();
+  f.context.view='history';
+ const page=createEvidenceView(f.ports)();
   const section=page.querySelector('#retained-heading').parentElement.parentElement;
   assert.equal(section.querySelector('strong').textContent,project.name);
   assert.match(section.textContent,/1 changed file/);
@@ -205,6 +217,7 @@ test('historical indexed matches do not present current filenames as files from 
     remote:{total:2,matched:1,mode:'literal',query:'older',nextOffset:null,items:[{
       workspaceId:f.workspace.id,projectId:project.id,taskId:f.task.id,runId:f.run.id,
       headCommit:'c'.repeat(40),taskRevision:f.task.revision,text:'Older recorded change'}]}});
+  f.context.view='history';
   const section=createEvidenceView(f.ports)().querySelector('#retained-heading').parentElement.parentElement;
   assert.match(section.textContent,/This match is an earlier revision/);
   assert.ok(!section.textContent.includes('current-only.js'));
@@ -214,6 +227,7 @@ test('historical indexed matches do not present current filenames as files from 
 
 test('a task brief does not advertise uncommitted draft paths as recorded candidate files',()=>{
   const f=fixture();f.run.headCommit=null;f.run.changedFiles=['uncommitted-draft.js'];
+  f.context.view='history';
   const section=createEvidenceView(f.ports)().querySelector('#retained-heading').parentElement.parentElement;
   assert.match(section.textContent,/Task brief · no committed candidate/);
   assert.ok(!section.textContent.includes('uncommitted-draft.js'));
@@ -231,17 +245,17 @@ test('shared verification shows pending and stale evidence without presenting it
 
 test('shared candidate navigation uses the current view and selection when activated',async()=>{
   const f=fixture();f.workspace.runs.push({...f.run,id:crypto.randomUUID(),label:'Another result'});
-  const nav=f.ports.parts.candidateNav(f.task),button=nav.children[1].children[0];
+  const nav=f.ports.parts.candidateNav(f.task),button=nav.children[2];
   f.context.view='evidence';f.context.selectedRun='different';await button.dispatch('click');
-  assert.deepEqual(f.calls,[['evidence',f.task.id,f.run.id,{preservePosition:true}]]);
+  assert.deepEqual(f.calls,[['work',f.task.id,null]]);
 });
 
 test('one task change preserves its identity and continuation without a redundant selection button',async()=>{
   const f=fixture();let continued=0;
   const action=el('button',{onclick:()=>continued++},'Continue in your agent');
   const nav=f.ports.parts.candidateNav(f.task,action);
-  assert.equal(nav.attrs['aria-label'],'Task change');
-  assert.match(nav.textContent,/TASK CHANGE · 1 CANDIDATE/);
+  assert.equal(nav.attrs['aria-label'],'Selected candidate');
+  assert.match(nav.textContent,/CANDIDATE 1 OF 1/);
   assert.match(nav.textContent,/Selected candidate/);
   assert.equal(nav.querySelector('button'),action);
   await action.dispatch('click');assert.equal(continued,1);assert.equal(f.calls.length,0);
@@ -250,16 +264,16 @@ test('one task change preserves its identity and continuation without a redundan
 test('zero and single-result work stays task-first while retained failures remain in multiple-result totals',()=>{
   const f=fixture();
   let view=createWorkView(f.ports)();
-  assert.match(view.textContent,/Task change1 CANDIDATE/);
+  assert.match(view.textContent,/Candidates1 CANDIDATE/);
   assert.ok(!view.textContent.includes('Alternative candidates'));
   f.workspace.runs.push({...f.run,id:crypto.randomUUID(),label:'Failed earlier attempt',status:'failed',headCommit:null,error:'Retained preparation failure'});
   view=createWorkView(f.ports)();
-  assert.match(view.textContent,/Retained candidates2 CANDIDATES/);
+  assert.match(view.textContent,/Candidates2 CANDIDATES/);
   assert.match(view.textContent,/Failed earlier attempt/);
-  assert.match(view.textContent,/1 \/ 2 commits/);
+  assert.match(view.textContent,/1 \/ 2 candidates have commits/);
   f.workspace.runs=f.workspace.runs.filter(run=>run.taskId!==f.task.id);
   view=createWorkView(f.ports)();
-  assert.match(view.textContent,/Task change0 CANDIDATES/);
+  assert.match(view.textContent,/Candidates0 CANDIDATES/);
   assert.match(view.textContent,/Start with one checkout/);
 });
 
