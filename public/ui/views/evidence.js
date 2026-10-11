@@ -8,7 +8,7 @@ export function createEvidenceView({
   getContext,
   parts, disclosure, currentProject, currentTask, currentRun, taskNumber,
   retainedSearches, loadIndexedSearch, rebuildSearch, render, announce, switchView,
-  downloadEvidence, independentlyVerified, checksFailed
+  downloadEvidence, independentlyVerified, checksFailed, collections
 }) {
   const {taskHeader, candidateNav, runStatus, timeline} = parts;
   function fact(label, value) { return el("div", { class: "fact" }, el("div", { class: "fact-label" }, label), el("div", { class: "fact-value" }, value)); }
@@ -101,6 +101,9 @@ export function createEvidenceView({
     const project = currentProject(), context = project ? projectContext(workspace, project.id) : null;
     const runs = context?.runs ?? workspace.runs, events = context?.events ?? workspace.events;
     const unscopedEvents = workspace.events.filter(event => !event.projectId && !event.taskId);
+    const rows=view==='history'?collections({id:'history-candidates-'+project.id,label:'History candidates',items:runs,text:run=>run.label+' '+(run.headCommit??'')+' '+workspace.tasks.find(task=>task.id===run.taskId)?.title,
+      filters:[['all','All statuses'],...['assigned','running','awaiting_review','accepted','rejected','merged','failed','superseded'].map(status=>[status,status.replaceAll('_',' ')])],
+      matches:(run,status)=>status==='all'||run.status===status,sorts:[['order','Original order'],['name','Candidate name'],['newest','Newest first']],sortKey:(run,sort)=>sort==='name'?run.label.toLowerCase():run.createdAt??run.finishedAt??''}):null;
     const columns = ["Candidate", "Head commit", "Checks", "Verification", "Decision"];
     const cell = (label, value) => el("td", { role: "cell" },
       el("span", { class: "evidence-field-label", "aria-hidden": "true" }, label),
@@ -110,11 +113,11 @@ export function createEvidenceView({
     const table = runs.length ? el("table", { class: "evidence-table", role: "table" },
       el("caption", { class: "sr-only" }, "Every retained candidate and its evidence state"),
       el("thead", { role: "rowgroup" }, el("tr", { role: "row" }, columns.map(title => el("th", { scope: "col", role: "columnheader" }, title)))),
-      el("tbody", { role: "rowgroup" }, runs.map(candidate => {
+      el("tbody", { role: "rowgroup" }, (rows?.items??[]).map(candidate => {
         const candidateTask = workspace.tasks.find(task => task.id === candidate.taskId);
         const inspect = el("worn-button", { label: candidate.label, size: "sm", onclick: () => switchView("review", candidate.taskId, candidate.id) });
         return el("tr", { role: "row" },
-          cell("Candidate", [inspect, el("p", { class: "evidence-task" }, `Task ${taskNumber(candidateTask)} · Inspect candidate`)]),
+          cell("Candidate", [inspect, el("p", { class: "evidence-task" }, `Task ${taskNumber(candidateTask)} · ${candidateTask.title}`)]),
           cell("Head commit", el("span", { class: "mono", title: candidate.headCommit || "No commit" }, shortSha(candidate.headCommit))),
           cell("Checks", el("span", { class: `mono ${checksFailed(candidate) ? "checks-failed" : ""}` }, candidate.evidence ? `${candidate.evidence.passed} / ${candidate.evidence.total}` : "No report")),
           cell("Verification", independentlyVerified(candidate) ? "Independent · exact head" : candidate.evidence ? "Unverified report" : "Pending"),
@@ -122,7 +125,6 @@ export function createEvidenceView({
       }))) : el("div", { class: "no-candidate" }, "No candidates or evidence yet. Start a task to create the first records.");
     return el('div', {},
       view!=='history' && task ? el('div', {}, taskHeader(task),
-        el('div', { class: 'section-heading evidence-heading' }, el('h2', {}, 'Task ' + taskNumber(task) + ' record')),
         candidateNav(task), run ? el('div', {},
           el('p', { class: 'record-outcome' }, candidateOutcome(workspace, run).label + ' · ' + candidateOutcome(workspace, run).next),
           el('div', { class: 'evidence-facts' }, fact('Full head commit', run.headCommit || 'No commit'), fact('Task base commit', run.baseCommit),
@@ -139,13 +141,13 @@ export function createEvidenceView({
           evidence ? disclosure('output-' + run.id + '-' + (evidence.taskRevision ?? 1), 'Verification command and output',
             el('p', { class: 'head-hint' }, 'Command · ' + evidence.command + ' · Exit code ' + evidence.exitCode),
             el('pre', { class: 'output' }, evidence.output || 'No output retained')) : null) : null) : null,
-      view==='history' ? el('div',{}, project ? retainedWorkSearch(project) : null,
-      el('div', { class: 'section-heading evidence-heading' }, el('h2', {}, project ? 'Project record' : 'Workspace record')),
-      panel('Retained project candidates · '+runs.length+' total',table),
+      view==='history' ? el('div',{},
+      el('section',{'aria-label':'Retained project candidates'},rows.controls,table,rows.navigation),
       el('p', { class: 'definition-note' }, 'Each row shows passed / total from that candidate’s latest report, including stale reports. Earlier reports keep their own counts above and in the task export. Independent verification and human acceptance are separate.'),
-      disclosure('project-events-' + (project?.id ?? workspace.id), 'Complete project activity · ' + events.length + ' events', timeline(events, Infinity)),
+      project ? disclosure('history-search-'+project.id,'Search retained contents and filenames',retainedWorkSearch(project)) : null,
+      disclosure('project-events-' + (project?.id ?? workspace.id), 'Complete project activity · ' + events.length + ' events', timeline(events, Infinity,'project-events-'+project.id)),
       unscopedEvents.length ? disclosure('unscoped-events', 'Workspace activity without project attribution · ' + unscopedEvents.length + (unscopedEvents.length === 1 ? ' event' : ' events'),
-        el('p', { class: 'definition-note' }, 'These workspace events have no recorded project identity. Historical records are retained without guessing their project from a name.'), timeline(unscopedEvents, Infinity)) : null,
+        el('p', { class: 'definition-note' }, 'These workspace events have no recorded project identity. Historical records are retained without guessing their project from a name.'), timeline(unscopedEvents, Infinity,'unscoped-events')) : null,
       disclosure('workspace-export', 'Export the whole workspace',
         el('p', { class: 'definition-note' }, 'This export includes every project, task and retained candidate. Download a single-task handoff from Task details. Review private content before sharing either file.'),
         el('worn-button', { label: 'Export workspace evidence JSON', size: 'sm', onclick: downloadEvidence }))) : null);

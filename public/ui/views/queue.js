@@ -1,11 +1,11 @@
 import {el, panel} from '../dom.js';
-import {taskOutcome, taskQueued, taskBriefing, projectContext} from '../../workbench-state.js';
+import {taskOutcome, taskQueued, taskBriefing, projectContext, projectBrief} from '../../workbench-state.js';
 import {projectCoordinationView,projectActivityDetails} from '../project-coordination.js';
 
 export function createTaskViews({
   getContext,
   parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
-  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff
+  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections
 }) {
   const {prerequisitesPanel, timeline} = parts;
   function metric(label, value, denominator, note, icon) {
@@ -43,13 +43,12 @@ export function createTaskViews({
     const {workspace} = getContext();
     const tasks = tasksInProject(project);
     const queued = tasks.filter(task => taskQueued(workspace, task));
-    const active = tasks.filter(task => taskRuns(task.id).some(run => ['assigned', 'running'].includes(run.status)));
-    const decisions = tasks.filter(task => !task.mergedCommit && (task.acceptedRunId || taskRuns(task.id).some(run => run.status === 'awaiting_review')));
     const merged = tasks.filter(task => task.mergedCommit);
-    const counts = [['Queued', queued.length], ['Active tasks', active.length], ['Review tasks', decisions.length], ['Merged', merged.length]];
+    const brief=projectBrief(workspace,project.id);
+    const counts = [['Queued', queued.length], ['Active tasks', brief.active], ['Needs decision', brief.decisions], ['Waiting',brief.waiting],['Ready to claim',brief.eligibleQueued], ['Merged', merged.length]];
     const summary = panel('Task totals', el('div', { class: 'panel-body project-home' },
       el('div', { class: 'project-counts' }, counts.map(([label, value]) => el('div', {}, el('strong', {}, value + ' / ' + tasks.length), el('span', {}, label)))),
-      el('p', { class: 'small muted' }, 'Counts are tasks / ' + tasks.length + ' total. Active and review tasks can overlap.'),
+      el('p', { class: 'small muted' }, brief.definition),
       !project.acceptingWork ? el('p', { class: 'capability-note' }, 'New checkouts and starts are paused. You can still queue work; running agents can finish.') : null));
     summary.classList.add('project-summary');
     return summary;
@@ -60,6 +59,8 @@ export function createTaskViews({
     const brief = taskBriefing(workspace, task), change = brief.change;
     const directionChanged = change && (change.purposeChanged || change.added.length || change.removed.length);
     const next = brief.outcome;
+    const revisions=collections({id:'requirement-history-'+task.id,label:'Requirement revisions',items:task.revisions??[],text:item=>item.reason+' '+item.purpose,
+      sorts:[['newest','Newest first'],['oldest','Oldest first']],sortKey:item=>item.revision,pageSize:10});
     const body = el('div', { class: 'panel-body focused-task-body' },
       el('p', { class: 'task-intent' }, task.purpose),
       demo ? null : el('button', { class:'button button-small', disabled:busy || !workspace.capabilities?.handoff,
@@ -77,20 +78,12 @@ export function createTaskViews({
         !task.mergedCommit ? el('button', { class: 'button button-small', disabled: busy || !workspace.capabilities?.revise,
           title: busy ? 'Wait for the current action.' : !workspace.capabilities?.revise ? 'Requirement revisions need the updated server.' : 'Update the purpose and requirements while retaining earlier work.', onclick: () => openRevision(task) }, 'Revise direction') : null,
         task.revisions?.length > 1 ? disclosure('task-history-' + task.id, 'Requirement history · ' + task.revisions.length + ' revisions',
-          ...[...task.revisions].reverse().map(item => el('div', { class: 'requirement-record' }, el('strong', {}, 'r' + item.revision + ' · ' + item.reason), el('p', {}, item.purpose), el('ul', {}, item.criteria.map(text => el('li', {}, text)))))) : null),
-      brief.total ? el('section',{class:'task-result-section'},el('h3',{},'Results and evidence · '+brief.total+(brief.total===1?' candidate':' candidates')),
-        el('p', { class: 'head-hint' }, brief.passing + ' / ' + brief.total + ' candidates with current passing checks. Acceptance and merge are separate decisions.'),
-        el('div', { class: 'task-results' }, brief.candidates.map(item => {
-        const run = item.run;
-        return el('article', { class: 'task-result' },
-          el('div', { class: 'task-result-title' }, el('strong', {}, run.label), el('span', { class: 'small' }, item.outcome.label)),
-          item.earlierReport ? el('p', { class: 'direction-note' }, 'Commit retained; its report covers r' + (run.evidence.taskRevision ?? 1) + '. Current requirements are r' + brief.revision + '.') : null,
-          item.earlierAssignment ? el('p', { class: 'direction-note' }, 'Assigned under r' + run.assignedRevision + '. ' + (run.status === 'running' ? 'Send the updated requirements through your agent conversation.' : 'This assignment cannot start under revised requirements. Resolve it in Agent work before preparing a current assignment.')) : null,
-          item.overlaps.length ? disclosure('task-overlaps-' + run.id, 'Shared files · compare changes', el('p', {}, [...new Set(item.overlaps.flatMap(other => other.paths))].join(', ')), el('p', { class: 'small' }, 'Shared files alone do not prove a merge conflict.')) : null,
-          item.blockers.length ? el('div',{class:'candidate-blockers'},el('strong',{},'Before acceptance · '+item.blockers.length+' unmet'),el('ul',{},item.blockers.map(text=>el('li',{},text)))) : null,
-          el('button', { class: 'button button-small', onclick: () => switchView(item.active ? 'work' : 'review', task.id, run.id), 'aria-label': (item.active ? 'Follow ' : 'Inspect ') + run.label }, item.active ? 'Follow agent →' : 'Inspect result →'));
-      }))) : null);
-    const card = panel(task.title, body, el('span', { class: 'section-kicker' }, 'TASK ' + taskNumber(task) + ' · r' + brief.revision));
+          revisions.controls,...revisions.items.map(item => el('div', { class: 'requirement-record' }, el('strong', {}, 'r' + item.revision + ' · ' + item.reason), el('p', {}, item.purpose), el('ul', {}, item.criteria.map(text => el('li', {}, text))))),revisions.navigation) : null),
+      brief.total ? el('section',{class:'task-result-summary','aria-label':'Candidate summary'},
+        el('div',{},el('h3',{},brief.total+(brief.total===1?' candidate':' candidates')),
+          el('p',{},brief.passing+' / '+brief.total+' have current passing checks. Browse results to compare changes and retained reports.')),
+        el('button',{class:'button button-small',onclick:()=>switchView('work',task.id,null)},'Open candidates →')) : null);
+    const card = panel('Task brief', body);
     card.id = 'focused-task'; card.classList.add('focused-task');
     card.querySelector('h2').id = 'focused-task-title'; card.querySelector('h2').tabIndex = -1;
     card.setAttribute('aria-labelledby', 'focused-task-title');
@@ -110,11 +103,14 @@ export function createTaskViews({
       el('div', {}, pendingProject ? el('div', { class: 'capability-note' },
         el('p', {}, 'A task request for ' + pendingProject.name + ' is awaiting confirmation. Its destination and request ID are preserved.'),
         el('button', { class: 'button button-small', onclick: () => { selectProject(pendingProject.id); openTaskComposer('project:' + pendingProject.id); } }, 'Return to saved request')) : null),
-      project ? projectCoordinationView({workspace,projectId:project.id,
+      project ? projectCoordinationView({workspace,projectId:project.id,collections,
         onOpenTask:id=>switchView('overview',id,null),
         onOpenCandidates:id=>switchView('work',id,null)}) : null,
 
       el('div',{class:'secondary-actions'},
+        project && projectBrief(workspace,project.id).next ? el('button',{id:'shell-next-action',type:'button',class:'text-link',onclick:()=>{
+          const next=projectBrief(getContext().workspace,project.id).next;if(next)switchView(next.view,next.taskId,next.runId??null);
+        }},'Open next work') : null,
         project ? el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Project activity and totals',projectHome(project),
           projectActivityDetails({workspace,projectId:project.id}),el('p',{class:'small'},'Latest '+Math.min(5,events.length)+' / '+events.length+' events'),timeline(events,5))},'Project activity') : null,
         el('button',{type:'button',class:'text-link',onclick:()=>openInspector(workspace.page?'Loaded project summary':'Workspace summary',workflow(),metrics(),

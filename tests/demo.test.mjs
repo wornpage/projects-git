@@ -24,6 +24,8 @@ test('welcome and guided pages share one workbench document with explicit sample
   assert.equal(landing.status,200);const text=await landing.text();
   assert.match(text,/Explore a completed project/);assert.match(text,/invented records/);assert.doesNotMatch(text,/hosted-proof|qualification record|Historical October/);
   const app=await page.text();assert.match(app,/<body data-demo="read-only">/);assert.match(app,/id="demo-guide"/);
+  assert.match(app,/<details class="demo-guide-details">/);assert.doesNotMatch(app,/<details class="demo-guide-details"[^>]*open/);
+  assert.match(app,/Read-only example\./);assert.match(app,/id="demo-guide-steps"/);
   assert.match(app,/script type="module" src="\/app.js"/);assert.equal((app.match(/id="content"/g)??[]).length,1);
   assert.deepEqual(f.calls,['/demo/welcome.html','/index.html']);
 });

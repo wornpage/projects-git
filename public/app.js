@@ -12,6 +12,8 @@ import {createWorkbenchActions, sha256Text} from './workbench-actions.js';
 import {createDialogManager} from './ui/dialogs.js';
 import {createErrorNotice} from './ui/error-notice.js';
 import {createNavigation} from './ui/navigation.js';
+import {createProjectDiscovery} from './ui/project-discovery.js';
+import {createCollectionPager} from './ui/collection.js';
 import {createContinuationDialog} from './ui/continuation-dialog.js';
 import {createRequirementsForm} from './ui/requirements-form.js';
 import {createBrowserSession} from './browser-session.js';
@@ -21,7 +23,7 @@ import {createPublicationView} from './ui/publication.js';
 import {createProjectControls, automaticMergeControls} from './ui/project-controls.js';
 import {createProjectsView} from './ui/views/projects.js';
 import "./vendor/wornpage-button-0.2.3/worn-button.js";
-import { independentlyVerified as verifiedAtCurrentHead, connectionLabel, mergeState, workspacePresentationKey, taskOutcome, projectContext, projectBrief, dependencyState, readLocation, locationSearch } from './workbench-state.js';
+import { independentlyVerified as verifiedAtCurrentHead, connectionLabel, mergeState, workspacePresentationKey, taskOutcome, projectContext, dependencyState, readLocation, locationSearch } from './workbench-state.js';
 import { localAgentInstructions, hostedAgentInstructions } from './agent-instructions.js';
 
 const content = $("#content");
@@ -79,14 +81,16 @@ dialogs.register('inspector-dialog',()=>!actions.busy);
 dialogs.register('task-launcher',()=>!taskCreation.starting);
 $('#close-inspector').addEventListener('click',()=>{if(!actions.busy)$('#inspector-dialog').close();});
 $('#close-task-composer').addEventListener('click',()=>{if(!taskCreation.starting)$('#task-launcher').close();});
-createNavigation({getContext, dialogs, announce, selectProject, switchView, openTaskComposer});
+const projectDiscovery=createProjectDiscovery({getContext,api,captureSession:()=>connection.captureSession(),onChange:()=>updateChrome()});
+const collections=createCollectionPager({getScope:()=>JSON.stringify([workspace.id,workspace.authentication?.principal??null]),render});
+createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery});
 const {openContinuation} = createContinuationDialog({getContext, api, dialogs, showError});
 const {openRevision, renderRevisionPreview} = createRequirementsForm({getContext, api, dialogs, refresh, announce});
 const browserSession = createBrowserSession({drafts, disclosures, assignmentRequests, operationRequests, projectSelections, onWarning: showError});
 const taskCreation = createTaskCreation({getContext, currentProject,
   selectTask: taskId => { selectedTask = taskId; selectedRun = null; }, switchView, api, refresh,
   render, updateChrome, schedulePoll, saveSession, clearError, showError, announce});
-const parts = createWorkbenchParts({getContext, disclosure, currentRun, taskRuns,
+const parts = createWorkbenchParts({getContext, disclosure, currentRun, taskRuns, collections,
   switchView, showError, announce, independentlyVerified, checksFailed, openInspector});
 const {loadIndexedSearch, rebuildSearch} = createRetainedSearch({getContext, retainedSearches, currentProject, api, render, announce, showError});
 const {reviewPanel} = createReviewForm({getContext, drafts, api, mutate, refresh, saveSession, showError,
@@ -95,7 +99,7 @@ const {reviewPanel} = createReviewForm({getContext, drafts, api, mutate, refresh
 const publicationPanel = createPublicationView({getContext, captureSession:connection.captureSession, api, mutate, refresh, openInspector});
 
 const taskViews = createTaskViews({getContext, parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
-  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff});
+  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections});
 const views = {
   projects: createProjectsView({getContext, getProjectSelection:id=>projectSelections.get(id), selectProject, switchView, openTaskComposer, changeProjectPage, createStarter: async () => {
     const result = await mutate(() => api("/api/workspace/starter", {expectedWorkspaceId:workspace.id}), "Your starter project is ready.");
@@ -103,19 +107,19 @@ const views = {
   }}),
   queue: taskViews.queue,
   overview: taskViews.task,
-  work: createWorkView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff,
+  work: createWorkView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff, collections,
     switchView, openContinuation, checksFailed, independentlyVerified, openInspector}),
   review: createReviewView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, reviewPanel, publicationPanel, downloadReviewContext,
     verificationDrafts, actionFeedback, actionKey, actionNotice, mutate, runOperation, sha256Text, refresh, finishBaseUpdate, openContinuation, independentlyVerified, openInspector, onSectionChange:updateChrome}),
   evidence: createEvidenceView({getContext, parts, disclosure, currentProject, currentTask, currentRun, taskNumber,
-    retainedSearches, loadIndexedSearch, rebuildSearch, render, announce, switchView, downloadEvidence, independentlyVerified, checksFailed}),
+    retainedSearches, loadIndexedSearch, rebuildSearch, render, announce, switchView, downloadEvidence, independentlyVerified, checksFailed, collections}),
 };
 views.history = views.evidence;
 const viewTitles = {
   projects: ["Projects", "Projects", "Your code, queued work and decisions stay together."],
   queue: ["Task queue", "Task queue", "All tasks in this project. Open a task for its requirements and candidates."],
   history: ["Project history", "Project history", "All retained candidates and activity in this project."],
-  overview: ["Task", "Task", "One task: its requirements, status and candidates."],
+  overview: ["Task details", "Task details", "The agreed work, current requirements and next step."],
   work: ["Candidates", "Candidates", "All candidates for this task. Open one to inspect its changes and checks."],
   review: ["Candidate", "Candidate", "One candidate: changes, checks, independent review and integration status."],
   evidence: ["Candidate record", "Candidate record", "Retained reports and decisions for this candidate."],
@@ -220,6 +224,8 @@ function updateChrome() {
   if ($("#page-title").textContent!==heading) $("#page-title").textContent=heading;
   $("#page-kicker").textContent = taskView && task ? 'TASK '+taskNumber(task)+' · '+label : view==='projects' ? 'PROJECT LIST' : view==='queue' ? 'TASK LIST' : 'PROJECT HISTORY';
   $("#page-subtitle").textContent = taskView ? label+' · '+subtitle : subtitle;
+  $('#page-kicker').hidden=!taskView;
+  $('#page-subtitle').hidden=view!=='projects';
   $('#main').classList.toggle('compact-view', view !== 'overview' || Boolean(workspace?.tasks.length));
   $('#new-project').disabled = !workspace || taskCreation.starting;
 
@@ -266,13 +272,10 @@ function render(force = false) {
   const focus = captureFocus(content);
   for (const details of content.querySelectorAll('details[id]')) disclosures.set(details.id, details.open);
   const node = views[view](), recovery = recoveryAlert(), task=currentTask(), project=currentProject();
-  const crumbs = project ? el('nav',{class:'scope-breadcrumbs','aria-label':'Location'},
-    el('button',{class:'text-link',onclick:()=>switchView('projects')},'Projects'),el('span',{'aria-hidden':'true'},'/'),
-    el('button',{class:'text-link',onclick:()=>selectProject(project.id)},project.name+' · '+tasksInProject(project).length+' task'+(tasksInProject(project).length===1?'':'s')),
-    task ? [el('span',{'aria-hidden':'true'},'/'),el('button',{class:'text-link',onclick:()=>switchView('overview',task.id,null)},task.title)] : null,
-    task && view!=='overview' ? [el('span',{'aria-hidden':'true'},'/'),el('button',{class:'text-link',onclick:()=>switchView('work',task.id,null)},'Candidates · '+taskRuns(task.id).length)] : null,
-    currentRun() ? [el('span',{'aria-hidden':'true'},'/'),el('span',{'aria-current':'page'},currentRun().label)] : null) : null;
-  content.replaceChildren(...[recovery,crumbs,node].filter(Boolean));
+  const back = task ? el('nav',{class:'scope-return','aria-label':'Return to collection'},
+    el('button',{class:'text-link',onclick:()=>view==='overview'||view==='work'?selectProject(project.id):switchView('work',task.id,null)},
+      view==='overview'||view==='work'?'← Task queue':'← All candidates')) : null;
+  content.replaceChildren(...[recovery,node,back].filter(Boolean));
   content.setAttribute("aria-busy", "false");
   explainDisabledButtons();
   restoreFocus(focus);
@@ -282,6 +285,7 @@ async function switchView(next, taskId = selectedTask, runId = selectedRun, {pre
   const reviewSection = next === 'review' && ['candidate-changes','verification','code-review','review-decision'].includes(section) ? section : null;
   if (next === view && taskId === selectedTask && runId === selectedRun && (!projectId || projectId===selectedProject) && !reviewSection) return;
   rememberProjectSelection();
+  const previousSelection={view,selectedProject,selectedTask,selectedRun};
   const previousPath = workspacePath();
   if ($('#task-launcher').open) $('#task-launcher').close();
   if ($('#project-connection-dialog').open) $('#project-connection-dialog').close();
@@ -291,7 +295,11 @@ async function switchView(next, taskId = selectedTask, runId = selectedRun, {pre
   view = next; selectedTask = taskId; selectedRun = ['review','evidence'].includes(next) ? runId : null;
   if(['projects','queue','history'].includes(next)){selectedTask=null;selectedRun=null;}
   if(next==='projects') selectedProject=null;
-  if ((workspacePath() !== previousPath || next!=='projects' && taskId && !workspace.tasks.some(task=>task.id===taskId)) && !await refresh(true)) return;
+  if ((workspacePath() !== previousPath || next!=='projects' && taskId && !workspace.tasks.some(task=>task.id===taskId)) && !await refresh(true)) {
+    ({view,selectedProject,selectedTask,selectedRun}=previousSelection);
+    render(true);
+    return;
+  }
   selectedRun = currentRun()?.id ?? null;
   saveLocation(true);
   if(reviewSection) history.replaceState(history.state, '', locationSearch(view, selectedTask, selectedRun, selectedProject) + '#' + reviewSection);
@@ -325,12 +333,12 @@ async function changeProjectPage(offset, fresh=false) {
   saveLocation(true);
 }
 function tasksInProject(project) { return workspace.tasks.filter(task => task.projectId === project?.id); }
-function selectProject(projectId) {
+async function selectProject(projectId) {
   rememberProjectSelection();
-  const context = projectContext(workspace, projectId), saved = projectSelections.get(projectId);
-  if (!context) { showError('This project is unavailable. Open Projects and select a current project.'); return; }
+  await switchView('queue', null, null, {projectId});
+  if(currentProject()?.id!==projectId)return;
   if (!taskCreation.locked) taskCreation.activate('project:' + projectId);
-  switchView('queue', null, null, {projectId});
+  void projectDiscovery.sync(projectId);
 }
 function projectPicker() {
   const project = currentProject();
@@ -345,22 +353,27 @@ function projectPicker() {
       !workspace.authentication || workspace.authentication.permissions.manage ? el('option', { value: 'new' }, '+ New project') : null));
 }
 function updateProjectNavigation() {
-  const project = currentProject(), projects = Object.values(workspace.projects ?? {});
-  const key = JSON.stringify([workspace.id, project?.id, projects.map(item => [item.id, item.name, tasksInProject(item).length])]);
+  const project = currentProject(), projects = projectDiscovery.items().slice();
+  if(project&&!projects.some(item=>item.id===project.id))projects.unshift({id:project.id,name:project.name,taskCount:tasksInProject(project).length});
+  projects.splice(8);
+  const key = JSON.stringify([workspace.id, project?.id, projects.map(item => [item.id, item.name, item.taskCount,projectDiscovery.pinned(item.id)]),projectDiscovery.error()]);
   $('#project-views').hidden = !project;
   if (key === navigationKey) return;
   navigationKey = key;
   const nav = $('#project-views'), focus = document.activeElement?.id;
   const groups = projects.map(item => {
     const chosen = item.id === project?.id;
-    const count = tasksInProject(item).length;
+    const count = item.taskCount;
     const button = el('button', { id: 'project-link-' + item.id, type: 'button', class: 'project-link', 'aria-current': chosen ? 'true' : null,
       'aria-controls': chosen ? 'project-views' : null, onclick: () => selectProject(item.id) },
       el('span', { class: 'project-nav-icon', 'aria-hidden': true }, '◫'), el('span', {}, item.name), el('span', { class: 'project-task-count' }, count + (count === 1 ? ' task' : ' tasks')));
-    return el('div', { class: 'project-nav-group' + (chosen ? ' selected' : '') }, button, chosen ? nav : null);
+    return el('div', { class: 'project-nav-group' + (chosen ? ' selected' : '') }, button,
+      el('button',{class:'project-pin',type:'button','aria-label':(projectDiscovery.pinned(item.id)?'Unpin ':'Pin ')+item.name,'aria-pressed':projectDiscovery.pinned(item.id),onclick:()=>projectDiscovery.togglePin(item.id)},projectDiscovery.pinned(item.id)?'Pinned':'Pin'),chosen ? nav : null);
   });
   if (!project) $('#new-project').before(nav);
-  $('#project-navigation').replaceChildren(...groups);
+  $('#project-navigation').replaceChildren(...[el('p',{class:'nav-scope-label'},'Recent & pinned'),...groups,
+    !groups.length?el('p',{class:'small'},'Open Projects or Find work to choose a project.'):null,
+    projectDiscovery.error()?el('p',{class:'small',role:'status'},projectDiscovery.error(),el('button',{class:'text-link',onclick:projectDiscovery.needsReset()?projectDiscovery.reset:projectDiscovery.retry},projectDiscovery.needsReset()?'Reset shortcuts':'Retry shortcuts')):null].filter(Boolean));
   if (focus?.startsWith('project-link-')) document.getElementById(focus)?.focus({preventScroll:true});
 }
 function admissionSwitch(project) {
@@ -374,8 +387,7 @@ function updateProjectHeader() {
   $('#project-breadcrumb').textContent = project?.name ?? workspace.name;
   header.hidden = !project;
   if (!project) { projectHeaderKey = ''; header.replaceChildren(); return; }
-  const brief = projectBrief(workspace, project.id);
-  const key = JSON.stringify([workspace.id, workspace.provider, view, project.id, project.name, project.repositoryName, project.mainCommit, project.defaultBranch, project.acceptingWork, project.policyVersion, project.automaticMergePolicy, project.codeConnected, workspace.authentication?.permissions, actions.busy, brief, Object.values(workspace.projects ?? {}).map(item => [item.id, item.name])]);
+  const key = JSON.stringify([workspace.id, workspace.provider, project.id, project.name, project.repositoryName, project.mainCommit, project.defaultBranch, project.acceptingWork, project.policyVersion, project.automaticMergePolicy, project.codeConnected, workspace.authentication?.permissions, actions.busy, Object.values(workspace.projects ?? {}).map(item => [item.id, item.name])]);
   if (key === projectHeaderKey) return;
   const focused = document.activeElement?.id;
   projectHeaderKey = key;
@@ -393,17 +405,10 @@ function updateProjectHeader() {
     el('p', {class: 'small'}, 'Your coding chat runs the agents. This project keeps their tasks, changes, checks and your decisions together.'));
   $('#inspector-content').querySelector('#'+controlsId)?.replaceWith(controls.panel);
   header.replaceChildren(...[projectPicker(),
-    el('div', { class: 'project-shell-title' }, el('strong', {}, project.name), el('p', { class: 'project-code' }, (project.defaultBranch ?? (workspace.provider === 'local-git' ? 'main' : 'default branch')) + ' · ' + shortSha(project.mainCommit) + (project.acceptingWork ? '' : ' · Assignments paused'))),
+    el('div', { class: 'project-shell-title' }, el('strong', {}, project.name), el('span', { class: 'project-code' }, (project.defaultBranch ?? (workspace.provider === 'local-git' ? 'main' : 'default branch')) + ' · ' + shortSha(project.mainCommit) + (project.acceptingWork ? '' : ' · Assignments paused'))),
     el('div', { class: 'project-shell-actions' },
       el('button', { id: 'shell-new-task', class: 'button button-primary button-small', hidden: Boolean(workspace.authentication && !workspace.authentication.permissions.manage), onclick: () => openTaskComposer('project:' + project.id) }, '+ New task'),
-      controls.trigger),
-
-    view==='queue' ? el('section', { class: 'project-command-brief', 'aria-label': 'Project command brief' },
-      el('dl', { class: 'command-brief-counts' }, [['Needs decision',brief.decisions],['Active tasks',brief.active],['Waiting',brief.waiting],['Ready to claim',brief.eligibleQueued]].map(([label,value])=>
-        el('div',{},el('dt',{},label),el('dd',{},value+' / '+brief.total)))),
-      brief.next ? el('div', { class: 'command-brief-next' }, el('span', {}, brief.next.title),
-        el('button', { id: 'shell-next-action', class: 'button button-small', onclick: () => switchView(brief.next.view, brief.next.taskId, brief.next.runId ?? null) }, brief.next.action + ' →')) : el('p', { class: 'small' }, 'No unfinished work. Queue the next agreed task.'),
-      disclosure('command-brief-definitions-' + project.id, 'Task count definitions', el('p', { class: 'small' }, brief.definition))) : null].filter(node=>node!==null));
+      controls.trigger)].filter(node=>node!==null));
   if (focused?.startsWith('shell-')) document.getElementById(focused)?.focus({preventScroll:true});
 }
 function openTaskComposer(source) {
@@ -581,6 +586,7 @@ function workspaceReceived(data, previous, {force, recoveredError}) {
   if(view==='projects' && data.page) projectOffset=data.page.offset;
   pageRevision=null;
   loadSession(); resolveLocation(); saveLocation();
+  void projectDiscovery.sync(currentProject()?.id??null);
   $('#auth-panel').hidden = true;
   $('#identity-status').textContent = demo ? 'No sign-in required' : workspace.authentication ? workspace.authentication.principal.displayName + ' · ' + workspace.authentication.principal.kind : 'Local attribution';
   $('#workspace-access-controls').hidden = !workspace.authentication?.permissions.manage;

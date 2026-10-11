@@ -1,3 +1,5 @@
+import {createCollectionPager} from '../public/ui/collection.js';
+const makePager=workspace=>createCollectionPager({getScope:()=>workspace.id,render(){}});
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {installFakeDOM} from './helpers/fake-dom.mjs';
@@ -21,6 +23,7 @@ function fixture() {
     currentProject:()=>project,currentTask:()=>task,currentRun:()=>run,taskRuns:id=>workspace.runs.filter(run=>run.taskId===id),taskNumber:task=>workspace.tasks.indexOf(task)+1,taskLabel:task=>task.title,
     tasksInProject:project=>workspace.tasks.filter(task=>task.projectId===project.id),disclosure:(id,title,...body)=>el('details',{id},el('summary',{},title),...body),
     showError(){},announce(){},independentlyVerified:()=>false,checksFailed:()=>false,openRevision(){}};
+  ports.collections=makePager(workspace);
   ports.parts=createWorkbenchParts(ports);
   return {workspace,project,other,task,run,calls,ports};
 }
@@ -95,13 +98,13 @@ test('project directory opens a project collection without silently restoring a 
 });
 
 test('task collection includes ongoing and integrated work with the unchanged project denominator',()=>{
- const f=fixture(),view=projectCoordinationView({workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}),text=view.textContent;
- assert.match(text,/Showing all 2 tasks/);assert.ok(text.includes('Current task'));assert.ok(text.includes('Integrated task'));assert.ok(!text.includes('Other queue'));
+ const f=fixture(),view=projectCoordinationView({collections:makePager(f.workspace),workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}),text=view.textContent;
+ assert.match(text,/2 total tasks/);assert.ok(text.includes('Current task'));assert.ok(text.includes('Integrated task'));assert.ok(!text.includes('Other queue'));
 });
 
 test('shared task context exposes direct task selection and current requirement identity',()=>{
   const f=fixture(),header=f.ports.parts.taskHeader(f.task),text=header.textContent;
-  assert.match(text,/Requirements r1/);assert.match(text,/Coordinator · Owner/);assert.match(text,/1 retained candidate/);assert.match(text,/Read task brief/);
+  assert.match(text,/Requirements r1/);assert.match(text,/Coordinator · Owner/);assert.match(text,/Read task brief/);
   assert.ok(!nodes(header).some(node=>node.tagName==='DETAILS'),'Primary context has no accordion');
 });
 

@@ -103,6 +103,7 @@ export interface SnapshotStore {
   operation(key: string): Operation | undefined;
   project(id: string): Project | undefined;
   readPage(request: NonNullable<ReturnType<typeof parseWorkspacePage>>): SnapshotPage;
+  readCatalog(request: ReturnType<typeof import('../../public/project-catalog.js').parseProjectCatalog>): ReturnType<typeof import('../../public/project-catalog.js').projectCatalog>;
   identity(): Pick<Workspace, 'id' | 'authentication' | 'sessionsValidAfter'> & { revision: number; empty: boolean };
   write(snapshot: HostedSnapshot, expectedRevision: number, options?:{automaticIndex:boolean}): void;
   waitForChange?(revision: number, signal: AbortSignal): Promise<void>;
@@ -313,6 +314,12 @@ export class HostedController {
         state:op.state,startedAt:op.startedAt??null})) : [],
       recovery: { pendingMergeIntents: activeMergeIntents + recoveryRequiredMergeIntents, activeMergeIntents, recoveryRequiredMergeIntents },
       execution: { kind: 'cloudflare-artifacts', model: this.runtime?.modelName ?? null, inference: Boolean(this.runtime?.provider) } };
+  }
+
+  projectCatalog(request: ReturnType<typeof import('../../public/project-catalog.js').parseProjectCatalog>) {
+    this.checkBinding();
+    if(this.authority.principal.kind==='reviewer')throw new ApiError(403,'REVIEWER_READ_ONLY','Use the sealed candidate review context.');
+    return this.store.readCatalog(request);
   }
 
   private save(snapshot: HostedSnapshot): void {

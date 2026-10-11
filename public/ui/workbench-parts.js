@@ -38,7 +38,7 @@ export function earlierReportPanel(workspace, run, disclosure) {
 export function createWorkbenchParts({
   getContext,
   disclosure, currentRun, taskRuns,
-  switchView, showError, announce, independentlyVerified, checksFailed, openInspector
+  switchView, showError, announce, independentlyVerified, checksFailed, openInspector, collections
 }) {
   const diffPanel = createDiffView({getContext});
   function runStatus(run) {
@@ -51,9 +51,12 @@ export function createWorkbenchParts({
     return el("div", { class: "empty-state" }, el("div", { class: "empty-mark", "aria-hidden": "true" }, "↗"), el("h2", {}, title), el("p", {}, text));
   }
 
-  function timeline(events, limit = 8) {
-    const shown = [...events].reverse().slice(0, limit);
-    return shown.length ? el("div", { class: "timeline" }, shown.map((event) => el("div", { class: "timeline-item" }, el("span", { class: `timeline-dot ${/accept|merge|verif/.test(event.type) ? "good" : /start|assign|creat/.test(event.type) ? "accent" : ""}`, "aria-hidden": "true" }), el("div", { class: "timeline-message" }, event.message), el("time", { class: "timeline-time", datetime: event.at, title: dateTime(event.at) }, timeOnly(event.at))))) : el("div", { class: "timeline-empty" }, "Your workspace history starts when you create a task. Every transition is retained.");
+  function timeline(events, limit = 8, id='activity') {
+    const page=limit===Infinity?collections({id,label:'Activity',items:events,text:event=>event.message,
+      sorts:[['newest','Newest first'],['oldest','Oldest first']],sortKey:event=>event.at}):null;
+    const shown=page?page.items:[...events].reverse().slice(0,limit);
+    const list=shown.length ? el("div", { class: "timeline" }, shown.map((event) => el("div", { class: "timeline-item" }, el("span", { class: `timeline-dot ${/accept|merge|verif/.test(event.type) ? "good" : /start|assign|creat/.test(event.type) ? "accent" : ""}`, "aria-hidden": "true" }), el("div", { class: "timeline-message" }, event.message), el("time", { class: "timeline-time", datetime: event.at, title: dateTime(event.at) }, timeOnly(event.at))))) : el("div", { class: "timeline-empty" }, events.length?'No matching activity. Clear the search to browse retained events.':"Your workspace history starts when you create a task. Every transition is retained.");
+    return page?el('div',{},page.controls,list,page.navigation):list;
   }
 
   function taskHeader(task) {
@@ -61,14 +64,9 @@ export function createWorkbenchParts({
     const outcome=taskOutcome(workspace,task);
     return el('section', { class: 'task-context', 'aria-label': 'Selected task context' },
       el('div',{class:'task-context-meta'},el('span',{class:'status status-'+outcome.tone},outcome.label),
-        el('span',{},'Requirements r'+(task.revision??1)),el('span',{},'Coordinator · '+(task.owner??'Not assigned')),
-        el('span',{},taskRuns(task.id).length+' retained candidate'+(taskRuns(task.id).length===1?'':'s'))),
-      el('p',{class:'task-purpose-summary'},task.purpose),
+        el('span',{},'Requirements r'+(task.revision??1)),el('span',{},'Coordinator · '+(task.owner??'Not assigned'))),
       prerequisitesPanel(task),
-      el('button',{class:'text-link',type:'button',onclick:()=>openInspector('Task brief · '+task.title,
-        el('p',{},task.purpose),el('h3',{},'Requirements r'+(task.revision??1)),
-        el('ol',{class:'brief-criteria'},task.criteria.map(text=>el('li',{},text))),
-        el('p',{class:'head-hint'},'Base commit · '+task.baseCommit))},
+      el('button',{class:'text-link',type:'button',onclick:()=>switchView('overview',task.id,null)},
         task.criteria.length+' requirement'+(task.criteria.length===1?'':'s')+' · Read task brief'));
   }
 

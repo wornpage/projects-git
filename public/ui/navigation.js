@@ -2,17 +2,29 @@ import {$, el} from './dom.js';
 import {commandEntries} from '../workbench-state.js';
 
 // The palette navigates existing work; it never submits a workflow mutation.
-export function createNavigation({getContext, dialogs, announce, selectProject, switchView, openTaskComposer}) {
+export function createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery}) {
   let commandIndex = 0;
   let displayedCommands = [];
+  let request=0,catalog=null,displayedScope=null;
+  const scope=()=>JSON.stringify([getContext().workspace?.id,getContext().workspace?.authentication?.principal??null]);
   dialogs.register('command-dialog');
 
-  function renderCommands() {
+  async function renderCommands(offset=0) {
     const {workspace} = getContext();
-    const all = workspace ? commandEntries(workspace, $('#command-query').value) : [];
-    displayedCommands = all.slice(0, 80);
+    const query=$('#command-query').value,started=++request,identity=scope();
+    const all = workspace ? commandEntries(workspace, query).filter(entry=>entry.group!=='Projects') : [];
+    displayedCommands=[];displayedScope=identity;
+    $('#command-count').textContent='Searching project names across the workspace…';
+    $('#command-results').replaceChildren();
+    $('#command-support').replaceChildren();
+    let projects=[],failure=null;
+    try {catalog=await projectDiscovery.find(query,offset,{at:offset?catalog?.revision??null:null});
+      if(!catalog||started!==request||identity!==scope()||!$('#command-dialog').open)return;
+      projects=catalog.items.map(item=>({id:'project-'+item.id,group:'Projects',label:item.name,detail:item.taskCount+' tasks · '+item.candidateCount+' candidates',projectId:item.id}));
+    }catch(error){if(started!==request||identity!==scope()||!$('#command-dialog').open)return;failure=error.message;catalog=null;}
+    displayedCommands = [...projects,...all.slice(0,60)];
     commandIndex = Math.min(Math.max(commandIndex, 0), Math.max(0, displayedCommands.length - 1));
-    $('#command-count').textContent = `${displayedCommands.length} / ${all.length} matches · ${workspace?.page?'loaded projects; open Projects to browse all '+workspace.page.totalProjects:'projects, tasks and retained candidates across this workspace'}`;
+    $('#command-count').textContent = (catalog?`${catalog.items.length} project names shown · ${catalog.matched} matching / ${catalog.total} total projects. `:'')+`${Math.min(all.length,60)} / ${all.length} matching tasks and candidates in loaded projects.`;
     $('#command-results').replaceChildren(...displayedCommands.map((entry, index) => el('div', {
       id: 'command-result-' + entry.id, role: 'option', 'aria-selected': index === commandIndex,
       class: 'command-result' + (index === commandIndex ? ' selected' : ''),
@@ -21,7 +33,12 @@ export function createNavigation({getContext, dialogs, announce, selectProject, 
         if (commandIndex !== index) { commandIndex = index; syncCommandSelection(); }
       },
     }, el('strong', {}, entry.label), el('span', {class: 'small'}, entry.group + ' · ' + entry.detail))));
-    if (!displayedCommands.length) $('#command-results').append(el('p', {class: 'no-command-results'}, 'No matching work. Try a project, task title, agent label or commit prefix.'));
+    $('#command-support').replaceChildren(...[
+      failure?el('p',{class:'inline-error',role:'alert'},failure):null,
+      failure?el('button',{class:'button button-small',onclick:()=>{void renderCommands();}},'Retry project search'):null,
+      !displayedCommands.length?el('p', {class: 'no-command-results'}, 'No matching work. Try a project name, loaded task title, agent label or commit prefix.'):null,
+      catalog?el('button',{class:'button button-small',disabled:catalog.previousOffset===null,onclick:()=>{void renderCommands(catalog.previousOffset);}},'Previous projects'):null,
+      catalog?el('button',{class:'button button-small',disabled:catalog.nextOffset===null,onclick:()=>{void renderCommands(catalog.nextOffset);}},'Next projects'):null].filter(Boolean));
     syncCommandSelection();
   }
 
@@ -44,14 +61,14 @@ export function createNavigation({getContext, dialogs, announce, selectProject, 
     if (document.querySelector('dialog[open]')) return;
     commandIndex = 0;
     $('#command-query').value = '';
-    renderCommands();
     dialogs.show('command-dialog', '#command-query');
+    void renderCommands();
   }
 
   function navigateCommand(id) {
-    const {workspace} = getContext();
-    const entry = workspace && commandEntries(workspace, $('#command-query').value).find(item => item.id === id);
-    if (!entry) { renderCommands(); announce('That work is no longer available.'); return; }
+    let entry = displayedScope===scope()&&displayedCommands.find(item=>item.id===id);
+    if(entry&&entry.group!=='Projects')entry=commandEntries(getContext().workspace,$('#command-query').value).find(item=>item.id===id);
+    if (!entry) { void renderCommands(); announce('That work is no longer available.'); return; }
     dialogs.skipFocusRestore('command-dialog');
     $('#command-dialog').close();
     if (entry.group === 'Projects') {
@@ -61,7 +78,7 @@ export function createNavigation({getContext, dialogs, announce, selectProject, 
 
   $('#open-command-palette').addEventListener('click', openCommands);
   $('#close-command-dialog').addEventListener('click', () => $('#command-dialog').close());
-  $('#command-query').addEventListener('input', () => { commandIndex = 0; renderCommands(); });
+  $('#command-query').addEventListener('input', () => { commandIndex = 0; void renderCommands(); });
   $('#command-query').addEventListener('keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); $('#command-dialog').close(); return; }
     if (['ArrowDown', 'ArrowUp'].includes(event.key)) {

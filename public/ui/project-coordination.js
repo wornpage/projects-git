@@ -1,14 +1,21 @@
 import {el,panel,shortSha} from './dom.js';
 import {projectCoordination} from '../project-coordination.js';
+import {taskQueued} from '../workbench-state.js';
 
 // The project queue lists tasks. Candidate files, checks and review details
 // belong to their candidate page, not to nested workbenches inside this list.
-export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCandidates}) {
+export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCandidates,collections}) {
   const model=projectCoordination(workspace,projectId), cap=model.capacity;
-  return panel('Tasks · '+model.totalTasks,el('div',{class:'panel-body'},
-    el('p',{class:'collection-scope'},'Showing all '+model.totalTasks+' task'+(model.totalTasks===1?'':'s')+' in '+model.projectName+'. '+model.totalCandidates+' candidate'+(model.totalCandidates===1?' belongs':'s belong')+' to '+(model.totalTasks===1?'this task.':'these tasks.')),
+  const rows=collections({id:'tasks-'+projectId,label:'Tasks',items:model.cards,text:card=>card.title,
+    filters:[['all','All statuses'],['queued','Queued'],['active','Active'],['decision','Needs decision'],['integrated','Integrated']],
+    matches:(card,filter)=>filter==='all'||filter==='integrated'&&Boolean(workspace.tasks.find(task=>task.id===card.id)?.mergedCommit)
+      ||filter==='queued'&&taskQueued(workspace,workspace.tasks.find(task=>task.id===card.id))||filter==='active'&&workspace.runs.some(run=>run.taskId===card.id&&(['assigned','running'].includes(run.status)||run.verificationPending))
+      ||filter==='decision'&&['Review changes','Continue to merge'].includes(card.outcome.action),
+    sorts:[['order','Queue order'],['name','Task name'],['newest','Newest first']],sortKey:(card,sort)=>sort==='name'?card.title.toLowerCase():workspace.tasks.find(task=>task.id===card.id).createdAt});
+  return el('section',{'aria-label':'Project task queue'},
+    rows.controls,
     model.admissionPaused?el('p',{class:'capability-note'},'New assignments are paused. Existing work remains available.'):null,
-    model.cards.length?el('ul',{class:'task-collection collection-list','aria-label':'Tasks in this project'},model.cards.map(card=>
+    rows.items.length?el('ul',{class:'task-collection collection-list','aria-label':'Tasks in this project'},rows.items.map(card=>
       el('li',{class:'task-collection-row'},
         el('div',{},el('a',{href:'?view=overview&task='+encodeURIComponent(card.id),class:'task-collection-title',onclick:event=>{
           if(event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();onOpenTask(card.id);
@@ -18,9 +25,11 @@ export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCa
           'aria-label':card.retainedCandidates+' candidate'+(card.retainedCandidates===1?'':'s')+' for '+card.title,onclick:event=>{
             if(event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();onOpenCandidates(card.id);
           }},card.retainedCandidates+' candidate'+(card.retainedCandidates===1?'':'s')))))
-      : el('p',{},'No tasks yet. Add a task to this project.'),
-    cap&&Number.isInteger(cap.occupied)?el('p',{class:'definition-note'},'Workspace capacity: '+cap.occupied+' / '+cap.limit+' execution slots across all projects. Task and candidate totals above cover this project only.'):null,
-    el('p',{class:'definition-note'},'All statuses are included. A task is one piece of work; a candidate is one proposed result for that task.')));
+      : el('p',{},model.totalTasks?'No matching tasks. Clear the filters to browse the full queue.':'No tasks yet. Add a task to this project.'),
+    rows.navigation,
+    el('p',{class:'definition-note'},model.totalCandidates+' retained candidate'+(model.totalCandidates===1?'':'s')+' across '+model.totalTasks+' total task'+(model.totalTasks===1?'':'s')+'.'),
+    cap&&Number.isInteger(cap.occupied)?el('p',{class:'definition-note'},'Workspace capacity: '+cap.occupied+' / '+cap.limit+' execution slots across all projects. Task and candidate totals cover this project only.'):null,
+    el('p',{class:'definition-note'},'Full totals include every status, including integrated and failed work. Filters change the visible rows. A candidate is one proposed result for a task.'));
 }
 
 // Operational detail remains available without becoming a nested task list.

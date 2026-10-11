@@ -7,6 +7,7 @@ const accessVerifier = new AccessVerifier();
 import { HostedController } from "./controller.ts";
 import { WorkspaceStore } from './workspace-store.ts';
 import { parseWorkspacePage, projectMutationResult } from '../../public/workspace-page.js';
+import {parseProjectCatalog} from '../../public/project-catalog.js';
 import {ArtifactEventReceipts,artifactEventPolicy,parseArtifactPush,parseArtifactPushEnvelope,reconcileArtifactPush} from './artifact-events.ts';
 import type {ArtifactEventSource} from './artifact-events.ts';
 import {ArtifactSubscriptions,subscriptionPlan,subscriptionDigest} from './artifact-subscriptions.ts';
@@ -257,6 +258,10 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     assertAuthority(authority, this.env.WORKSPACE_ID);
     authorizeRoute(call.principal, call.method, call.path);
     controller = this.controller(authority);
+      if(call.method==='GET'&&call.path==='/api/projects/catalog') {
+        let query;try {query=parseProjectCatalog(call.search);}catch(error){throw new ApiError(400,'INVALID_PROJECT_CATALOG',(error as Error).message);}
+        return reply(controller.projectCatalog(query));
+      }
       if (call.method === "GET" && call.path === "/api/workspace") {
         let pageRequest;
         try { pageRequest = parseWorkspacePage(call.search); }

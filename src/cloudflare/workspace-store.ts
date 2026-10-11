@@ -3,6 +3,7 @@ import { initialSnapshot, migrateSnapshot } from './controller.ts';
 import { ApiError } from './security.ts';
 import { parseWorkspacePage } from '../../public/workspace-page.js';
 import { MAX_ACTIVE_RUNS } from '../core/workflow.mjs';
+import {selectCatalogEntries,parseProjectCatalog,ProjectCatalogError} from '../../public/project-catalog.js';
 
 type Storage = Pick<DurableObjectStorage, 'sql' | 'transactionSync'>;
 type RecordRow = { kind: string; id: string; position: number; data: string };
@@ -127,6 +128,22 @@ export class WorkspaceStore implements SnapshotStore {
   project(id: string): NonNullable<HostedSnapshot['workspace']['projects']>[string] | undefined {
     const row = this.storage.sql.exec<{data:string}>("SELECT data FROM workspace_records WHERE kind = 'projects' AND id = ?",id).toArray()[0];
     return row ? JSON.parse(row.data) : undefined;
+  }
+
+  readCatalog(request: ReturnType<typeof parseProjectCatalog>) {
+    const identity=this.identity();
+    if(request.at!==null&&request.at!==identity.revision)throw new ApiError(409,'PROJECT_CATALOG_CHANGED','Projects changed while paging. Search again for the current list.');
+    const entries=this.storage.sql.exec<{id:string;name:string}>("SELECT id,json_extract(data,'$.name') AS name FROM workspace_records WHERE kind='projects'").toArray();
+    let selection;
+    try {selection=selectCatalogEntries(entries,request,identity.revision);}
+    catch(error){if(error instanceof ProjectCatalogError)throw new ApiError(error.status,error.code,error.message);throw error;}
+    const items=selection.ids.map((id:string)=>{
+      const entry=entries.find(item=>item.id===id)!;
+      const taskCount=this.storage.sql.exec<{n:number}>("SELECT count(*) AS n FROM workspace_records WHERE kind='tasks' AND json_extract(data,'$.projectId')=?",id).one().n;
+      const candidateCount=this.storage.sql.exec<{n:number}>("SELECT count(*) AS n FROM workspace_records r JOIN workspace_records t ON t.kind='tasks' AND t.id=json_extract(r.data,'$.taskId') WHERE r.kind='runs' AND json_extract(t.data,'$.projectId')=?",id).one().n;
+      return {id,name:entry.name,taskCount,candidateCount};
+    });
+    return {workspaceId:identity.id,...selection.page,items};
   }
 
   /** SQL selects complete projects, so prerequisites and review denominators are never partial. */

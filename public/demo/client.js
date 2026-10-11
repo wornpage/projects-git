@@ -1,11 +1,13 @@
 import {createExampleWorkspace,exampleIds} from './workspace.js';
 import {parseWorkspacePage,projectWorkspace} from '../workspace-page.js';
+import {parseProjectCatalog,projectCatalog} from '../project-catalog.js';
 
 // This explicit demo boundary never delegates a request to the real HTTP client.
 export function createDemoApi(){
   const snapshot=createExampleWorkspace();
   return async (path,body)=>{
     if(body!==undefined)throw Object.assign(Error('This example is read-only. No workspace action was sent.'),{status:405,code:'DEMO_READ_ONLY'});
+    if(path.split('?')[0]==='/api/projects/catalog')return projectCatalog(snapshot,parseProjectCatalog(path.split('?')[1]??''));
     if(path==='/api/workspace')return structuredClone(snapshot);
     if(path.startsWith('/api/workspace?'))return projectWorkspace(structuredClone(snapshot),parseWorkspacePage(path.split('?')[1]));
     throw Object.assign(Error('That operation is unavailable in the read-only example.'),{status:404,code:'DEMO_NOT_AVAILABLE'});
@@ -13,7 +15,7 @@ export function createDemoApi(){
 }
 
 export function installDemoGuide(document){
-  const guide=document.getElementById('demo-guide');
+  const guide=document.getElementById('demo-guide-steps');
   if(!guide)throw Error('Demo document is missing its guide.');
   const stages=[['overview','','1 · Requirements'],['work','','2 · Agent work'],['review','candidate-changes','3 · Changes'],
     ['review','verification','4 · Checks'],['review','code-review','5 · Independent review'],['review','review-decision','6 · Owner decision'],['evidence','','7 · Merge record']];

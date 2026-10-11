@@ -1,5 +1,6 @@
 import http from 'node:http';
 import {parseWorkspacePage, projectWorkspace} from '../../public/workspace-page.js';
+import {parseProjectCatalog,projectCatalog,ProjectCatalogError} from '../../public/project-catalog.js';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, openSync, closeSync, unlinkSync, lstatSync } from 'node:fs';
 import { resolve, dirname, extname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -448,6 +449,7 @@ export function createApplication({ dataDir = resolve(projectRoot, '.local'), pu
       }
       if (url.pathname === '/api/health' && request.method === 'GET') return json(response, { ok: true, provider: 'local-git' });
       if (url.pathname === '/api/workspace' && request.method === 'GET') return json(response, projectWorkspace(snapshot(),parseWorkspacePage(url.search)));
+      if (url.pathname === '/api/projects/catalog' && request.method === 'GET') return json(response, projectCatalog(snapshot(),parseProjectCatalog(url.search)));
       const publishRoute = /^\/api\/runs\/([a-f0-9-]{36})\/publication\/(preview|publish|([a-f0-9-]{36})\/(refresh|resume))$/.exec(url.pathname);
       if (publishRoute && request.method === 'POST') {
         if (!publication) throw new WorkflowError('github_not_configured', 'Private GitHub publication is not configured on this local server.', 503);
@@ -708,7 +710,7 @@ export function createApplication({ dataDir = resolve(projectRoot, '.local'), pu
       response.end(request.method === 'HEAD' ? undefined : content);
     } catch (error) {
       if (response.headersSent) return response.end();
-      const expected = error instanceof WorkflowError;
+      const expected = error instanceof WorkflowError || error instanceof ProjectCatalogError;
       if (!expected) console.error(JSON.stringify({ type: 'local.request.failure', message: error.message }));
       json(response, { error: { code: expected ? error.code : 'internal_error', message: expected ? error.message : 'Local operation failed. Inspect the terminal and retained files.' } }, expected ? error.status : 500);
     }

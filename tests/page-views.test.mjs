@@ -1,3 +1,5 @@
+import {createCollectionPager} from '../public/ui/collection.js';
+const makePager=workspace=>createCollectionPager({getScope:()=>workspace.id,render(){}});
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {installFakeDOM} from './helpers/fake-dom.mjs';
@@ -39,6 +41,7 @@ function fixture(){
     mutate(){throw new Error('Rendering must not mutate');},runOperation(){throw new Error('Rendering must not request work');},sha256Text(){},refresh(){},finishBaseUpdate(){},
     loadIndexedSearch(){throw new Error('Local view must not issue an indexed search');},rebuildSearch(){},render(){},downloadHandoff(){},downloadEvidence(){},onSectionChange(){},
   };
+  ports.collections=makePager(workspace);
   ports.parts=createWorkbenchParts(ports);
   return {workspace,task,run,context,ports,calls};
 }
@@ -186,8 +189,25 @@ test('all four page modules render selected project work without leaking another
   for(const [name,create] of Object.entries({overview:ports=>createTaskViews(ports).task,work:createWorkView,review:createReviewView,evidence:createEvidenceView})){
     f.context.view=name;
     const text=create(f.ports)().textContent;
-    assert.match(text,/Selected candidate/);assert.ok(!text.includes('Foreign work'),name);assert.ok(!text.includes('Foreign candidate'),name);
+    assert.match(text,name==='overview'?/Task brief/:/Selected candidate/);assert.ok(!text.includes('Foreign work'),name);assert.ok(!text.includes('Foreign candidate'),name);
   }
+});
+
+test('task details define the work while candidate warnings and exact-result inspection remain reachable',async()=>{
+ const f=fixture(),nodes=node=>[node,...node.children.flatMap(nodes)];
+ f.task.revision=2;f.run.evidence={taskRevision:1,commit:f.run.headCommit,passed:0,total:2,checks:[],exitCode:1};
+ f.workspace.coordination={[f.run.id]:{overlaps:[{runId:'other',paths:['index.js']}],acceptance:[{met:false,message:'Current independent checks are required'}]}};
+ const retained=structuredClone(f.workspace),brief=createTaskViews(f.ports).task();
+ assert.match(brief.textContent,/Task brief/);assert.match(brief.textContent,/1 candidate/);assert.ok(!brief.textContent.includes('Selected candidate'));
+ await nodes(brief).find(node=>node.tagName==='BUTTON'&&node.textContent==='Open candidates →').dispatch('click');
+ assert.deepEqual(f.calls,[['work',f.task.id,null]]);
+ const candidates=createWorkView(f.ports)();
+ for(const phrase of ['Selected candidate','report covers r1','Current requirements are r2','Shared files','index.js','Before acceptance · 1 unmet','Current independent checks are required'])assert.ok(candidates.textContent.includes(phrase),phrase);
+ await nodes(candidates).find(node=>node.tagName==='BUTTON'&&node.textContent==='Inspect candidate ↗').dispatch('click');
+ assert.deepEqual(f.calls[1],['review',f.task.id,f.run.id]);assert.deepEqual(f.workspace,retained);
+ f.run.status='running';f.run.assignedRevision=1;
+ assert.match(createWorkView(f.ports)().textContent,/Send the updated requirements through your agent conversation/);
+ f.run.status='assigned';assert.match(createWorkView(f.ports)().textContent,/This assignment cannot start under revised requirements/);
 });
 
 test('project history exposes recorded filenames and opens the exact candidate changes without a mutation',async()=>{
@@ -261,19 +281,21 @@ test('one task change preserves its identity and continuation without a redundan
   await action.dispatch('click');assert.equal(continued,1);assert.equal(f.calls.length,0);
 });
 
-test('zero and single-result work stays task-first while retained failures remain in multiple-result totals',()=>{
-  const f=fixture();
+test('zero and single-result work stays task-first while retained failures remain in multiple-result totals',async()=>{
+  const f=fixture(),nodes=node=>[node,...node.children.flatMap(nodes)];let progress;
+  f.ports.openInspector=(title,body)=>{assert.equal(title,'Task progress');progress=body;};
   let view=createWorkView(f.ports)();
-  assert.match(view.textContent,/Candidates1 CANDIDATE/);
+  assert.match(view.textContent,/1 total candidates/);
   assert.ok(!view.textContent.includes('Alternative candidates'));
   f.workspace.runs.push({...f.run,id:crypto.randomUUID(),label:'Failed earlier attempt',status:'failed',headCommit:null,error:'Retained preparation failure'});
   view=createWorkView(f.ports)();
-  assert.match(view.textContent,/Candidates2 CANDIDATES/);
+  assert.match(view.textContent,/2 total candidates/);
   assert.match(view.textContent,/Failed earlier attempt/);
-  assert.match(view.textContent,/1 \/ 2 candidates have commits/);
+  await nodes(view).find(node=>node.tagName==='BUTTON'&&node.textContent==='Task progress').dispatch('click');
+  assert.match(progress.textContent,/1 \/ 2 candidates have commits/);
   f.workspace.runs=f.workspace.runs.filter(run=>run.taskId!==f.task.id);
   view=createWorkView(f.ports)();
-  assert.match(view.textContent,/Candidates0 CANDIDATES/);
+  assert.match(view.textContent,/0 total candidates/);
   assert.match(view.textContent,/Start with one checkout/);
 });
 

@@ -1,14 +1,14 @@
 import {el, panel, timeOnly} from '../dom.js';
-import {taskOutcome,dependencyState} from '../../workbench-state.js';
+import {taskOutcome,taskBriefing,dependencyState} from '../../workbench-state.js';
 import {taskLifecycle} from '../task-lifecycle.js';
 
 export function createWorkView({
   getContext,
   parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff,
-  switchView, openContinuation, checksFailed, independentlyVerified, openInspector
+  switchView, openContinuation, checksFailed, independentlyVerified, openInspector, collections
 }) {
   const {emptyState, taskHeader, timeline, commitValue, runStatus} = parts;
-  function agentCard(run, index) {
+  function agentCard(run, index, brief, result) {
     const {workspace, selectedRun, demo} = getContext();
     const evidence = run.evidence;
     const failed = checksFailed(run);
@@ -41,6 +41,14 @@ export function createWorkView({
     return el('article', {class: 'agent-card ' + (run.id === selectedRun ? 'selected' : '')},
       heading, el('div',{class:'agent-code-line'},commitValue(run.headCommit),el('span',{class:'small'},run.changedFiles.length+' changed file'+(run.changedFiles.length===1?'':'s'))),
       checks, el('p', {class: 'agent-summary'}, summary),
+      result.earlierReport ? el('p',{class:'direction-note'},'Commit retained; its report covers r'+(run.evidence.taskRevision??1)+'. Current requirements are r'+brief.revision+'.') : null,
+      result.earlierAssignment ? el('p',{class:'direction-note'},'Assigned under r'+run.assignedRevision+'. '+(run.status==='running'
+        ? 'Send the updated requirements through your agent conversation.'
+        : 'This assignment cannot start under revised requirements. Resolve it before preparing a current assignment.')) : null,
+      result.overlaps.length ? disclosure('candidate-overlaps-'+run.id,'Shared files · compare changes',
+        el('p',{},[...new Set(result.overlaps.flatMap(other=>other.paths))].join(', ')),el('p',{class:'small'},'Shared files alone do not prove a merge conflict.')) : null,
+      result.blockers.length ? disclosure('candidate-blockers-'+run.id,'Before acceptance · '+result.blockers.length+' unmet',
+        el('ul',{class:'candidate-blockers'},result.blockers.map(text=>el('li',{},text)))) : null,
       executionSummary(run),
       demo ? null : el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Checkout · '+run.label,details,externalHandoff(run))},'Checkout and handoff'),
       run.error ? el('p', {class: 'inline-error'}, run.error) : null, footer);
@@ -73,6 +81,10 @@ export function createWorkView({
     const task = currentTask();
     if (!task) return panel('Agent work', emptyState('No task yet', 'Open Projects to connect code and queue a task.'));
     const runs = taskRuns(task.id);
+    const brief=taskBriefing(workspace,task),results=new Map(brief.candidates.map(item=>[item.run.id,item]));
+    const rows=collections({id:'candidates-'+task.id,label:'Candidates',items:runs,text:run=>run.label+' '+(run.headCommit??''),
+      filters:[['all','All statuses'],...['assigned','running','awaiting_review','accepted','rejected','merged','failed','superseded'].map(status=>[status,status.replaceAll('_',' ')])],
+      matches:(run,status)=>status==='all'||run.status===status,sorts:[['order','Original order'],['name','Candidate name'],['newest','Newest first']],sortKey:(run,sort)=>sort==='name'?run.label.toLowerCase():run.createdAt??run.finishedAt??''});
     const prerequisites = dependencyState(workspace,task);
     const admissionPaused = workspace.projects?.[task.projectId]?.acceptingWork === false;
     const agentsUnavailable = workspace.personalWorkspace?.agentConnections === false;
@@ -82,11 +94,13 @@ export function createWorkView({
       : agentsUnavailable ? 'Your task is saved. This isolated trial has no connected agents or model key, so no agent work has started.'
       : 'No agent has been assigned. Start with one checkout for this task.';
     const assignment = repositoryAgents(task);
-    return el('div', {}, taskHeader(task), taskProgress(task, runs), runs.length || agentsUnavailable ? null : assignment,
-      el('div', { class: 'section-heading' }, el('h2', {}, 'Candidates'), el('span', { class: 'section-kicker' }, runs.length + ' CANDIDATE' + (runs.length === 1 ? '' : 'S') + ' · THIS TASK')),
-      runs.length ? el('ul', { class: 'run-grid collection-list', 'aria-label':'Candidates for this task' }, runs.map((run,index)=>el('li',{},agentCard(run,index)))) : panel(emptyTitle,
+    return el('div', {}, taskHeader(task), runs.length || agentsUnavailable ? null : assignment,
+      runs.length ? rows.controls : null,
+      runs.length ? rows.items.length?el('ul', { class: 'run-grid collection-list', 'aria-label':'Candidates for this task' }, rows.items.map(run=>el('li',{},agentCard(run,runs.indexOf(run),brief,results.get(run.id))))) : el('p',{},'No matching candidates. Clear filters to browse every retained result.') : panel(emptyTitle,
         el('p', { class: 'no-candidate' }, emptyText)),
+      rows.navigation,
       el('div',{class:'work-task-actions'},
+        el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Task progress',taskProgress(task,runs))},'Task progress'),
         runs.length && assignment && !agentsUnavailable ? el('button',{type:'button',class:'button button-small',onclick:()=>openInspector('Prepare another candidate',assignment)},'Prepare another candidate') : null,
         demo ? null : taskSettings(task),
         el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Task activity',timeline(workspace.events.filter(event=>event.taskId===task.id),10))},'View task activity')));

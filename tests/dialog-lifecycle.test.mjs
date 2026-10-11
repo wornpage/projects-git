@@ -1,3 +1,4 @@
+import {parseProjectCatalog,projectCatalog} from '../public/project-catalog.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {requirementChangePreview} from '../public/workbench-state.js';
@@ -23,7 +24,7 @@ function fixture() {
   };
   Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard:{writeText:text=>new Promise((resolve,reject)=>copies.push({text,resolve,reject}))}}});
   const dialogs=createDialogManager(document);dialogs.register('project-connection-dialog');
-  const ports={...context,getContext:()=>context,dialogs};
+  const ports={...context,getContext:()=>context,dialogs,projectDiscovery:{find:async query=>projectCatalog(context.workspace,parseProjectCatalog(new URLSearchParams({q:query})))}};
   Object.assign(context,createNavigation(ports),createContinuationDialog(ports),createRequirementsForm(ports));
   context.showWorkbenchDialog=dialogs.show;
   return {context,$,calls,copies,opened,notices,document,ids};

@@ -1,3 +1,5 @@
+import {createCollectionPager} from '../public/ui/collection.js';
+const makePager=workspace=>createCollectionPager({getScope:()=>workspace.id,render(){}});
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createWorkspace,createTask,assignRun,startRun,completeRun} from '../src/core/workflow.mjs';
@@ -40,8 +42,8 @@ test('project cards preserve scope, prerequisites, failed evidence and every can
 
 test('task collection uses exact task links, includes every status and keeps candidate details out of the list',async()=>{
  installFakeDOM();const f=fixture(),calls=[],before=structuredClone(f.workspace);
- const view=projectCoordinationView({workspace:f.workspace,projectId:f.project.id,onOpenTask:id=>calls.push(id),onOpenCandidates:id=>calls.push(['candidates',id])});
- assert.match(view.textContent,/Showing all 2 tasks in Checkout/);assert.match(view.textContent,/4 \/ 4 execution slots across all projects/);
+ const view=projectCoordinationView({collections:makePager(f.workspace),workspace:f.workspace,projectId:f.project.id,onOpenTask:id=>calls.push(id),onOpenCandidates:id=>calls.push(['candidates',id])});
+ assert.match(view.textContent,/2 total tasks/);assert.match(view.textContent,/4 \/ 4 execution slots across all projects/);
  const nodes=flatten(view),list=nodes.find(n=>n.tagName==='UL'&&n.attrs['aria-label']==='Tasks in this project');
  assert.equal(list.children.length,2);assert.ok(!view.textContent.includes('checkout.py'));assert.ok(!view.textContent.includes('Inspect candidate'));
  const link=nodes.find(n=>n.tagName==='A'&&n.textContent==='Foundation');
@@ -69,9 +71,9 @@ test('queue preserves status and denominator without mixing repository event cou
  installFakeDOM();const f=fixture();f.project.acceptingWork=false;
  f.workspace.artifactEvents={events:3,completed:1,pending:1,failed:1,attempts:5};
  f.run.repositoryObservation={observedAt:'2026-10-09T15:00:00Z',headCommit:'c'.repeat(40),requiresSubmission:true};
- const view=projectCoordinationView({workspace:f.workspace,projectId:f.project.id,onOpenTask(){}});
+ const view=projectCoordinationView({collections:makePager(f.workspace),workspace:f.workspace,projectId:f.project.id,onOpenTask(){}});
  assert.match(view.textContent,/New assignments are paused/);assert.match(view.textContent,/New push observed/);
- assert.match(view.textContent,/Showing all 2 tasks/);assert.ok(!view.textContent.includes('undefined'));
+ assert.match(view.textContent,/2 total tasks/);assert.ok(!view.textContent.includes('undefined'));
  assert.equal(f.run.headCommit,'b'.repeat(40));
 });
 
@@ -86,7 +88,7 @@ test('running and failed candidates without a submitted head do not present prem
 
 test('a dependency-blocked empty work view never invites a checkout as ready',()=>{
  installFakeDOM();const f=fixture();
- const work=createWorkView({getContext:()=>({workspace:f.workspace,demo:true}),currentTask:()=>f.dependent,currentRun:()=>null,taskRuns:()=>[],
+ const work=createWorkView({collections:makePager(f.workspace),getContext:()=>({workspace:f.workspace,demo:true}),currentTask:()=>f.dependent,currentRun:()=>null,taskRuns:()=>[],
    repositoryAgents:()=>null,switchView(){},independentlyVerified:()=>false,openInspector(){},
    parts:{taskHeader:()=>el('div'),emptyState:(a,b)=>el('p',{},a,b),timeline:()=>el('div')}});
  const view=work();assert.match(view.textContent,/Waiting for integration/);assert.ok(!view.textContent.includes('Ready for work'));assert.ok(!view.textContent.includes('Start with one checkout'));
@@ -94,18 +96,18 @@ test('a dependency-blocked empty work view never invites a checkout as ready',()
 
 test('an empty candidate view reflects paused admission or unavailable agents without offering a checkout',()=>{
  installFakeDOM();const f=fixture();f.workspace.runs=[];
- const work=createWorkView({getContext:()=>({workspace:f.workspace,demo:true}),currentTask:()=>f.task,currentRun:()=>null,taskRuns:()=>[],
+ const work=createWorkView({collections:makePager(f.workspace),getContext:()=>({workspace:f.workspace,demo:true}),currentTask:()=>f.task,currentRun:()=>null,taskRuns:()=>[],
    repositoryAgents:()=>null,switchView(){},independentlyVerified:()=>false,openInspector(){},
    parts:{taskHeader:()=>el('div'),emptyState:(a,b)=>el('p',{},a,b),timeline:()=>el('div')}});
  f.project.acceptingWork=false;
  assert.match(work().textContent,/New work paused/);assert.ok(!work().textContent.includes('Ready for work'));
  f.project.acceptingWork=true;f.workspace.personalWorkspace={agentConnections:false};
- const text=work().textContent;assert.match(text,/Agents not connected/);assert.match(text,/0 CANDIDATES/);
+ const text=work().textContent;assert.match(text,/Agents not connected/);assert.match(text,/0 total candidates/);
  assert.ok(!text.includes('Ready for work'));assert.ok(!text.includes('Start with one checkout'));
 });
 
 test('a one-task collection uses its actual singular population',()=>{
  installFakeDOM();const f=fixture();f.workspace.tasks=[f.task];
- const text=projectCoordinationView({workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}).textContent;
- assert.match(text,/Showing all 1 task in Checkout\. 1 candidate belongs to this task\./);
+ const text=projectCoordinationView({collections:makePager(f.workspace),workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}).textContent;
+ assert.match(text,/1 retained candidate across 1 total task\./);
 });

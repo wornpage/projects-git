@@ -14,6 +14,10 @@ server endpoints.
 | [`public/workspace-connection.js`](../public/workspace-connection.js) | Workspace reads, polling, refresh coordination, connection status and session guards |
 | [`public/workbench-actions.js`](../public/workbench-actions.js) | Action progress, guarded snapshot adoption and stable operation request IDs |
 | [`public/ui/navigation.js`](../public/ui/navigation.js) | Find work, displayed result selection, keyboard navigation and destination selection |
+| [`public/project-catalog.js`](../public/project-catalog.js) | Bounded project-name requests, metadata selection, revision cursors and explicit catalog errors |
+| [`public/ui/project-discovery.js`](../public/ui/project-discovery.js) | Identity-scoped recent/pinned IDs and guarded project-catalog reads |
+| [`public/collection-page.js`](../public/collection-page.js) | Pure display filtering, sorting, paging and complete denominators |
+| [`public/ui/collection.js`](../public/ui/collection.js) | Scope-bound collection controls and ephemeral display state |
 | [`public/ui/dialogs.js`](../public/ui/dialogs.js) | Native-dialog dismissal guards and focus restoration |
 | [`public/ui/continuation-dialog.js`](../public/ui/continuation-dialog.js) | Selected candidate preview, freshness checks and guarded copying |
 | [`public/ui/task-composer.js`](../public/ui/task-composer.js) | Compact draft selection, one mounted editor, all-draft validation and prerequisite choices |
@@ -25,7 +29,7 @@ server endpoints.
 | [`public/ui/views/work.js`](../public/ui/views/work.js) | Agent progress and retained candidate cards |
 | [`public/ui/views/review.js`](../public/ui/views/review.js) | Verification setup, stale-evidence guidance, base updates and review layout |
 | [`public/ui/views/evidence.js`](../public/ui/views/evidence.js) | Project records, retained-work search and evidence exports |
-| [`public/ui/workbench-parts.js`](../public/ui/workbench-parts.js) | Shared project task rail, phone selector, task brief, prerequisites, candidate navigation, diffs and check reports |
+| [`public/ui/workbench-parts.js`](../public/ui/workbench-parts.js) | Shared task context, prerequisites, candidate navigation, paged activity, diffs and check reports |
 | [`public/ui/report-list.js`](../public/ui/report-list.js) | Flat retained-report selection and exact report identity, counts and provenance |
 | [`public/review-handoff.js`](../public/review-handoff.js) | Reviewer display labels, request-status text and assignment-specific human links; grants no authority |
 | [`public/ui/retained-search.js`](../public/ui/retained-search.js) | Scoped asynchronous history queries and explicit index rebuild requests |

@@ -21,6 +21,11 @@ The current hosted model is one authenticated owner with restricted builder and
 reviewer identities. Team administration is planned. The workspace has four
 shared execution slots and a separate limit of two verification attempts.
 
+Browse projects, open their task queues, then move between task briefs and the
+separate candidate collections. **Find work** searches all workspace project
+names; recent/pinned shortcuts keep the sidebar compact. Lists filter and page
+without changing full workflow totals. See [navigation and counts](docs/collection-navigation.md).
+
 ## Try it locally
 
 Requires Node.js 24.19+ and npm:

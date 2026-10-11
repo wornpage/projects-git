@@ -1,6 +1,6 @@
 # How Projects Git works
 
-Updated October 4, 2026 (America/New_York). This describes the local project workflow.
+Updated October 11, 2026 (America/New_York). This describes the local project workflow.
 Live Cloudflare qualification remains separate.
 
 ## One project, a queue of work
@@ -52,18 +52,21 @@ and model execution.
 
 | View | Responsibility |
 | --- | --- |
-| Queue | Scan compact task rows and select one focused task; use its next action or expand supporting details. |
-| Agent work | Read tasks, prepare alternatives, obtain agent handoffs, edit ownership/requirements and inspect runs. |
-| Review | Inspect checks and changes, update an outdated base, compare alternatives, record a decision and merge separately. |
-| Evidence | Inspect the selected project's retained commits, reports, decisions and activity; task and whole-workspace exports remain explicit. |
+| Projects | Browse the project directory; use Find work for project names outside the loaded page. |
+| Task queue | Filter, sort and page all tasks in the selected project with complete totals. |
+| Task details | Read the task brief, current requirements, revisions, prerequisites and next action; export its full handoff. |
+| Candidates | Browse the task's results and progress; prepare alternatives and obtain agent handoffs. |
+| Candidate | Inspect changes and checks, update an outdated base, compare alternatives, record a decision and merge separately. |
+| Project history | Browse retained candidates and activity across the selected project. |
+| Candidate record | Read one candidate's reports and decisions; task and whole-workspace exports remain explicit. |
 
-Choose a project in the sidebar, or the project picker on narrow screens. Its
-Queue, Agent work, Review and Evidence views share one project header with the
-current main and **New task**. **Project controls** contains **Connect agent** and
+Choose a recent/pinned project in the sidebar, browse **Projects**, or use
+**Find work** to search all workspace project names. Its views share one project
+header with the current main and **New task**. **Project settings** contains **Connect agent** and
 the admission switch; paused assignments remain visible in the header. Counts and
 activity follow that project. Task requirements and candidate details stay inside
-its views. Switching projects remembers the last task/candidate while the tab
-remains open; the URL restores the current task/candidate after reload.
+its views. Opening a project lands on its task queue without silently selecting
+a task or candidate; the URL restores explicit detail selections after reload.
 
 Unassigned tasks bind current main when claimed. Assigned tasks retain their base.
 An explicit base update creates a replacement candidate and supersedes earlier
@@ -82,13 +85,13 @@ candidate are in the URL.
 
 ## Steering work as requirements change
 
-The queue contains compact title/status rows. Selecting one focuses its task panel
-and preserves the selection in the URL. Desktop places list and task side by side;
-narrow screens stack them and provide **Back to tasks**. Merged work stays in the
-same list. The focused task shows its purpose, state and one primary next action.
-Requirements, history and results expand on demand. **Revise direction** lives
-inside Requirements and uses the existing guarded revision form. Earlier commits
-and reports remain recorded. **New task** opens the single project-bound composer.
+The queue contains compact title/status rows with full task counts. Selecting one
+opens its separate task brief and preserves the selection in the URL. The sidebar
+and return link lead back to the queue. Merged work stays in the same collection. The task brief
+shows its purpose, requirements, state and one primary next action. Requirement
+history pages earlier revisions; a compact result count links to Candidates.
+**Revise direction** uses the existing guarded revision form. Earlier commits
+and reports remain recorded. **New task** opens the project-bound composer.
 
 Current passing checks do not prove that all written requirements are satisfied.
 Stale reports identify the revision they checked and lead to current check setup.
@@ -96,9 +99,10 @@ Shared files identify changes to compare; they do not assert a merge conflict.
 Active assignments made before a revision are called out so the person can steer
 the coding conversation or resolve an obsolete assignment. Review, acceptance and
 merge continue through their existing controls. Blockers and shared files expand
-inside Results and evidence. **Project activity and totals** and **About this
-workspace** hold the secondary records, with every retained candidate still in
-the displayed denominator.
+with candidate cards. **Project activity** and **Workspace summary** hold
+supporting records, with every retained candidate still in the displayed
+denominator. [Collection navigation](collection-navigation.md) describes visible
+page limits, complete counts and the selected-project data boundary.
 
 ## Definitions and counters
 

@@ -27,6 +27,14 @@ async function fixture(t, options = {}) {
   return { ...app, url, dataDir, post };
 }
 
+test('catalog HTTP errors preserve the explicit bounded-query and unavailable-page contracts',async t=>{
+ const f=await fixture(t),get=path=>fetch(f.url+path);
+ const first=await get('/api/projects/catalog');assert.equal(first.status,200);const catalog=await first.json();
+ assert.ok(Array.isArray(catalog.items));assert.ok(Number.isSafeInteger(catalog.total));
+ const invalid=await get('/api/projects/catalog?limit=0');assert.equal(invalid.status,400);assert.equal((await invalid.json()).error.code,'INVALID_PROJECT_CATALOG');
+ const missing=await get('/api/projects/catalog?offset=100000');assert.equal(missing.status,409);assert.equal((await missing.json()).error.code,'PROJECT_CATALOG_PAGE_UNAVAILABLE');
+});
+
 test('HTTP demo performs two real candidates, requires review, and retains the actual merge', { timeout: 60000 }, async t => {
   const app = await fixture(t);
   const initial = await (await fetch(`${app.url}/api/workspace`)).json();

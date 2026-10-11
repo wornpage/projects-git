@@ -1,3 +1,5 @@
+import {createCollectionPager} from '../public/ui/collection.js';
+const makePager=workspace=>createCollectionPager({getScope:()=>workspace.id,render(){}});
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -235,6 +237,7 @@ test('actual review and evidence view modules expose tagged reports separately f
     switchView(){},showError(){},announce(){},openContinuation(){},retainedSearches:new Map(),verificationDrafts:new Map(),
     actionFeedback:new Map(),actionKey:()=> 'action',actionNotice:()=>null,downloadHandoff(){},downloadEvidence(){},
     mutate(){throw new Error('Rendering must not mutate');},runOperation(){throw new Error('Rendering must not mutate');}};
+  ports.collections=makePager(workspace);
   ports.parts=createWorkbenchParts(ports);
   for(const create of [createReviewView,createEvidenceView]){
     const text=create(ports)().textContent;
@@ -268,6 +271,7 @@ function completedViewPorts(f) {
     retainedSearches:new Map(),verificationDrafts:new Map(),actionFeedback:new Map(),actionKey:()=> 'action',
     actionNotice:()=>null,downloadHandoff(){},downloadEvidence(){},onSectionChange(){},
     mutate(){throw new Error('Completed views must only read');},runOperation(){throw new Error('Completed views must only read');}};
+  ports.collections=makePager(workspace);
   ports.parts=createWorkbenchParts(ports);
   return ports;
 }

@@ -30,21 +30,17 @@ export function createProjectsView({getContext, getProjectSelection, selectProje
     const pagination = () => page ? el('nav',{class:'project-pagination','aria-label':'Project pages'},
       el('p',{role:'status'},page.totalProjects ? `Showing ${page.offset+1}–${page.offset+projects.length} of ${page.totalProjects} projects` : '0 projects'),
       el('div',{class:'button-row'},
+        page.previousOffset!==null||page.nextOffset!==null ? [
         el('button',{class:'button button-small',disabled:busy||page.previousOffset===null,onclick:()=>changeProjectPage(page.previousOffset)},'Previous projects'),
-        el('button',{class:'button button-small',disabled:busy||page.nextOffset===null,onclick:()=>changeProjectPage(page.nextOffset)},'Next projects'),
+        el('button',{class:'button button-small',disabled:busy||page.nextOffset===null,onclick:()=>changeProjectPage(page.nextOffset)},'Next projects')] : null,
         el('button',{class:'button button-small',disabled:busy,onclick:()=>changeProjectPage(0,true)},'Refresh projects'))) : null;
     return el('div',{class:'projects-home'},
-      workspace.personalWorkspace ? panel('Your isolated workspace', el('div',{class:'panel-body'},
+      workspace.personalWorkspace && !projects.length ? panel('Your isolated workspace', el('div',{class:'panel-body'},
         el('p',{},'Your projects, tasks and repositories are separate from other visitors and the working workspace. Start with a fresh checkout project, then edit its task queue, requirements and project policy.'),
         el('p',{class:'small muted'},'This trial has no connected agents or model key. It does not run agents or manufacture completed work.'),
         !projects.length && (!page || page.totalProjects === 0) && workspace.personalWorkspace.starterAvailable
           ? el('button',{type:'button',class:'button button-primary',disabled:busy,onclick:createStarter},busy?'Preparing starter…':'Create my starter project') : null)) : null,
-      el('section',{class:'workspace-intro','aria-label':'Workspace overview'},
-        el('div',{},el('p',{class:'section-kicker'},workspace.name),
-          el('h2',{},'Work moves through projects.'),
-          el('p',{},'Queue agreed tasks, follow agent changes, and decide what becomes part of the project.')),
-        workspace.authentication && !workspace.authentication.permissions.manage ? null : el('button',{type:'button',class:'button button-primary',onclick:()=>openTaskComposer('repository')},'+ New project')),
-      pagination(),
+      workspace.authentication && !workspace.authentication.permissions.manage ? null : el('div',{class:'directory-actions'},el('button',{type:'button',class:'button button-primary button-small',onclick:()=>openTaskComposer('repository')},'+ New project')),
       projects.length ? el('ul',{class:'project-directory collection-list','aria-label':'Projects'},projects.map(project=>el('li',{},projectCard(project))))
         : workspace.personalWorkspace ? null : panel('Your first project',el('div',{class:'panel-body'},
           el('p',{},workspace.authentication && !workspace.authentication.permissions.manage ? 'The workspace owner connects projects and queues tasks. Your assigned work will appear here.' : 'Start with New project. Connect committed code, then describe one useful task.'),
@@ -54,6 +50,9 @@ export function createProjectsView({getContext, getProjectSelection, selectProje
             el('li',{},'Open Project settings → Connect agent for the assignment instructions. Your coding chat runs the agent.'),
             el('li',{},'Inspect the submitted change and configure independent checks. In the hosted app, assign a separate reviewer before making your decision.'),
             el('li',{},'Accept a suitable candidate, then merge it as a separate action. Merging does not deploy.')))),
-      projects.length ? el('p',{class:'definition-note'},(page?page.totalProjects:projects.length)+' project'+((page?page.totalProjects:projects.length)===1?'':'s')+' total · Counts are tasks / all tasks in each project, including integrated work. Active and decision tasks can overlap. Ready to claim still requires admission, available code and capacity.') : null);
+      pagination(),
+      projects.length ? el('p',{class:'definition-note'},(page?page.totalProjects:projects.length)+' project'+((page?page.totalProjects:projects.length)===1?'':'s')+' total · Counts are tasks / all tasks in each project, including integrated work. Active and decision tasks can overlap. Ready to claim still requires admission, available code and capacity.') : null,
+      workspace.personalWorkspace && projects.length ? el('details',{class:'personal-workspace-note'},el('summary',{},'About your isolated workspace'),
+        el('p',{},'Your projects, tasks and repositories are separate from other visitors and the working workspace. This trial has no connected agents or model key; it does not manufacture completed work.')) : null);
   };
 }
