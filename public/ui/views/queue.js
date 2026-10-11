@@ -100,9 +100,9 @@ export function createTaskViews({
       ? workspace.projects[pendingTaskStart.projectId] : null;
     return el('div', { class: 'project-overview' },
       !project ? el('p', { class: 'capability-note' }, 'Open Projects to connect code and create the work you want to do.') : null,
-      el('div', {}, pendingProject ? el('div', { class: 'capability-note' },
+      pendingProject ? el('div', { class: 'capability-note' },
         el('p', {}, 'A task request for ' + pendingProject.name + ' is awaiting confirmation. Its destination and request ID are preserved.'),
-        el('button', { class: 'button button-small', onclick: () => { selectProject(pendingProject.id); openTaskComposer('project:' + pendingProject.id); } }, 'Return to saved request')) : null),
+        el('button', { class: 'button button-small', onclick: () => { selectProject(pendingProject.id); openTaskComposer('project:' + pendingProject.id); } }, 'Return to saved request')) : null,
       project ? projectCoordinationView({workspace,projectId:project.id,collections,
         onOpenTask:id=>switchView('overview',id,null),
         onOpenCandidates:id=>switchView('work',id,null)}) : null,

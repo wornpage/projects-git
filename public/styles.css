@@ -3200,7 +3200,8 @@ worn-button {
   font-size: 13px;
   line-height: 1.6;
 }
-.task-progress > .button {
+.task-progress > :is(.button, worn-button) {
+  display: inline-flex;
   margin-top: 16px;
 }
 @media (max-width: 760px) {
@@ -3373,7 +3374,7 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
 
 .review-independent { grid-area:independent; min-width:0; }
 .review-base-update, .review-context-download { margin-block-end:20px; }
-.work-task-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-block:20px; }
+.work-task-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px 24px; margin-block:20px; }
 .task-lifecycle { margin-block:24px; }
 .lifecycle-heading { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:4px 16px; margin-block-end:12px; }
 .lifecycle-heading h3, .lifecycle-heading p { margin:0; }

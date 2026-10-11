@@ -134,7 +134,7 @@ test('demo review explains its illustrative records while a working hosted works
  f.workspace.authentication={permissions:{manage:false,review:false,merge:false}};
  f.context.demo=true;
  const demo=createReviewView(f.ports)().textContent;
- assert.match(demo,/illustrative review/);assert.match(demo,/did not authenticate a reviewer or run these checks/);
+ assert.match(demo,/illustrative review/);assert.match(demo,/does not authenticate a reviewer or run checks/);
  assert.ok(!demo.includes('No independent reviewer is configured'));
  f.context.demo=false;
  const hosted=createReviewView(f.ports)().textContent;
