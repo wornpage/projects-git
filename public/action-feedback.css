@@ -1,0 +1,14 @@
+/* Shared by the workspace and the standalone reviewer page. */
+.error-banner {
+  position:fixed; inset-inline:16px; bottom:16px; z-index:1000;
+  width:fit-content; max-width:min(720px,calc(100vw - 32px)); margin:0 auto;
+  padding:13px 16px; border:1px solid var(--worn-danger-border,#d6a29d);
+  background:var(--worn-danger-bg,#fff1ef); color:var(--worn-danger-text,#922e24);
+  display:flex; align-items:flex-start; justify-content:space-between; gap:18px;
+  border-radius:var(--worn-radius-sm,8px); box-shadow:0 6px 24px #21322b26;
+  font-size:13px; line-height:1.65;
+}
+.error-banner[hidden] { display:none; }
+#error-text { min-width:0; max-height:30vh; overflow:auto; overflow-wrap:anywhere; }
+#dismiss-error { flex:0 0 44px; min-width:44px; min-height:44px; border:0; background:transparent; color:inherit; padding:3px 7px; font-size:20px; }
+@media(max-width:620px) { .error-banner { padding:12px; } }

@@ -1,0 +1,167 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createTaskCreation} from '../public/ui/task-creation.js';
+import {installFakeDOM} from './helpers/fake-dom.mjs';
+import {el} from '../public/ui/dom.js';
+import {readFileSync} from 'node:fs';
+
+function deferred() { let resolve,reject; const promise=new Promise((a,b)=>{resolve=a;reject=b;}); return {promise,resolve,reject}; }
+function fixture(saved = null) {
+  const dom=installFakeDOM(), {$}=dom, calls=[], errors=[], announcements=[], savedSnapshots=[], selected=[];
+  const context={workspace:{id:'workspace-a', provider:'local-git', tasks:[], runs:[], projects:{one:{id:'one',name:'First',owner:'Owner'},two:{id:'two',name:'Second',owner:'Other'}}, capabilities:{repository:true,dependencies:true}}, view:'overview',busy:false,projectId:'one'};
+  $('#task-source').value='project:one';
+  $('#task-execution').append(...['external','scripted','model'].map(value=>el('option',{value},value)));
+  $('#task-form').querySelectorAll=()=>[...dom.nodes].filter(([key])=>key.startsWith('#task-')&&key.endsWith('-input')||['#task-source','#task-execution'].includes(key)).map(([,value])=>value);
+  let controller;
+  const refresh=async()=>{if(context.refresh)await context.refresh();};
+  const update=()=>controller.update();
+  controller=createTaskCreation({getContext:()=>context, currentProject:()=>context.workspace.projects[context.projectId],
+    selectProject:id=>{context.projectId=id;}, selectTask:id=>selected.push(id), switchView:view=>{context.view=view;},
+    api:(path,body,key)=>{const request=deferred();calls.push({path,body:structuredClone(body),key,...request});return request.promise;},
+    refresh, render:update, updateChrome:update, schedulePoll(){}, saveSession:()=>savedSnapshots.push(controller.snapshot()),
+    clearError(){}, showError:message=>errors.push(message), announce:message=>announcements.push(message)});
+  controller.restore(saved); controller.update();
+  async function fill(title='Improve task') {
+    for(const [name,value] of Object.entries({title,purpose:' Preserve real work ',criteria:'First check\n Second check ',owner:' Owner '})) {
+      const input=$('#task-'+name+'-input');input.value=value;await input.dispatch('input');
+    }
+  }
+  return {...dom,context,controller,calls,errors,announcements,savedSnapshots,selected,fill,
+    submit:()=>$('#task-form').dispatch('submit'), release:()=>$('#release-task-request').dispatch('click')};
+}
+const result=(projectId='one')=>{const taskId=crypto.randomUUID();return {projectId,taskId,taskIds:[taskId]};};
+
+for(const chosen of [null,2,4])test(`model allowance submits ${chosen ?? 'the one-candidate default'} with its explicit total budget`,async()=>{
+  const f=fixture();
+  const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
+  for(const name of ['candidates','requests','output','seconds','input']) {
+    const tag=html.match(new RegExp('<input id="model-'+name+'"[^>]*>'))?.[0];
+    assert.ok(tag);
+    f.$('#model-'+name).value=tag.match(/value="([^"]+)"/)[1];
+  }
+  assert.equal(f.$('#model-candidates').value,'1');
+  if(chosen!==null)f.$('#model-candidates').value=String(chosen);
+  f.context.workspace.capabilities.model=true;f.context.workspace.execution={model:'test transport'};
+  f.$('#task-launcher').showModal();f.controller.activate('sample');f.controller.update();
+  await f.$('#model-form').dispatch('input');
+  const count=chosen??1;
+  assert.match(f.$('#model-budget').textContent,new RegExp(count*2+' requests and '+count*8192+' output tokens'));
+  const pending=f.submit();assert.equal(f.calls.length,1);
+  assert.equal(f.calls[0].path,'/api/model-runs');assert.equal(f.calls[0].body.candidates,count);
+  assert.equal(f.calls[0].body.limits.maxRequests,2);
+  f.calls[0].resolve(result());await pending;
+  assert.equal(f.calls.length,1);
+});
+
+test('connecting code from workspace home opens its saved task queue without launching an agent',async()=>{
+  const f=fixture();f.context.view='projects';f.context.projectId=null;
+  f.controller.activate('repository');f.controller.update();
+  f.$('#project-name-input').value='Connected from home';f.$('#repository-path').value='C:/code/ordinary';f.$('#repository-base').value='a'.repeat(40);
+  await f.fill('First agreed task');
+  const pending=f.submit(),saved=result('new-project');
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].body.source,'repository');
+  assert.equal(f.calls[0].body.tasks[0].owner,'Owner');
+  f.context.workspace.projects['new-project']={id:'new-project',name:'Connected from home',owner:'Owner'};
+  f.calls[0].resolve(saved);await pending;
+  assert.equal(f.context.view,'overview');assert.deepEqual(f.selected,[saved.taskId]);
+  assert.equal(f.controller.snapshot().source,'project:new-project');
+  assert.equal(f.controller.snapshot().tasks[0].title,'');assert.equal(f.$('#task-launcher').open,false);
+  assert.equal(f.calls.length,1);assert.equal(f.errors.length,0);
+});
+
+test('interrupted task stacks retain the exact body and request ID across reload and explicit retry', async()=>{
+  let f=fixture(); await f.fill();
+  const pending=f.submit(); await f.submit();
+  assert.equal(f.calls.length,1); assert.equal(f.controller.starting,true);
+  assert.equal(f.calls[0].path,'/api/tasks'); assert.equal(f.calls[0].key,f.calls[0].body.requestId);
+  assert.deepEqual(f.calls[0].body.tasks[0],{title:'Improve task',purpose:'Preserve real work',owner:'Owner',criteria:['First check','Second check']});
+  const original=f.calls[0]; original.reject(Object.assign(new Error('Connection lost'),{uncertain:true})); await pending;
+  assert.equal(f.controller.starting,false); assert.equal(f.controller.locked,true);
+  assert.equal(f.controller.activate('project:two'),false); assert.equal(f.$('#task-source').value,'project:one');
+  const snapshot=JSON.parse(JSON.stringify(f.controller.snapshot()));
+  f=fixture(snapshot); assert.equal(f.calls.length,0); assert.equal(f.controller.locked,true);
+  assert.equal(f.$('#task-title-input').value,'Improve task'); assert.match(f.$('#create-task').textContent,/Retry/);
+  const retry=f.submit(); assert.deepEqual(f.calls[0].body,original.body); assert.equal(f.calls[0].key,original.key);
+  f.calls[0].resolve(result()); await retry;
+  assert.equal(f.controller.locked,false); assert.equal(f.controller.snapshot().pending,null);
+  assert.equal(f.controller.snapshot().tasks[0].title,''); assert.equal(f.selected.length,1);
+  assert.match(f.announcements[0],/1 tasks queued/);
+});
+
+test('project draft stacks and prerequisites survive switching without sharing text', async()=>{
+  const f=fixture(); await f.fill('First project');
+  await f.$('#add-task-draft').dispatch('click');
+  const second=f.$('#task-drafts').children[1];
+  function find(node,predicate){if(predicate(node))return node;for(const child of node.children??[]){const found=find(child,predicate);if(found)return found;}}
+  const dependency=find(second,node=>node.tagName==='INPUT'&&node.value==='draft:1');
+  dependency.checked=true; await dependency.dispatch('change');
+  f.context.projectId='two'; f.controller.activate('project:two');f.controller.update();
+  assert.equal(f.$('#task-title-input').value,''); await f.fill('Second project');
+  f.context.projectId='one'; f.controller.activate('project:one');f.controller.update();
+  await f.$('#task-drafts').children[0].children[0].dispatch('click');
+  assert.equal(f.$('#task-title-input').value,'First project');
+  assert.equal(f.controller.snapshot().tasks.length,2);assert.deepEqual(f.controller.snapshot().tasks[1].dependsOn,['draft:1']);
+  const restored=fixture(JSON.parse(JSON.stringify(f.controller.snapshot())));
+  await restored.$('#task-drafts').children[0].children[0].dispatch('click');
+  assert.equal(restored.$('#task-title-input').value,'First project');
+  restored.context.projectId='two';restored.controller.activate('project:two');restored.controller.update();
+  assert.equal(restored.$('#task-title-input').value,'Second project');assert.equal(restored.calls.length,0);
+});
+
+for(const status of [422,409,503])test(`task rejection ${status} ${status===422?'unlocks editing':'retains the saved request'}`,async()=>{
+  const f=fixture();await f.fill();const pending=f.submit();
+  f.calls[0].reject(Object.assign(new Error('Request refused'),{status}));await pending;
+  assert.equal(f.controller.locked,status!==422);assert.equal(f.calls.length,1);
+  assert.deepEqual(f.errors,['Request refused']);
+});
+
+test('malformed success and unconfirmed release cannot silently discard an unresolved task request',async()=>{
+  const f=fixture();await f.fill();const pending=f.submit(),requestId=f.calls[0].key;
+  f.calls[0].resolve({});await pending;
+  assert.equal(f.controller.snapshot().pending.requestId,requestId);assert.equal(f.selected.length,0);
+  const release=f.release();assert.ok(f.calls[1].path.includes(requestId));
+  f.calls[1].resolve({});await release;
+  assert.equal(f.controller.locked,true);assert.equal(f.calls.length,2);assert.equal(f.announcements.length,0);
+  const confirmed=f.release();f.calls[2].resolve({released:true});await confirmed;
+  assert.equal(f.controller.locked,false);assert.equal(f.$('#task-title-input').value,'Improve task');
+  assert.match(f.announcements.at(-1),/No tasks were saved/);
+});
+
+test('checking a saved request returns its original tasks without a second creation',async()=>{
+  const f=fixture();await f.fill();const pending=f.submit();f.calls[0].reject(new Error('Lost response'));await pending;
+  const release=f.release(), saved=result();f.calls[1].resolve({result:saved});await release;
+  assert.deepEqual(f.selected,[saved.taskId]);assert.match(f.announcements[0],/already saved/);
+  assert.equal(f.calls.filter(call=>call.path==='/api/tasks').length,1);assert.equal(f.controller.locked,false);
+});
+
+for(const failure of [false,true])test(`late ${failure?'failure':'success'} cannot affect a new request after workspace A to B to A`,async()=>{
+  const f=fixture();await f.fill('Old work');const old=f.submit();
+  f.context.workspace={...f.context.workspace,id:'workspace-b'};f.controller.restore(null);f.controller.update();
+  f.context.workspace={...f.context.workspace,id:'workspace-a'};f.controller.restore(null);f.controller.update();
+  await f.fill('New work');const next=f.submit(),newId=f.calls[1].key;
+  if(failure)f.calls[0].reject(new Error('Old error'));else f.calls[0].resolve(result());await old;
+  assert.equal(f.controller.starting,true);assert.equal(f.controller.snapshot().pending.requestId,newId);
+  assert.equal(f.errors.length,0);assert.equal(f.announcements.length,0);assert.equal(f.selected.length,0);
+  f.calls[1].resolve(result());await next;assert.equal(f.controller.starting,false);
+});
+
+test('workspace change during refresh cannot reset the new workspace composer',async()=>{
+  const f=fixture(),refresh=deferred();f.context.refresh=()=>refresh.promise;
+  await f.fill();const pending=f.submit();f.calls[0].resolve(result());await new Promise(resolve=>setImmediate(resolve));
+  f.context.workspace={...f.context.workspace,id:'workspace-b'};f.controller.restore(null);f.controller.update();await f.fill('New workspace draft');
+  refresh.resolve();await pending;
+  assert.equal(f.controller.snapshot().tasks[0].title,'New workspace draft');assert.equal(f.announcements.length,0);
+});
+
+test('choosing a draft destination keeps the modal open and does not navigate the background project',async()=>{
+  const f=fixture();await f.fill('First project draft');
+  f.$('#task-launcher').showModal();
+  f.$('#task-source').value='project:two';await f.$('#task-source').dispatch('change');
+  assert.equal(f.$('#task-launcher').open,true);
+  assert.equal(f.context.projectId,'one');assert.equal(f.context.view,'overview');
+  assert.equal(f.controller.snapshot().source,'project:two');
+  await f.fill('Second project draft');
+  f.$('#task-source').value='project:one';await f.$('#task-source').dispatch('change');
+  assert.equal(f.$('#task-title-input').value,'First project draft');
+  assert.equal(f.$('#task-launcher').open,true);assert.equal(f.calls.length,0);
+});

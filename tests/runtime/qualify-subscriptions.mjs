@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict';
+import {writeFile,mkdir} from 'node:fs/promises';
+import {resolve} from 'node:path';
+const origin=process.argv[2]??'http://127.0.0.1:8903';
+if(new URL(origin).hostname!=='127.0.0.1')throw Error('This qualifier is local-only.');
+const receipt={startedAt:new Date().toISOString(),total:7,scope:'Real local Workerd, SQLite, service RPC and Queue; simulated owner, Artifacts objects and subscription API. Not hosted provider proof.',cases:[]};
+const call=async(path,body={})=>{const response=await fetch(origin+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(25000)});return {status:response.status,body:await response.json()};};
+const requireCall=async(path,body={})=>{const r=await call(path,body);assert.equal(r.status,200,JSON.stringify(r));return r.body;};
+const add=name=>receipt.cases.push({name,passed:true});
+const out=resolve('qa/subscriptions-local/qualification-'+Date.now()+'.json');await mkdir(resolve('qa/subscriptions-local'),{recursive:true});
+try{
+ const initial=await requireCall('/read');assert.equal(initial.snapshot.workspace.tasks.length,0);
+ const input={path:'/api/tasks',key:'subscription-project',body:{source:'repository',repo:'starter',projectName:'Subscription recovery fixture',baseCommit:'a'.repeat(40),tasks:[{title:'Keep pushes observable',purpose:'Test automatic subscription recovery',owner:'Scripted owner',criteria:['Register the exact repository before issuing Git credentials.']}]}};
+ const competing=await Promise.all(Array.from({length:8},()=>requireCall('/api',input)));
+ for(const result of competing)assert.equal(result.status,201,JSON.stringify(result));
+ const project=competing[0].body;let state=await requireCall('/read');
+ assert.equal(state.snapshot.workspace.tasks.length,1);assert.equal(state.providerSubscriptions.length,1);assert.equal(state.subscriptions.ready,1);
+ add('eight competing task requests retain one project, task and subscription');
+ const before=JSON.stringify(state);assert.equal((await requireCall('/api',{...input,foreign:true,key:'foreign'})).status,403);
+ assert.equal(JSON.stringify(await requireCall('/read')),before);add('wrong workspace refuses before workflow, registration or provider mutation');
+ await requireCall('/fault');
+ const assignment={path:'/api/tasks/'+project.taskId+'/agents',key:'subscription-fork',body:{label:'Scripted builder',agentClientId:'1'.repeat(32)+'.access'}};
+ const interrupted=await call('/api',assignment);assert.equal(interrupted.status,409,JSON.stringify(interrupted));
+ state=await requireCall('/read');assert.equal(state.providerSubscriptions.length,2);assert.equal(state.snapshot.workspace.runs.length,1);
+ assert.equal(state.snapshot.workspace.runs[0].checkoutState,'preparing');assert.equal(state.subscriptions.awaitingRecovery,1);
+ assert.ok(state.registrationAttempts.some(attempt=>attempt.status==='pending'));
+ add('actual Durable Object abort after provider create retains the reserved fork and uncertain registration');
+ await requireCall('/retire');const recovered=await requireCall('/api',assignment);assert.equal(recovered.status,201,JSON.stringify(recovered));
+ state=await requireCall('/read');assert.equal(state.providerSubscriptions.length,2);assert.equal(state.subscriptions.ready,2);
+ assert.equal(state.snapshot.workspace.runs.length,1);assert.equal(state.snapshot.workspace.runs[0].checkoutState,'ready');
+ assert.ok(state.registrationAttempts.some(attempt=>attempt.status==='superseded'));assert.equal(recovered.body.credentialStatus,'issued-once');
+ const repeated=await requireCall('/api',assignment);assert.equal(repeated.status,201);assert.equal(repeated.body.credentials,null);
+ add('restart reconciles the same provider subscription and fork, retains the interrupted attempt, and issues one assignment credential');
+ const run=state.snapshot.workspace.runs[0],fork=state.snapshot.forks[run.id],subscription=state.providerSubscriptions.find(item=>item.plan.repositoryName===fork.name);
+ const event={type:'cf.artifacts.repo.pushed',source:{type:'artifacts.repo',namespace:'fixture',repoName:fork.name},payload:{ref:'refs/heads/'+run.branch,before:'a'.repeat(40),after:'b'.repeat(40)},metadata:{accountId:'1'.repeat(32),eventSubscriptionId:subscription.id,eventSchemaVersion:1,eventTimestamp:new Date().toISOString()}};
+ const forged=structuredClone(event);forged.metadata.eventSubscriptionId='9'.repeat(32);
+ assert.equal((await call('/direct',{body:forged,id:'forged'})).status,409);assert.equal((await requireCall('/read')).events.deliveries,0);
+ add('an unregistered subscription ID cannot create event receipts');
+ await requireCall('/emit',{body:event});await requireCall('/wait',{count:1});state=await requireCall('/read');
+ assert.equal(state.events.completed,1);assert.equal(state.snapshot.workspace.runs[0].status,'assigned');
+ assert.equal(state.snapshot.workspace.runs[0].repositoryObservation.headCommit,'b'.repeat(40));
+ add('real Queue delivery accepts the durable automatic binding and observes the push without completing the assignment');
+ const events=state.events.events;await requireCall('/direct',{body:event,id:'duplicate'});state=await requireCall('/read');assert.equal(state.events.events,events);
+ add('duplicate delivery reuses the original event receipt after automatic registration');
+ receipt.final=state;receipt.total=receipt.cases.length;receipt.passed=receipt.total;
+}catch(error){receipt.failure={name:error.name,message:error.message};process.exitCode=1;}
+finally{receipt.passed=receipt.cases.length;receipt.finishedAt=new Date().toISOString();await writeFile(out,JSON.stringify(receipt,null,2));console.log(JSON.stringify({receipt:out,passed:receipt.passed,total:receipt.total,failure:receipt.failure}));}

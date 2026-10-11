@@ -1,0 +1,23 @@
+.demo-welcome{min-height:100vh;background:var(--worn-color-canvas,#f6f4ef);color:var(--worn-color-ink,#21322b)}
+.welcome-header,.welcome-main,.welcome-footer{width:min(1120px,calc(100% - 48px));margin-inline:auto}
+.welcome-header{display:flex;align-items:center;justify-content:space-between;gap:24px;padding-block:24px;border-bottom:1px solid var(--worn-border-color,#cec8bd)}
+.welcome-header .brand{margin:0;gap:12px}.welcome-header>a:last-child{font-weight:600}
+.welcome-main{display:grid;grid-template-columns:minmax(0,1fr);gap:48px;padding-block:56px;padding-inline:0}.welcome-main>section{min-width:0}.welcome-main h2{font-size:clamp(23px,3vw,30px);line-height:1.25;margin:0 0 18px}
+.welcome-hero{max-width:810px}.welcome-hero h1{font-size:clamp(38px,6.5vw,70px);line-height:1.06;letter-spacing:-.035em;margin:18px 0 24px}
+.welcome-lead{font-size:clamp(18px,2.4vw,23px);line-height:1.6;max-width:66ch}.welcome-actions{display:flex;flex-wrap:wrap;gap:14px;margin:28px 0 18px}
+.welcome-actions .button{min-height:48px}.welcome-note,.welcome-main p{line-height:1.7}.welcome-note{color:var(--worn-color-muted,#425d50);max-width:68ch}
+.welcome-path{padding:0;margin:0;list-style:none;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}
+.welcome-path li{border:1px solid var(--worn-border-color,#cec8bd);border-radius:12px;padding:22px;background:#efede7;min-width:0}
+.welcome-path h3{font-size:18px;line-height:1.4;margin:16px 0 10px}.welcome-path p{margin:0;font-size:15px}.welcome-path .lifecycle-number{background:#e4f3eb;display:inline-grid;place-items:center;width:36px;height:36px;border:1px solid #cec8bd;border-radius:50%}
+.welcome-project .panel-body,.welcome-working .panel-body{padding:28px}.welcome-project p{max-width:78ch}.welcome-project .text-link{display:inline-block;margin:8px 0 16px}
+.welcome-proof>p{max-width:85ch}.proof-table{overflow:auto;border:1px solid #cec8bd;border-radius:12px;background:#fff;margin:24px 0}
+.proof-table table{border-collapse:collapse;min-width:580px;width:100%;font-size:15px}.proof-table caption{padding:18px;text-align:left;font-weight:600;color:#425d50}
+.proof-table th,.proof-table td{padding:16px 18px;text-align:left;border-top:1px solid #ded8ce}.proof-table th{background:#efede7}.proof-table td:last-child{font-family:ui-monospace,SFMono-Regular,monospace}
+.welcome-working summary{padding-block:14px;font-weight:600}.welcome-working .journey-steps{margin-top:14px}.welcome-footer{padding:26px 0;display:flex;justify-content:space-between;flex-wrap:wrap;gap:16px;border-top:1px solid #cec8bd;font-size:14px}
+.demo-guide{border:1px solid #8cad9b;background:#e4f3eb;border-radius:12px;padding:20px;margin:0 0 24px}.demo-guide h2{font-size:20px;margin:0 0 10px}.demo-guide p{margin:0 0 14px;line-height:1.65}.demo-guide .demo-return{font-size:13px}
+.demo-guide nav{display:flex;flex-wrap:wrap;gap:10px}.demo-step{display:inline-flex;align-items:center;min-height:44px;padding:10px 14px;border:1px solid #9ab3a5;border-radius:8px;background:#fff;color:#174638;font-weight:600;text-decoration:none}
+.demo-step[aria-current="step"]{background:#cfe9dd;border-color:#4a8671}.demo-step:focus-visible{outline:3px solid #0e746d;outline-offset:3px}
+body[data-demo] .topbar .avatar{display:none}body[data-demo] .topbar-right{gap:16px}body[data-demo] .connection-status::before{display:none}
+@media(max-width:1000px){.welcome-path{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:650px){.welcome-header,.welcome-main,.welcome-footer{width:calc(100% - 32px)}.welcome-header{padding-block:18px;gap:16px;flex-wrap:wrap}.welcome-main{padding-block:32px;gap:32px}.welcome-path{grid-template-columns:1fr}.welcome-path li{padding:20px}.welcome-actions .button{width:100%;justify-content:center;white-space:normal;text-align:center}.welcome-project .panel-body,.welcome-working .panel-body{padding:22px}.demo-guide{padding:16px}.demo-guide nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.demo-step{font-size:13px;overflow-wrap:anywhere}}
+@media(prefers-reduced-motion:reduce){.demo-welcome{scroll-behavior:auto}}

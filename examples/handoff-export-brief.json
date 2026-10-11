@@ -1,0 +1,9 @@
+{
+  "title": "Export portable task handoffs with retained evidence",
+  "purpose": "Allow another session to inspect saved requirements, candidate changes and evidence without repeating execution.",
+  "criteria": [
+    "Export all candidates for one task, including failures, and retain evidence and review history.",
+    "Distinguish stale evidence from verification against the current requirements revision.",
+    "Inspect the saved handoff offline without executing recorded commands or granting acceptance."
+  ]
+}

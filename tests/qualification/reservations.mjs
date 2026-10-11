@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {privateDirectory,receipt,request,ok,control,passed,save,waitFor} from './client.mjs';
+const {project}=JSON.parse(await readFile(join(privateDirectory,'hosted-admissions.json'),'utf8'));
+const path=`/api/projects/${project.projectId}/claim`;
+const snapshot=async()=>{const r=await control('/snapshot');assert.equal(r.status,200);return r.result;};
+let failure;
+try{
+  for(const restart of [false,true]){
+    const before=await snapshot(),oldIds=new Set(before.workspace.runs.map(r=>r.id)),key=crypto.randomUUID(),body={label:restart?'Restart reservation fixture':'Superseded reservation fixture'};
+    assert.equal((await control('/configure',{phase:'artifact-get',held:true})).status,200);
+    const first=request(0,path,body,key).catch(error=>({status:0,result:{error:error.message}}));
+    const pending=await waitFor(snapshot,s=>s.workspace.runs.some(r=>!oldIds.has(r.id)),'durable pre-I/O reservation');
+    const run=pending.workspace.runs.find(r=>!oldIds.has(r.id)),op=Object.values(pending.operations).find(o=>o.itemId===run.id);
+    assert.equal(run.checkoutState,'preparing');assert.equal(op.state,'pending');
+    assert.equal((await request(0,path,body,key)).status,409);
+    assert.equal((await request(0,path,{label:'conflicting'},key)).status,409);
+    if(restart)await control('/restart');
+    await control('/expire',{runId:run.id});
+    const second=request(0,path,body,key);
+    await waitFor(snapshot,s=>Object.values(s.operations).some(o=>o.itemId===run.id&&o.attemptId!==op.attemptId),'replacement attempt fence');
+    await control('/configure',{phase:'artifact-get',held:false});
+    const [late,recovered]=await Promise.all([first,second]);
+    assert.equal(recovered.status,200,JSON.stringify(recovered.result));assert.equal(recovered.result.runId,run.id);
+    assert.notEqual(late.status,200,'Old executor must not issue credentials or overwrite replacement');
+    const state=await snapshot();assert.equal(state.workspace.runs.filter(r=>r.id===run.id).length,1);
+    assert.equal(Object.values(state.operations).find(o=>o.itemId===run.id).resourceName,op.resourceName);
+    assert.equal(state.forks[run.id].name,op.resourceName);
+    assert.equal((await ok(0,path,body,key)).credentials,null);
+    receipt.requests.push({scenario:restart?'restart':'superseded',runId:run.id,oldAttempt:op.attemptId,lateStatus:late.status,resourceName:op.resourceName});
+    await ok(0,`/api/runs/${run.id}/fail`,{message:'Scripted reservation recovery proof complete.'});
+    passed(restart?'real restart during provider admission retains reservation and resumes one marked fork':'expired lease does not permit the superseded live executor to issue credentials');
+  }
+  const key=crypto.randomUUID(),body={label:'Deliberately lost response fixture'};
+  const issued=await ok(1,path,body,key);assert.ok(issued.runId);assert.ok(issued.credentials);
+  const replay=await ok(1,path,body,key);assert.equal(replay.runId,issued.runId);assert.equal(replay.credentials,null);
+  await ok(1,`/api/runs/${issued.runId}/fail`,{message:'Lost response retained its assignment; one-time credential not reissued.'});
+  passed('lost successful response replays the original assignment without recovering its credential');
+}catch(error){failure=error;}finally{await control('/configure',{phase:'artifact-get',held:false});await save('reservations',failure);}if(failure)throw failure;

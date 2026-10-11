@@ -1,0 +1,16 @@
+{
+  "account": "",
+  "workerName": "projects-git-qualification",
+  "artifactsNamespace": "projects-git-qualification",
+  "repository": "qualification-seed",
+  "hostname": "",
+  "issuer": "",
+  "audience": "",
+  "accessApplicationId": "",
+  "workspace": "qualification-workspace",
+  "ownerEmail": "",
+  "ownerSubject": "",
+  "ownerVerifiedAt": "",
+  "reviewerSubjects": [],
+  "agentPolicyId": ""
+}

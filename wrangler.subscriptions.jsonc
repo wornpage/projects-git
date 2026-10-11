@@ -1,0 +1,18 @@
+{
+  "$schema":"./node_modules/wrangler/config-schema.json",
+  "name":"projects-git-event-subscriptions",
+  "main":"src/cloudflare/subscription-service.ts",
+  "compatibility_date":"2026-10-08",
+  "compatibility_flags":["nodejs_compat"],
+  "workers_dev":false,
+  "preview_urls":false,
+  "routes":[],
+  "vars":{
+    "SUBSCRIPTIONS_ACCOUNT_ID":"",
+    "SUBSCRIPTIONS_NAMESPACE":"projects-agent-git",
+    "SUBSCRIPTIONS_QUEUE_ID":"",
+    "SUBSCRIPTIONS_WORKSPACE_ID":"competition",
+    "SUBSCRIPTIONS_OWNER_KEY":""
+  },
+  "observability":{"enabled":true}
+}

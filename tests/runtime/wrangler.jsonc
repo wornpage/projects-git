@@ -1,0 +1,132 @@
+{
+  "name": "projects-git-local-runtime-test",
+  "main": "worker.ts",
+  "compatibility_date": "2026-10-03",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "worker_loaders": [
+    {
+      "binding": "LOADER"
+    }
+  ],
+  "containers": [
+    {
+      "class_name": "RepositoryCheckContainer",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "verifier": {
+          "dockerfile": "../../containers/verification/Dockerfile"
+        }
+      }
+    }
+  ],
+  "assets": {
+    "directory": "../../public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "services": [
+    {
+      "binding": "ARTIFACTS",
+      "service": "projects-git-local-runtime-test",
+      "entrypoint": "ArtifactsFixture"
+    },
+    {
+      "binding": "SEARCH_AI",
+      "service": "projects-git-local-runtime-test",
+      "entrypoint": "SearchFixture"
+    },
+    {
+      "binding": "SEARCH_VECTORS",
+      "service": "projects-git-local-runtime-test",
+      "entrypoint": "SearchFixture"
+    }
+  ],
+  "vars": {
+    "WORKSPACE_ID": "runtime-test",
+    "MODEL": "",
+    "SEARCH_EMBEDDINGS_ENABLED": "true",
+    "SEARCH_EMBEDDING_DAILY_LIMIT": "100",
+    "FIXTURE_VECTOR_VISIBILITY_DELAY_MS": "250",
+    "ACCESS_TEAM_DOMAIN": "https://fixture.cloudflareaccess.com",
+    "ACCESS_AUD": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "ACCESS_OWNER_SUB": "fixture-owner",
+    "ACCESS_AGENT_CLIENT_IDS": "[\"11111111111111111111111111111111.access\",\"22222222222222222222222222222222.access\",\"33333333333333333333333333333333.access\",\"44444444444444444444444444444444.access\",\"55555555555555555555555555555555.access\",\"66666666666666666666666666666666.access\",\"77777777777777777777777777777777.access\",\"88888888888888888888888888888888.access\"]",
+    "ACCESS_REVIEWER_CLIENT_IDS": "[\"99999999999999999999999999999999.access\"]",
+    "ACCESS_REVIEWER_SUBJECTS": "[]"
+  },
+  "d1_databases": [
+    {
+      "binding": "SEARCH_DB",
+      "database_name": "projects-git-search-test",
+      "migrations_dir": "../../migrations/search"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SEARCH_JOBS",
+        "queue": "projects-git-search-test"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "projects-git-search-test",
+        "max_batch_size": 5,
+        "max_batch_timeout": 1,
+        "max_retries": 3,
+        "retry_delay": 1,
+        "dead_letter_queue": "projects-git-search-test-failed"
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WORKSPACES",
+        "class_name": "WorkspaceCoordinator"
+      },
+      {
+        "name": "FIXTURE_REPOS",
+        "class_name": "ArtifactsFixtureStore"
+      },
+      {
+        "name": "REPOSITORY_CHECKS",
+        "class_name": "RepositoryCheckContainer"
+      },
+      {
+        "name": "SEARCH_FIXTURES",
+        "class_name": "SearchFixtureStore"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "WorkspaceCoordinator"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "ArtifactsFixtureStore"
+      ]
+    },
+    {
+      "tag": "v3",
+      "new_sqlite_classes": [
+        "RepositoryCheckContainer"
+      ]
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": [
+        "SearchFixtureStore"
+      ]
+    }
+  ],
+  "workers_dev": false,
+  "preview_urls": false
+}

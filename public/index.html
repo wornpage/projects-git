@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#efede7">
+    <meta name="description" content="A shared project workspace for queued tasks, concurrent agents, verified changes, and human decisions.">
+    <title>Projects Git — projects, agent work and decisions</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%2321322b'/%3E%3Cpath d='M14 14h13a8 8 0 0 1 0 16h-5v6h-8V14Zm8 7v3h5a1.5 1.5 0 0 0 0-3h-5Z' fill='%23fdfdfb'/%3E%3C/svg%3E">
+    <link id="svelte-1a7eo45" rel="stylesheet" href="/vendor/wornpage-button-0.2.3/worn-button.css">
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/action-feedback.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to project workspace</a>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <a id="brand-home" class="brand" href="/?view=projects" aria-label="Projects Git home"><span class="brand-mark">P<span>↗</span></span><span>Projects<span class="brand-sub">GIT WORKSPACE</span></span></a>
+        <div class="workspace-label">YOUR WORKSPACE</div>
+        <div class="workspace-name" id="workspace-name">Project workspace</div>
+        <a id="workspace-home" class="nav-item workspace-home" href="/?view=projects" data-view="projects"><span class="nav-icon" aria-hidden="true">◫</span><span>Projects</span><span id="project-total" class="nav-count">0</span></a>
+        <div id="project-navigation" class="project-navigation"></div>
+        <nav id="project-views" class="main-nav" aria-label="Project views" hidden>
+          <button class="nav-item active" data-view="overview" aria-current="page"><span class="nav-icon" aria-hidden="true">◫</span><span class="nav-label">Queue</span></button>
+          <button class="nav-item" data-view="work"><span class="nav-icon" aria-hidden="true">⇄</span><span class="nav-label">Agent work</span><span id="work-count" class="nav-count">0</span></button>
+          <button class="nav-item" data-view="review"><span class="nav-icon" aria-hidden="true">✓</span><span class="nav-label">Review</span><span id="review-count" class="nav-count">0</span></button>
+          <button class="nav-item" data-view="evidence"><span class="nav-icon" aria-hidden="true">≡</span><span class="nav-label">Evidence</span></button>
+        </nav>
+        <button id="new-project" class="button button-small new-project-button" type="button" disabled>+ New project</button>
+        <div class="sidebar-bottom">
+          <div class="provider-indicator"><span class="provider-dot" id="provider-dot"></span><span id="provider-label">Connecting to workspace</span></div>
+          <p id="provider-note">Execution, verification, and your decision. Each has its own record.</p>
+          <div class="sidebar-foot">A PROJECTS PROTOTYPE <span>↗</span></div>
+        </div>
+      </aside>
+      <div class="main-shell">
+        <header class="topbar">
+          <div class="breadcrumb"><a class="workspace-return" href="/?view=projects" id="workspace-return">Projects</a> <span>/</span> <span id="project-breadcrumb" class="breadcrumb-project">Workspace</span> <span id="view-crumb" class="view-crumb"><span>/</span> <strong id="view-name">Projects</strong></span></div>
+          <div class="topbar-right"><button id="open-command-palette" class="button button-small" type="button" aria-haspopup="dialog" aria-keyshortcuts="Control+k Meta+k">Find work <kbd>⌘/Ctrl K</kbd></button><span class="connection-status" id="connection-status">Connecting…</span><span id="identity-status" class="small"></span><span class="avatar" title="Human decisions" aria-label="Human decisions">H</span></div>
+        </header>
+        <main id="main" tabindex="-1">
+          <section id="project-header" class="project-shell-context" aria-label="Selected project" hidden></section>
+          <div class="page-heading"><div><p id="page-kicker" class="section-kicker">WORKSPACE</p><h1 id="page-title">Projects</h1><p id="page-subtitle">Queue tasks, follow agent work, and review changes in each project.</p></div></div>
+          <div id="auth-panel" class="auth-panel" hidden>
+            <div class="auth-copy"><h2>Sign in to your workspace</h2><p>Your Cloudflare Access session is required. If it was revoked, sign out before signing in again.</p></div>
+            <div class="auth-actions"><a class="button button-primary" href="/">Sign in with Access</a><a class="button" href="/cdn-cgi/access/logout">Sign out of Access</a></div>
+          </div>
+          <details id="workspace-access-controls" class="panel workspace-access" hidden>
+            <summary>Workspace access</summary>
+            <div class="panel-body"><button id="adopt-owner" class="button" type="button" hidden>Adopt retained workspace</button><button id="revoke-sessions" class="button" type="button">Revoke all workspace sessions</button><p class="small">Revocation signs out the owner and all agent clients. Issued Git credentials and already admitted jobs require separate handling.</p></div>
+          </details>
+          <div id="content" aria-busy="true"><div class="loading-state"><span class="loading-indicator"></span><p>Opening your project workspace…</p></div></div>
+          <dialog id="task-launcher" class="task-composer-dialog" aria-labelledby="new-task-summary">
+            <div class="connection-dialog-header"><h2 id="new-task-summary" tabindex="-1">Create task</h2><button id="close-task-composer" class="icon-button" aria-label="Close task composer" type="button">×</button></div>
+            <form id="task-form" class="panel-body task-create-form">
+              <label for="task-source">Project</label>
+              <select id="task-source"><option value="repository">New project · connect code</option><option value="sample">New project · checkout starter</option></select>
+              <div id="repository-source-fields" class="field-grid">
+                <div><label for="project-name-input">Project name</label><input id="project-name-input" placeholder="For example: Customer portal" maxlength="100" required></div>
+                <div><label for="repository-path">Local repository path</label><input id="repository-path" placeholder="C:/code/my-project" maxlength="1000" required></div>
+                <div><label for="repository-base">Base commit · full Git ID</label><input id="repository-base" placeholder="Paste git rev-parse HEAD" pattern="[a-f0-9]{40}([a-f0-9]{24})?" required></div>
+              </div>
+              <p id="task-source-note" class="definition-note"></p>
+              <div id="task-drafts" class="task-stack"></div>
+              <button id="add-task-draft" class="button" type="button">+ Stack another task</button>
+              <label for="task-execution">Agent execution</label><select id="task-execution"><option value="external">External agents · prepare checkouts after creation</option><option value="scripted">Scripted sample agents</option><option value="model">Configured model agents</option></select>
+              <fieldset id="model-form" hidden><legend>Model allowance</legend>
+                <p id="model-availability"></p><div class="model-fields">
+                  <label for="model-candidates">Candidates<input id="model-candidates" type="number" min="1" max="4" value="1" aria-describedby="model-candidates-note"></label>
+                  <label for="model-requests">Requests per candidate<input id="model-requests" type="number" min="1" max="4" value="2"></label>
+                  <label for="model-output">Output tokens per request<input id="model-output" type="number" min="256" max="16384" value="4096"></label>
+                  <label for="model-seconds">Seconds per candidate<input id="model-seconds" type="number" min="1" max="600" value="120"></label>
+                  <label for="model-input">Input bytes per request<input id="model-input" type="number" min="1024" max="131072" value="32768"></label>
+                </div><p id="model-candidates-note">Start with one change. Increase the candidate count only when you want to compare approaches.</p><p id="model-budget" role="status"></p>
+              </fieldset>
+              <button id="create-task" class="button button-primary" type="submit" disabled>Create task</button>
+              <p id="task-creation-status" class="creation-status" role="status" hidden></p>
+              <button id="release-task-request" class="button" type="button" hidden>Check saved request and unlock editing</button>
+            </form>
+          </dialog>
+        </main>
+        <footer class="page-footer"><span>Projects Git · Work with evidence</span><span id="last-updated">Waiting for workspace</span></footer>
+      </div>
+    </div>
+    <dialog id="inspector-dialog" class="inspector-drawer" aria-labelledby="inspector-title">
+      <div class="connection-dialog-header"><h2 id="inspector-title">Details</h2><button id="close-inspector" class="icon-button" aria-label="Close details" type="button">×</button></div>
+      <p id="inspector-pending" class="inspector-pending" role="status" hidden>Request in progress…</p>
+      <fieldset id="inspector-content" class="inspector-content"></fieldset>
+    </dialog>
+    <dialog id="project-connection-dialog" aria-labelledby="project-connection-title">
+      <div class="connection-dialog-header"><h2 id="project-connection-title">Connect agent</h2><button id="close-project-connection" class="icon-button" aria-label="Close agent connection" type="button">×</button></div>
+      <div id="project-connection-content"></div>
+    </dialog>
+    <dialog id="command-dialog" aria-labelledby="command-title">
+      <div class="connection-dialog-header"><h2 id="command-title">Find work</h2><button id="close-command-dialog" class="icon-button" aria-label="Close find work" type="button">×</button></div>
+      <label class="sr-only" for="command-query">Find projects, tasks and candidates</label>
+      <input id="command-query" type="search" role="combobox" aria-autocomplete="list" aria-expanded="true" aria-controls="command-results" autocomplete="off" placeholder="Find projects, tasks or candidates…">
+      <p id="command-count" class="small muted" role="status" aria-live="polite"></p>
+      <div id="command-results" role="listbox" aria-label="Matching work"></div>
+      <p class="small muted">↑ ↓ Choose · Enter Open · Escape Close. Navigation only; no work starts.</p>
+    </dialog>
+    <dialog id="continuation-dialog" aria-labelledby="continuation-title">
+      <div class="connection-dialog-header"><h2 id="continuation-title">Continue in your agent</h2><button id="close-continuation" class="icon-button" aria-label="Close agent continuation" type="button">×</button></div>
+      <p class="small">Review this selected candidate context, then paste it into your existing coding conversation. Copying does not start work or authorize a new run.</p>
+      <button id="copy-continuation" type="button" class="button button-primary">Copy candidate instructions</button>
+      <p id="continuation-notice" class="small" role="status"></p>
+      <label for="continuation-text">Context and next steps · review before sharing</label>
+      <textarea id="continuation-text" readonly spellcheck="false"></textarea>
+    </dialog>
+    <dialog id="revision-dialog" aria-labelledby="revision-title">
+      <form id="revision-form" class="revision-form">
+        <h2 id="revision-title">Revise requirements</h2>
+        <p id="revision-context"></p>
+        <div id="revision-stale" class="capability-note" hidden>Saved requirements changed while this editor was open. Your proposed text is kept. Compare with the latest saved revision before saving.</div>
+        <button id="revision-rebase" type="button" class="button" hidden>Compare with latest revision</button>
+        <label for="revision-purpose">Task purpose</label>
+        <textarea id="revision-purpose" rows="3" maxlength="4000" required></textarea>
+        <label for="revision-criteria">Acceptance criteria, one per line</label>
+        <textarea id="revision-criteria" rows="6" maxlength="6000" required></textarea>
+        <p class="small muted">Existing automated checks may not cover new requirements. Reviewers must assess every written criterion.</p>
+        <label for="revision-reason">Reason for this revision</label>
+        <textarea id="revision-reason" rows="2" maxlength="2000" required></textarea>
+        <section id="revision-preview" aria-label="Requirement change preview"></section>
+        <section id="revision-impact" aria-label="Effect on retained work"></section>
+        <p id="revision-status" role="status" aria-live="polite"></p>
+        <div class="review-buttons"><button id="revision-cancel" type="button" class="button">Cancel</button><button id="revision-save" type="submit" class="button button-primary">Save revision</button></div>
+      </form>
+    </dialog>
+    <div id="error-banner" class="error-banner" role="alert" hidden><span id="error-text" tabindex="0"></span><button type="button" class="icon-button" id="dismiss-error" aria-label="Dismiss error">×</button></div>
+    <div class="sr-only" id="announcement" role="status" aria-live="polite"></div>
+  </body>
+</html>

@@ -1,0 +1,12 @@
+node_modules/
+.wrangler/
+.local/
+dist/
+.dev.vars
+.env
+.env.*
+!.env.example
+qa/
+*.log
+wrangler.event-local.json
+wrangler.event-driver.json

@@ -1,0 +1,22 @@
+{
+  "name": "projects-git-capacity-local-only",
+  "main": "workspace-capacity-fixture.mjs",
+  "compatibility_date": "2026-10-03",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {"directory":"../../public","binding":"ASSETS","run_worker_first":true},
+  "durable_objects": {"bindings":[{"name":"WORKSPACES","class_name":"CapacityWorkspace"}]},
+  "migrations": [{"tag":"v1","new_sqlite_classes":["CapacityWorkspace"]}],
+  "vars": {
+    "FIXTURE_INSTANCE":"qualification",
+    "WORKSPACE_ID":"workspace-scale",
+    "ACCESS_TEAM_DOMAIN":"https://fixture.cloudflareaccess.com",
+    "ACCESS_AUD":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "ACCESS_OWNER_SUB":"fixture-owner",
+    "ACCESS_AGENT_CLIENT_IDS":"[\"11111111111111111111111111111111.access\",\"22222222222222222222222222222222.access\",\"33333333333333333333333333333333.access\",\"44444444444444444444444444444444.access\",\"55555555555555555555555555555555.access\",\"66666666666666666666666666666666.access\",\"77777777777777777777777777777777.access\",\"88888888888888888888888888888888.access\"]",
+    "ACCESS_REVIEWER_CLIENT_IDS":"[\"99999999999999999999999999999999.access\"]",
+    "MODEL":"",
+    "ARTIFACTS_EVENTS_AUTOMATIC":"false"
+  }
+}

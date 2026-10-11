@@ -1,0 +1,12 @@
+{
+  "package": "@wornpage/button",
+  "version": "0.2.3",
+  "releaseTag": "components-2026.09.26",
+  "sourceCommit": "f4a1d26b62a7d85bd72fd9dc7b8a831f28473786",
+  "archiveUrl": "https://github.com/wornpage/components/releases/download/components-2026.09.26/wornpage-button-0.2.3.tgz",
+  "archiveIntegrity": "sha512-qUsxjNJPRHSigDBLv5oxpJahIti8HEybNkuQheOk8vLJAnz138itk50cAazz/WSx4siebmCUzRXDssODgkV6Wg==",
+  "bundleSha256": "352c1af3dbf12e9a9eb2cf85cabc48f565be90d15b21d7c365c2425737c6f273",
+  "cssSha256": "fc314f0f8e6ea0bbd272c64c04a883735a7377e867e8e39b4235a6c0adc02a9c",
+  "stylesheetId": "svelte-1a7eo45",
+  "bundledSvelteVersion": "5.56.8"
+}

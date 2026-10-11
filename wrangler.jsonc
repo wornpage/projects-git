@@ -1,0 +1,133 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "projects-agent-git",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "main": "src/cloudflare/index.ts",
+  "compatibility_date": "2026-10-03",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "vars": {
+    "PUBLIC_ENTRANCE_ENABLED": "false",
+    "WORKSPACE_ID": "competition",
+    "MODEL_ENDPOINT": "https://api.openai.com/v1/chat/completions",
+    "MODEL": "",
+    "MODEL_REPOSITORY": "checkout-starter",
+    "SEARCH_EMBEDDINGS_ENABLED": "false",
+    "SEARCH_EMBEDDING_DAILY_LIMIT": "100",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": "",
+    "ACCESS_OWNER_SUB": "",
+    "ACCESS_AGENT_CLIENT_IDS": "[]",
+    "ACCESS_REVIEWER_CLIENT_IDS": "[]",
+    "ACCESS_REVIEWER_SUBJECTS": "[]",
+    "ARTIFACTS_EVENTS_ACCOUNT_ID": "",
+    "ARTIFACTS_EVENTS_NAMESPACE": "projects-agent-git",
+    "ARTIFACTS_EVENTS_QUEUE": "projects-git-artifacts-events",
+    "ARTIFACTS_EVENTS_SUBSCRIPTIONS": "[]",
+    "ARTIFACTS_EVENTS_AUTOMATIC": "false",
+    "ARTIFACTS_EVENTS_QUEUE_ID": ""
+  },
+  "services": [{"binding":"EVENT_SUBSCRIPTIONS","service":"projects-git-event-subscriptions","entrypoint":"ArtifactSubscriptionService"}],
+  "worker_loaders": [
+    {
+      "binding": "LOADER"
+    }
+  ],
+  "containers": [
+    {
+      "class_name": "RepositoryCheckContainer",
+      "scheduling_policy": "durable_object",
+      "images": {
+        "verifier": {
+          "dockerfile": "./containers/verification/Dockerfile"
+        }
+      }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WORKSPACES",
+        "class_name": "WorkspaceCoordinator"
+      },
+      {
+        "name": "REPOSITORY_CHECKS",
+        "class_name": "RepositoryCheckContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "WorkspaceCoordinator"
+      ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": [
+        "RepositoryCheckContainer"
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "binding": "ARTIFACTS",
+      "namespace": "projects-agent-git"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "SEARCH_DB",
+      "database_name": "projects-git-search",
+      "migrations_dir": "migrations/search"
+    }
+  ],
+  "ai": {
+    "binding": "SEARCH_AI"
+  },
+  "vectorize": [
+    {
+      "binding": "SEARCH_VECTORS",
+      "index_name": "projects-git-retained-v1"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "SEARCH_JOBS",
+        "queue": "projects-git-search"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "projects-git-search",
+        "max_batch_size": 5,
+        "max_retries": 3,
+        "retry_delay": 60,
+        "max_concurrency": 2,
+        "dead_letter_queue": "projects-git-search-failed"
+      },
+      {
+        "max_retries": 3,
+        "queue": "projects-git-artifacts-events",
+        "max_batch_size": 5,
+        "max_concurrency": 1,
+        "dead_letter_queue": "projects-git-artifacts-events-failed",
+        "retry_delay": 60
+      }
+    ]
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}
