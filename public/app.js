@@ -220,8 +220,8 @@ function updateChrome() {
   $('#close-inspector').disabled = actions.busy;
   $('#inspector-pending').hidden = !actions.busy;
   const [label, title, subtitle] = viewTitles[view];
-  const task = workspace ? currentTask() : null,taskView=!['projects','queue','history'].includes(view);
-  const heading = ['review','evidence'].includes(view) && currentRun() ? currentRun().label : taskView && task ? task.title : title;
+  const task = workspace ? currentTask() : null,run=workspace ? currentRun() : null,taskView=!['projects','queue','history'].includes(view);
+  const heading = ['review','evidence'].includes(view) && run ? run.label : taskView && task ? task.title : title;
   if ($("#view-name").textContent!==label) $("#view-name").textContent=label;
   $('#view-crumb').hidden=view==='projects';
   if ($("#page-title").textContent!==heading) $("#page-title").textContent=heading;
