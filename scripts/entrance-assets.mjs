@@ -5,11 +5,11 @@ import {resolve,relative} from 'node:path';
 
 const root = fileURLToPath(new URL('../',import.meta.url));
 export async function entranceAssets() {
-  const built = await build({absWorkingDir:root,entryPoints:['public/app.js'],bundle:true,write:false,
+  const built = await build({absWorkingDir:root,entryPoints:['public/app.js','public/vendor/prism-1.30.0/syntax-worker.js'],bundle:true,write:false,outdir:'unused',
     metafile:true,format:'esm',platform:'browser',logLevel:'silent'});
   const names = Object.keys(built.metafile.inputs).map(path=>relative(resolve(root,'public'),resolve(root,path)).replaceAll('\\','/'));
   if (names.some(path=>path.startsWith('../') || !path.endsWith('.js'))) throw Error('Demo module graph escaped public JavaScript.');
-  return [...new Set([...names,'styles.css','action-feedback.css','demo/demo.css','vendor/wornpage-button-0.2.3/worn-button.css'])].sort();
+  return [...new Set([...names,'styles.css','action-feedback.css','syntax.css','demo/demo.css','vendor/wornpage-button-0.2.3/worn-button.css'])].sort();
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const path = resolve(root,'src/entrance/assets.mjs');

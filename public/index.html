@@ -10,6 +10,7 @@
     <link id="svelte-1a7eo45" rel="stylesheet" href="/vendor/wornpage-button-0.2.3/worn-button.css">
     <link rel="stylesheet" href="/styles.css">
     <link rel="stylesheet" href="/action-feedback.css">
+    <link rel="stylesheet" href="/syntax.css">
     <script type="module" src="/app.js"></script>
   </head>
   <body>
@@ -21,6 +22,7 @@
         <div class="workspace-name" id="workspace-name">Project workspace</div>
         <a id="workspace-home" class="nav-item workspace-home" href="/?view=projects" data-view="projects"><span class="nav-icon" aria-hidden="true">◫</span><span>Projects</span><span id="project-total" class="nav-count">0</span></a>
         <div id="project-navigation" class="project-navigation"></div>
+        <button id="open-workspace-navigation" class="button button-small compact-navigation-trigger" type="button" aria-haspopup="dialog" aria-controls="inspector-dialog" disabled>Navigate</button>
         <nav id="project-views" class="main-nav" aria-label="Project views" hidden>
           <button class="nav-item" data-view="queue"><span class="nav-label">Task queue</span><span id="task-count" class="nav-count">0</span></button>
           <button class="nav-item" data-view="history"><span class="nav-label">Project history</span></button>

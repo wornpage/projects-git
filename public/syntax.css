@@ -1,0 +1,18 @@
+/* Token colors are checked against normal, added, removed and reviewer backgrounds. */
+.syntax-token-comment{color:#b7c8bd}
+.syntax-token-keyword{color:#d6b6ff}
+.syntax-token-string{color:#f3d69a}
+.syntax-token-number{color:#f8b89a}
+.syntax-token-function{color:#9bdaf4}
+.syntax-token-type{color:#c7dd93}
+.syntax-token-property{color:#accbff}
+.syntax-token-operator{color:#e0e8e2}
+.syntax-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:8px 16px;background:#202b27;color:#d4e2d9;font-size:12px}
+.syntax-toolbar .syntax-toggle{font:inherit;min-height:36px;padding:6px 12px;border:1px solid #81958a;border-radius:6px;background:transparent;color:#f1f5f0;cursor:pointer}
+.syntax-toolbar .syntax-toggle[aria-pressed=true]{background:#33453d}
+.syntax-toolbar .syntax-toggle:focus-visible{outline:3px solid #9bdaf4;outline-offset:2px}
+.syntax-toolbar .syntax-toggle:disabled{cursor:default;opacity:1;color:#c5d6cb}
+.syntax-row{white-space:pre}
+.syntax-row.addition{background:#233c30}.syntax-row.deletion{background:#432b2c}
+@media(pointer:coarse){.syntax-toolbar .syntax-toggle{min-height:44px}}
+@media(forced-colors:active){[class^=syntax-token-]{color:inherit}.syntax-toolbar,.syntax-toolbar .syntax-toggle{color:CanvasText;background:Canvas;border-color:ButtonText}}

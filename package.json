@@ -16,7 +16,7 @@
     "types": "wrangler types src/cloudflare/worker-configuration.d.ts",
     "typecheck": "tsc -p tsconfig.cloudflare.json --noEmit",
     "verifier:stamp": "node scripts/verifier-fingerprint.mjs --write",
-    "build": "node scripts/verifier-fingerprint.mjs && wrangler deploy --dry-run --outdir dist && npm run build:demo && npm run build:subscriptions && npm run build:entrance",
+    "build": "node scripts/verifier-fingerprint.mjs && node scripts/syntax-bundle.mjs && wrangler deploy --dry-run --outdir dist && npm run build:demo && npm run build:subscriptions && npm run build:entrance",
     "build:entrance": "node scripts/entrance-assets.mjs && wrangler deploy --config wrangler.entrance-preview.jsonc --dry-run --outdir dist/entrance",
     "build:demo": "wrangler deploy --config wrangler.demo.jsonc --dry-run --outdir dist/demo",
     "build:subscriptions": "wrangler deploy --config wrangler.subscriptions.jsonc --dry-run --outdir dist/subscriptions",
@@ -29,6 +29,7 @@
     "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "^26.6.4",
     "esbuild": "0.28.1",
+    "prismjs": "1.30.0",
     "typescript": "^7.0.2",
     "wrangler": "^4.147.0"
   },

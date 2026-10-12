@@ -6,6 +6,11 @@ for its changes, checks, review and separate integration controls. **Project
 history** retains candidates across that project; **Candidate record** holds one
 candidate's reports and decisions.
 
+On a phone, **Navigate** opens these same project, task and candidate links in the
+existing side panel. The original nodes, counters and handlers move into the
+panel and return to the sidebar on close. Desktop keeps its sidebar; the phone
+header stays compact while the full scoped navigation and counts remain available.
+
 ## Starting a project and an agent
 
 New project separates code selection from the first task brief. In the local

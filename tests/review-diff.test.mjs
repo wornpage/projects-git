@@ -77,3 +77,15 @@ test('diff jump controls cannot own or submit a surrounding decision form',async
   assert.match(panel.textContent,/Enter a diff line from 1 to 504/);
   assert.equal(invalid.attrs['aria-invalid'],'true');assert.equal(invalid.attrs.required,undefined);
 });
+
+test('syntax toggle preserves visible diff text, line totals, scroll and keyboard focus',async()=>{
+  const {document}=installFakeDOM();const run={id:'syntax',baseCommit:'a'.repeat(40),headCommit:'b'.repeat(40),changedFiles:['app.py'],diff:patch('app.py',500)};
+  const panel=createDiffView({getContext:()=>({workspace:{id:'one'}})})(run);
+  const before=panel.querySelector('pre');before.scrollTop=140;before.scrollLeft=90;
+  const text=before.textContent;
+  let button=nodes(panel).find(node=>node.className==='syntax-toggle');assert.equal(button.attrs.type,'button');
+  await button.dispatch('click');const after=panel.querySelector('pre');
+  assert.equal(after.textContent,text);assert.equal(after.scrollTop,140);assert.equal(after.scrollLeft,90);
+  assert.match(panel.textContent,/Diff lines 1–200 of 504/);
+  button=nodes(panel).find(node=>node.className==='syntax-toggle');assert.equal(button.attrs['aria-pressed'],'false');assert.equal(document.activeElement,button);
+});

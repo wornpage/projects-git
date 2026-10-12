@@ -7,7 +7,7 @@ const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;})
 const find=(node,predicate)=>predicate(node)?node:node.children?.map(child=>find(child,predicate)).find(Boolean);
 const response=(value,status=200)=>({status,ok:status<400,json:async()=>value});
 
-async function fixture({search='',status='pending',packetAssignment='assignment-a'}={}){
+async function fixture({search='',status='pending',packetAssignment='assignment-a',sourceText,diff=''}={}){
   const {document}=installFakeDOM();document.body=document.createElement('body');
   location.search=search;
   const item={workspaceId:'workspace',assignmentId:'assignment-a',runId:'candidate',taskTitle:'Review',runLabel:'Candidate',headCommit:'b'.repeat(40),assignmentScope:'personal',status};
@@ -15,6 +15,7 @@ async function fixture({search='',status='pending',packetAssignment='assignment-
   const calls=[],arrivals=[],reads=[];
   const packet={contextId:'context',context:{workspaceId:'workspace',runId:'candidate',reviewAssignmentId:packetAssignment,headCommit:item.headCommit,baseCommit:'a'.repeat(40),taskRevision:1},
     candidate:{changedFiles:[],diff:''},source:{files:[]},baseSource:{files:[]}};
+  if(sourceText!==undefined){packet.source.files=[{name:'example.js',base64:Buffer.from(sourceText).toString('base64')}];packet.candidate={changedFiles:['example.js'],diff};}
   const previousFetch=globalThis.fetch;
   globalThis.fetch=async(path,options)=>{
     if(path==='/api/review-inbox')return response({workspaceId:'workspace',principal,total:1,items:[item]});
@@ -109,4 +110,19 @@ test('retained assessment keys belong to one viewer session',async()=>{
   const other=f.submit('Same assessment');await f.waitForCall(1);
   assert.notEqual(f.calls[1].key,f.calls[0].key);
   f.calls[1].resolve(response({error:{message:'Invalid assessment'}},422));await other;
+});
+
+test('large unpaged review panels retain complete source and patch without mounting syntax tokens',async()=>{
+  const sourceText=Array.from({length:2000},(_,i)=>`const item${i} = ${i};`).join('\n')+'\n';
+  const diff='diff --git a/example.js b/example.js\n--- a/example.js\n+++ b/example.js\n@@ -0,0 +1,2000 @@\n'+sourceText.split('\n').slice(0,-1).map(line=>'+'+line).join('\n')+'\n';
+  const f=await fixture({sourceText,diff});await f.inspect();
+  const section=f.review().children.find(node=>node.children[0]?.textContent==='Candidate source');
+  const chooser=find(section,node=>node.tagName==='SELECT');chooser.value='example.js';await chooser.dispatch('change');
+  const code=find(section,node=>node.tagName==='PRE');
+  assert.equal(code.textContent,sourceText.trimEnd().split('\n').map((line,i)=>`${String(i+1).padStart(4,' ')} │ ${line}`).join('\n'));
+  assert.equal(code.children.length,0);assert.match(section.textContent,/plain text \(large section\)/);
+  const patch=f.review().children.find(node=>node.children[0]?.textContent==='Changes');
+  assert.equal(find(patch,node=>node.tagName==='PRE').textContent,diff);assert.match(patch.textContent,/Plain text · large change/);
+  await find(section,node=>node.tagName==='BUTTON'&&node.textContent==='Syntax colors').dispatch('click');
+  assert.ok(code.textContent.endsWith('2000 │ const item1999 = 1999;'));assert.equal(f.calls.length,0);
 });

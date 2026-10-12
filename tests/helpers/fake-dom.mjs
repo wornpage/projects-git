@@ -45,7 +45,7 @@ export function installFakeDOM() {
   const document = {
     activeElement:null, addEventListener(){}, getElementById:id=>$(`#${id}`),
     querySelector:selector=>selector==='dialog[open]'?[...nodes.values()].find(node=>node.open):$(selector),
-    querySelectorAll:()=>[], createElement:tag=>new Element(tag),
+    querySelectorAll:()=>[], createElement:tag=>new Element(tag),createElementNS:(_namespace,tag)=>new Element(tag),
     createTextNode:text=>{const node=new Element('#text');node.textContent=text;return node;},
   };
   globalThis.document = document;

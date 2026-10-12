@@ -1,6 +1,8 @@
 import {createApiClient} from './api-client.js';
 import {createErrorNotice} from './ui/error-notice.js';
 import {linkedReview,reviewRequestLabel} from './review-handoff.js';
+import {highlightSyntax,paintSyntax,syntaxLanguage,syntaxLabel,SYNTAX_RENDER_LINES,syntaxRenderWithinLimit} from './code-syntax.js';
+import {recordedDiff} from './review-diff.js';
 const byId=id=>document.getElementById(id);
 const element=(tag,content='',className='')=>{const node=document.createElement(tag);node.textContent=content;if(className)node.className=className;return node;};
 const errors=createErrorNotice(document);
@@ -14,9 +16,14 @@ const api=createApiClient({captureSession:()=>{const session=viewerSession;retur
 
 function sourceText(file){
   const binary=atob(file.base64),bytes=Uint8Array.from(binary,char=>char.charCodeAt(0));
-  try{const text=new TextDecoder('utf-8',{fatal:true}).decode(bytes),lines=text.split('\n');if(lines.at(-1)==='')lines.pop();
-    return lines.map((line,index)=>`${String(index+1).padStart(4,' ')} │ ${line}`).join('\n');}
-  catch{return 'This committed file is not UTF-8 text.';}
+  try{return new TextDecoder('utf-8',{fatal:true}).decode(bytes);}
+  catch{return null;}
+}
+
+function syntaxControls(onToggle){
+  const toolbar=element('div','','syntax-toolbar'),note=element('span'),button=element('button','Syntax colors','syntax-toggle');
+  note.setAttribute('role','status');button.type='button';button.setAttribute('aria-pressed','true');
+  button.addEventListener('click',onToggle);toolbar.append(note,button);return {toolbar,note,button};
 }
 
 function sourcePanel(title,snapshot,paths){
@@ -25,8 +32,57 @@ function sourcePanel(title,snapshot,paths){
   if(!selected.length){section.append(element('p','No regular text file on this side of the change.','muted'));return section;}
   const chooser=element('select');chooser.setAttribute('aria-label',title+' file');
   for(const file of selected){const option=element('option',file.name);option.value=file.name;chooser.append(option);}
-  const code=element('pre');const render=()=>{const file=selected.find(item=>item.name===chooser.value);code.textContent=file?sourceText(file):'';};
-  chooser.addEventListener('change',render);section.append(chooser,code);render();return section;
+  const code=element('pre');let enabled=true,generation=0;
+  const controls=syntaxControls(()=>{enabled=!enabled;controls.button.setAttribute('aria-pressed',String(enabled));render();});
+  const render=()=>{
+    const epoch=++generation,file=selected.find(item=>item.name===chooser.value),text=file?sourceText(file):null,language=syntaxLanguage(file?.name);
+    controls.button.disabled=!language||text===null;controls.note.textContent=syntaxLabel(language,null,enabled);
+    if(text===null){code.textContent=file?'This committed file is not UTF-8 text.':'';controls.note.textContent='Plain text';return;}
+    const lines=text.split('\n');if(lines.at(-1)==='')lines.pop();
+    const numbered=lines.map((line,index)=>`${String(index+1).padStart(4,' ')} │ ${line}`);
+    code.textContent=numbered.join('\n');
+    if(!enabled||!language)return;
+    if(lines.length>SYNTAX_RENDER_LINES){controls.note.textContent=syntaxLabel(language,{status:'plain',reason:'large'});return;}
+    highlightSyntax(file.name,{mode:'source',text}).then(result=>{
+      if(epoch!==generation||!code.isConnected)return;
+      controls.note.textContent=syntaxLabel(language,result);
+      if(result.status!=='colored')return;
+      if(!syntaxRenderWithinLimit(result.lines?.slice(0,lines.length))){controls.note.textContent=syntaxLabel(language,{status:'plain',reason:'large'});return;}
+      code.replaceChildren();
+      lines.forEach((line,index)=>{const row=element('span');paintSyntax(row,line,result.lines?.[index]);
+        code.append(document.createTextNode(`${String(index+1).padStart(4,' ')} │ `),row,...(index<lines.length-1?[document.createTextNode('\n')]:[]));});
+    });
+  };
+  chooser.addEventListener('change',render);section.append(chooser,controls.toolbar,code);render();return section;
+}
+
+function patchPanel(candidate){
+  const section=element('section','','card'),code=element('pre');let enabled=true,generation=0;
+  const controls=syntaxControls(()=>{enabled=!enabled;controls.button.setAttribute('aria-pressed',String(enabled));render();});
+  const sections=recordedDiff(candidate.diff,candidate.changedFiles).sections;
+  const total=sections.reduce((count,item)=>count+item.rows.length,0);
+  const render=async()=>{
+    const epoch=++generation;code.textContent=candidate.diff;controls.note.textContent=enabled?'Coloring changed files…':'Plain text';
+    if(!enabled)return;
+    if(total>SYNTAX_RENDER_LINES){controls.note.textContent='Plain text · large change';return;}
+    // One section at a time; source is visible immediately and large patches
+    // retain their single text node when coloring is deliberately bounded out.
+    const results=[];let colored=0;
+    for(const item of sections){
+      const result=await highlightSyntax(item.path,{mode:'diff',rows:item.rows});
+      if(epoch!==generation||!code.isConnected)return;
+      results.push(result);if(result.status==='colored')colored++;
+    }
+    controls.note.textContent=`${colored} / ${sections.length} sections colored`;
+    if(!colored)return;
+    if(!syntaxRenderWithinLimit(results.flatMap(result=>result.lines??[]))){controls.note.textContent='Plain text · large change';return;}
+    code.replaceChildren();let position=0;
+    sections.forEach((item,index)=>item.rows.forEach((line,rowIndex)=>{
+      const row=element('span','','syntax-row '+line.kind);paintSyntax(row,line.text,results[index].lines?.[rowIndex]);code.append(row);
+      if(++position<total||candidate.diff.endsWith('\n'))code.append(document.createTextNode('\n'));
+    }));
+  };
+  section.append(element('h3','Changes'),controls.toolbar,code);render();return section;
 }
 
 function findingFields(paths,onRemove){
@@ -61,7 +117,7 @@ async function openReview(item){
   details.append(criteria,element('p',`Independent checks: ${packet.evidence?.passed??0} / ${packet.evidence?.total??0} reported passing.`));
   const paths=packet.candidate.changedFiles;
   container.append(details,sourcePanel('Candidate source',packet.source,paths),sourcePanel('Task base source',packet.baseSource,paths));
-  const diff=element('section','','card');diff.append(element('h3','Changes'),element('pre',packet.candidate.diff));container.append(diff);
+  container.append(patchPanel(packet.candidate));
   const form=element('form','','card'),controls=element('fieldset','','assessment-fields');controls.setAttribute('aria-label','Assessment details');form.append(element('h3','Your assessment'),controls);
   const verdictLabel=element('label','Verdict'),verdict=element('select');
   verdict.setAttribute('aria-label','Verdict');

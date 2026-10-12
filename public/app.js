@@ -12,6 +12,7 @@ import {createWorkbenchActions, sha256Text} from './workbench-actions.js';
 import {createDialogManager} from './ui/dialogs.js';
 import {createErrorNotice} from './ui/error-notice.js';
 import {createNavigation} from './ui/navigation.js';
+import {createCompactNavigation} from './ui/compact-navigation.js';
 import {createProjectDiscovery} from './ui/project-discovery.js';
 import {createCollectionPager} from './ui/collection.js';
 import {createContinuationDialog} from './ui/continuation-dialog.js';
@@ -85,6 +86,9 @@ dialogs.register('task-launcher',()=>!taskCreation.starting);
 $('#close-inspector').addEventListener('click',()=>{if(!actions.busy)$('#inspector-dialog').close();});
 $('#close-task-composer').addEventListener('click',()=>{if(!taskCreation.starting)$('#task-launcher').close();});
 const projectDiscovery=createProjectDiscovery({getContext,api,captureSession:()=>connection.captureSession(),onChange:()=>updateChrome()});
+const compactNavigation=createCompactNavigation({document,getWorkspace:()=>workspace,openInspector,onRestore:()=>{
+  navigationKey=null;if(workspace)updateProjectNavigation();
+}});
 const collections=createCollectionPager({getScope:()=>JSON.stringify([workspace.id,workspace.authentication?.principal??null]),render});
 createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery});
 const {openContinuation} = createContinuationDialog({getContext, api, dialogs, showError});
@@ -163,6 +167,7 @@ function clearError() { lastError = ""; errorNotice.clear(); }
 function openInspector(title,...body) {
   const opener=document.activeElement;
   if (document.querySelector('dialog[open]') && !$('#inspector-dialog').open) return;
+  if ($('#inspector-dialog').open && compactNavigation.isOpen()) $('#inspector-dialog').close();
   $('#inspector-title').textContent=title;
   $('#inspector-content').replaceChildren(...body);
   if (!$('#inspector-dialog').open) dialogs.show('inspector-dialog','#close-inspector',opener);
@@ -218,6 +223,7 @@ function updateChrome() {
   $('#revoke-sessions').disabled = actions.busy;
   $('#inspector-content').disabled = actions.busy;
   $('#close-inspector').disabled = actions.busy;
+  $('#open-workspace-navigation').disabled = !workspace;
   $('#inspector-pending').hidden = !actions.busy;
   const [label, title, subtitle] = viewTitles[view];
   const task = workspace ? currentTask() : null,run=workspace ? currentRun() : null,taskView=!['projects','queue','history'].includes(view);
@@ -371,9 +377,9 @@ function updateProjectNavigation() {
       'aria-controls': chosen ? 'project-views' : null, onclick: () => selectProject(item.id) },
       el('span', { class: 'project-nav-icon', 'aria-hidden': true }, '◫'), el('span', {}, item.name), el('span', { class: 'project-task-count' }, count + (count === 1 ? ' task' : ' tasks')));
     return el('div', { class: 'project-nav-group' + (chosen ? ' selected' : '') }, button,
-      el('button',{class:'project-pin',type:'button','aria-label':(projectDiscovery.pinned(item.id)?'Unpin ':'Pin ')+item.name,'aria-pressed':projectDiscovery.pinned(item.id),onclick:()=>projectDiscovery.togglePin(item.id)},projectDiscovery.pinned(item.id)?'Pinned':'Pin'),chosen ? nav : null);
+      el('button',{class:'project-pin',type:'button','aria-label':(projectDiscovery.pinned(item.id)?'Unpin ':'Pin ')+item.name,'aria-pressed':projectDiscovery.pinned(item.id),onclick:()=>projectDiscovery.togglePin(item.id)},projectDiscovery.pinned(item.id)?'Pinned':'Pin'),chosen && !compactNavigation.isOpen() ? nav : null);
   });
-  if (!project) $('#new-project').before(nav);
+  if (!project && !compactNavigation.isOpen()) $('#new-project').before(nav);
   $('#project-navigation').replaceChildren(...[el('p',{class:'nav-scope-label'},'Recent & pinned'),...groups,
     !groups.length?el('p',{class:'small'},'Open Projects or Find work to choose a project.'):null,
     projectDiscovery.error()?el('p',{class:'small',role:'status'},projectDiscovery.error(),el('button',{class:'text-link',onclick:projectDiscovery.needsReset()?projectDiscovery.reset:projectDiscovery.retry},projectDiscovery.needsReset()?'Reset shortcuts':'Retry shortcuts')):null].filter(Boolean));
