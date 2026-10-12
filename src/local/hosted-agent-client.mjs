@@ -281,8 +281,11 @@ export class HostedAgentClient {
         if (head !== baseCommit && !await git.isDescendent({ fs, dir, oid: head, ancestor: baseCommit })) throw new Error('Assigned branch does not descend from its pinned base.');
         await git.writeRef({ fs, dir, ref: 'refs/heads/' + ref, value: head });
         await git.checkout({ fs, dir, ref });
-        await privateJson(path.join(this.connection.stateDirectory, 'runs', runId + '.json'), { ...saved, directory: dir });
-        return { runId, directory: dir, branch: ref, headCommit: head, baseCommit };
+        // A created child can resolve differently from its parent under Windows
+        // filesystem redirection. Pin the completed checkout, as push does.
+        const completedDirectory = await realpath(dir);
+        await privateJson(path.join(this.connection.stateDirectory, 'runs', runId + '.json'), { ...saved, directory: completedDirectory });
+        return { runId, directory: completedDirectory, branch: ref, headCommit: head, baseCommit };
       } catch (error) { throw new Error('Checkout did not finish; its directory is retained. ' + this.sanitize(error.message)); }
     });
   }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn, execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readFile, rename, symlink, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -105,6 +105,46 @@ test('hosted agent client checks out and pushes only its assigned branch using r
   assert.ok(f.received.every(item => item.token === 'Bearer fork-write-token'));
   assert.ok(!(await readFile(path.join(f.directory, '.git', 'config'), 'utf8')).includes('fork-write-token'));
   assert.equal((await f.client.mutate('submit', f.runId, { headCommit: head, summary: 'Native Git fixture' }, crypto.randomUUID())).status, 'awaiting_review');
+});
+
+test('hosted checkout retains the resolved child directory and rejects a different checkout after restart', async t => {
+  const f = await hostedClientFixture(t), actual = path.join(f.root, 'redirected-checkout');
+  const fetchImpl = f.client.fetchImpl;
+  let redirected = false;
+  f.client.fetchImpl = async (url, options) => {
+    if (!redirected && url.origin === 'https://git.example.test') {
+      // Deterministic MSIX analogue: parent resolves normally, but the created
+      // child is redirected before checkout finishes. No timing-dependent race.
+      redirected = true;
+      await rename(f.directory, actual);
+      await symlink(actual, f.directory, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+    return fetchImpl(url, options);
+  };
+  const requested = path.join(await realpath(path.dirname(f.directory)), path.basename(f.directory));
+  const checkout = await f.client.checkout(f.runId, f.directory, crypto.randomUUID());
+  assert.equal(redirected, true);
+  const canonical = await realpath(f.directory);
+  assert.notEqual(canonical, requested);
+  assert.equal(checkout.directory, canonical);
+  const saved = JSON.parse(await readFile(path.join(f.client.connection.stateDirectory, 'runs', f.runId + '.json')));
+  assert.equal(saved.directory, canonical);
+  const restarted = new HostedAgentClient(f.client.connection, {fetchImpl});
+  await writeFile(path.join(f.directory, 'repair.txt'), 'Retained redirected checkout\n');
+  await f.git(f.directory, 'add', 'repair.txt'); await f.git(f.directory, 'commit', '-m', 'Redirected fixture');
+  const head = await f.git(f.directory, 'rev-parse', 'HEAD');
+  assert.equal((await restarted.push(f.runId, f.directory, head, crypto.randomUUID())).gitWrite, true);
+  assert.equal(await f.git(path.join(f.root, 'fork.git'), 'rev-parse', f.run.branch), head);
+  const other = path.join(f.root, 'different-checkout');
+  await f.git(f.root, 'clone', '--no-hardlinks', actual, other);
+  assert.equal(await f.git(other, 'rev-parse', 'HEAD'), head);
+  const requestsBefore = f.received.length;
+  await assert.rejects(restarted.push(f.runId, other, head, crypto.randomUUID()), /Push directory differs/);
+  await rename(f.directory, path.join(f.root, 'original-alias'));
+  await symlink(other, f.directory, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(restarted.push(f.runId, f.directory, head, crypto.randomUUID()), /Push directory differs/);
+  assert.equal(f.received.length, requestsBefore, 'Rejected directories must not reach Git transport');
+  assert.equal(f.received.filter(item => item.path.endsWith('/git-receive-pack')).length, 1);
 });
 
 test('hosted client retains an uncertain Git response and explicit retry confirms the head without another push', async t => {
