@@ -62,12 +62,18 @@
             <form id="task-form" class="panel-body task-create-form">
               <label for="task-source">Project</label>
               <select id="task-source"><option value="repository">New project · connect code</option><option value="sample">New project · checkout starter</option></select>
-              <div id="repository-source-fields" class="field-grid">
+              <fieldset id="repository-source-fields" class="field-grid">
+                <legend>1. Connect committed code</legend>
                 <div><label for="project-name-input">Project name</label><input id="project-name-input" placeholder="For example: Customer portal" maxlength="100" required></div>
                 <div><label for="repository-path">Local repository path</label><input id="repository-path" placeholder="C:/code/my-project" maxlength="1000" required></div>
                 <div><label for="repository-base">Base commit · full Git ID</label><input id="repository-base" placeholder="Paste git rev-parse HEAD" pattern="[a-f0-9]{40}([a-f0-9]{24})?" required></div>
-              </div>
+                <div><button id="inspect-repository" class="button" type="button" hidden>Read current commit</button><p id="repository-inspection-status" class="small" role="status"></p></div>
+              </fieldset>
               <p id="task-source-note" class="definition-note"></p>
+              <button id="repository-next" class="button button-primary" type="button" hidden>Use this commit · continue to task</button>
+              <button id="repository-back" class="text-link" type="button" hidden>Back to connected code</button>
+              <fieldset id="task-details-step" class="task-details-step">
+              <legend id="task-details-label">Describe the work</legend>
               <div id="task-drafts" class="task-stack"></div>
               <button id="add-task-draft" class="button" type="button">+ Stack another task</button>
               <label for="task-execution">Agent execution</label><select id="task-execution"><option value="external">External agents · prepare checkouts after creation</option><option value="scripted">Scripted sample agents</option><option value="model">Configured model agents</option></select>
@@ -79,6 +85,7 @@
                   <label for="model-seconds">Seconds per candidate<input id="model-seconds" type="number" min="1" max="600" value="120"></label>
                   <label for="model-input">Input bytes per request<input id="model-input" type="number" min="1024" max="131072" value="32768"></label>
                 </div><p id="model-candidates-note">Start with one change. Increase the candidate count only when you want to compare approaches.</p><p id="model-budget" role="status"></p>
+              </fieldset>
               </fieldset>
               <button id="create-task" class="button button-primary" type="submit" disabled>Create task</button>
               <p id="task-creation-status" class="creation-status" role="status" hidden></p>

@@ -5,7 +5,7 @@ import {projectCoordinationView,projectActivityDetails} from '../project-coordin
 export function createTaskViews({
   getContext,
   parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
-  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections
+  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections, openAgentConnection
 }) {
   const {prerequisitesPanel, timeline} = parts;
   function metric(label, value, denominator, note, icon) {
@@ -59,6 +59,7 @@ export function createTaskViews({
     const brief = taskBriefing(workspace, task), change = brief.change;
     const directionChanged = change && (change.purposeChanged || change.added.length || change.removed.length);
     const next = brief.outcome;
+    const canConnect = !demo && workspace.personalWorkspace?.agentConnections !== false && (!workspace.authentication || workspace.authentication.permissions.manage);
     const revisions=collections({id:'requirement-history-'+task.id,label:'Requirement revisions',items:task.revisions??[],text:item=>item.reason+' '+item.purpose,
       sorts:[['newest','Newest first'],['oldest','Oldest first']],sortKey:item=>item.revision,pageSize:10});
     const body = el('div', { class: 'panel-body focused-task-body' },
@@ -68,7 +69,8 @@ export function createTaskViews({
         onclick:()=>downloadHandoff(task) }, 'Download task handoff'),
       prerequisitesPanel(task),
       el('div', { class: 'task-next-step' }, el('strong', {}, next.label), el('p', {}, next.detail),
-        el('button', { class: 'button button-primary button-small', onclick: () => switchView(next.view, task.id, next.runId ?? null) }, next.action + ' →')),
+        canConnect && taskQueued(workspace,task) ? el('button',{type:'button',id:'agent-instructions-'+task.id,class:'button button-primary button-small',onclick:event=>openAgentConnection(task.projectId,event.currentTarget)},'Get agent instructions') : null,
+        el('button', { class: 'button '+(canConnect && taskQueued(workspace,task)?'':'button-primary ')+'button-small', onclick: () => switchView(next.view, task.id, next.runId ?? null) }, next.action + ' →')),
       el('section', {class:'task-brief-section','aria-label':'Current requirements'}, el('h3',{},(directionChanged ? 'Requirements changed' : 'Requirements')+' · r'+brief.revision),
         directionChanged ? el('div', { class: 'direction-change' }, el('strong', {}, 'Latest change'), el('p', {}, change.reason),
           change.purposeChanged ? el('p', {}, 'Previous purpose: ' + change.previousPurpose) : null,

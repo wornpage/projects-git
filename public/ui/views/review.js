@@ -268,7 +268,8 @@ export function createReviewView({
     if (!run) return el('div', {}, taskHeader(task), panel('Review', el('p', { class: 'no-candidate' }, 'No candidates have been assigned.')));
     const checks = run.verificationPending ? 'Running' : !run.evidence ? 'Not run' : `${run.evidence.passed} / ${run.evidence.total} · ${independentlyVerified(run) ? 'current' : 'reported'}`;
     const decision = run.status === 'merged' ? 'Merged' : run.review?.decision === 'accept' ? 'Accepted' : run.review?.decision === 'reject' ? 'Rejected' : 'Not recorded';
-    const tabs=[['Changes',(run.changedFiles?.length??0)+' files','candidate-changes'],['Checks',checks,'verification'],['Independent review',independentReviewStatus(workspace,run).state,'code-review'],['Owner decision',decision,'review-decision']];
+    const fileCount = run.changedFiles?.length ?? 0;
+    const tabs=[['Changes',fileCount+(fileCount===1?' file':' files'),'candidate-changes'],['Checks',checks,'verification'],['Independent review',independentReviewStatus(workspace,run).state,'code-review'],['Owner decision',decision,'review-decision']];
     const fragment=typeof location==='object'?location.hash?.slice(1):null;
     const nextSection=workspace.provider==='cloudflare-artifacts' && ['awaiting_review','accepted'].includes(run.status)
       && independentlyVerified(run) && run.evidence.passed===run.evidence.total && run.evidence.total>0 && run.evidence.exitCode===0
@@ -291,12 +292,18 @@ export function createReviewView({
         target?.focus({preventScroll:true});
         target?.scrollIntoView({block:'start',behavior:'instant'});
       }},el('span',{},label),el('strong',{},value)));
-    return el('div',{},taskHeader(task),baseUpdatePanel(task,run),
-      candidateNav(task,demo ? null : el('button',{id:'continue-agent-'+run.id,class:'button button-small',onclick:()=>openContinuation(run.id)},'Continue in your agent ↗')),
+    const hasPrerequisites = Boolean(task.dependsOn?.length);
+    return el('div',{},
+      hasPrerequisites ? taskHeader(task) : el('p',{class:'review-identity'},task.title+' · Requirements r'+(task.revision??1)),
+      baseUpdatePanel(task,run),
       publicationPanel(task,run),
       el('nav',{class:'review-jumps','aria-label':'Review sections'},links),
       el('p',{class:'review-next'},candidateOutcome(workspace,run).next),
-      run.summary?el('p',{class:'agent-summary review-agent-summary'},run.summary):null,grid);
+      grid,
+      disclosure('review-context-'+task.id+'-'+run.id,'Task brief, candidate details and agent summary',
+        hasPrerequisites ? null : taskHeader(task),
+        candidateNav(task,demo ? null : el('button',{id:'continue-agent-'+run.id,class:'button button-small',onclick:()=>openContinuation(run.id)},'Continue in your agent ↗')),
+        run.summary?el('p',{class:'review-agent-summary'},run.summary):null));
   }
   return reviewView;
 }

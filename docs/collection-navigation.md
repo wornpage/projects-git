@@ -6,6 +6,28 @@ for its changes, checks, review and separate integration controls. **Project
 history** retains candidates across that project; **Candidate record** holds one
 candidate's reports and decisions.
 
+## Starting a project and an agent
+
+New project separates code selection from the first task brief. In the local
+app, enter the repository path and choose **Read current commit**; confirm the
+selected committed HEAD before continuing. Inspection reads code metadata and
+does not change the source checkout or queue tasks. Hosted Artifacts projects
+keep explicit repository-name and commit entry; local inspection is unavailable.
+The selected stage and each draft are saved under the existing tab/workspace
+scope, including stacked drafts and unresolved request recovery.
+
+After creation, Task details and the empty Candidates view offer **Get agent
+instructions**, using the same connection dialog as Project settings. This entry
+is absent from read-only examples and isolated trials without agent connections.
+Copying instructions does not start an agent; the coding conversation runs it.
+The local Projects directory also exposes the explicitly scripted sample starter.
+
+Candidate review leads with compact task/revision identity and the existing four
+review sections. Supporting task/candidate context and the agent summary remain
+in a disclosure below the content. Prerequisite warnings remain visible when a
+task has dependencies; verification, independent review, owner decision and
+integration keep their existing authority and distinct records.
+
 ## Finding work at scale
 
 **Find work** searches project names across the authenticated workspace, including

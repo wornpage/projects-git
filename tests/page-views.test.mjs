@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {installFakeDOM} from './helpers/fake-dom.mjs';
 import {el} from '../public/ui/dom.js';
+import {createDialogManager} from '../public/ui/dialogs.js';
 import {createWorkbenchParts} from '../public/ui/workbench-parts.js';
 import {createTaskViews} from '../public/ui/views/queue.js';
 import {createWorkView} from '../public/ui/views/work.js';
@@ -319,5 +320,32 @@ test('review section links select content, update the fragment and focus the cho
     assert.deepEqual(sections,[{id:'review-decision',fragment:'#review-decision'}]);
   } finally {
     if(previousHistory===undefined)delete globalThis.history;else globalThis.history=previousHistory;
+  }
+});
+
+test('queued task instructions preserve their project and restore a replaced opener',async()=>{
+  const f=fixture();f.workspace.runs=f.workspace.runs.filter(run=>run.taskId!==f.task.id);f.context.demo=false;
+  const connectionCalls=[];f.ports.openAgentConnection=(...args)=>connectionCalls.push(args);
+  const dialogs=createDialogManager(document);dialogs.register('project-connection-dialog');
+  const id='agent-instructions-'+f.task.id;
+  for(const render of [createTaskViews(f.ports).task,createWorkView(f.ports)]){
+    const entry=render().querySelector('#'+id);assert.ok(entry,'Queued work has a reachable instructions entry.');
+    await entry.dispatch('click',{currentTarget:entry});
+    assert.deepEqual(connectionCalls.at(-1),[f.task.projectId,entry]);
+    dialogs.show('project-connection-dialog',null,entry);entry.isConnected=false;
+    const replacement=render().querySelector('#'+id);assert.ok(replacement);
+    document.getElementById('project-connection-dialog').close();
+    assert.equal(document.activeElement,replacement,'Refresh restores focus to the current entry.');
+  }
+});
+
+test('agent instructions stay absent from read-only examples, restricted roles and isolated trials',()=>{
+  const f=fixture();f.workspace.runs=f.workspace.runs.filter(run=>run.taskId!==f.task.id);
+  const id='agent-instructions-'+f.task.id;
+  for(const mode of ['read-only-example','restricted-role','isolated-trial']){
+    f.context.demo=mode==='read-only-example';
+    f.workspace.authentication={permissions:{manage:mode!=='restricted-role'}};
+    f.workspace.personalWorkspace=mode==='isolated-trial'?{agentConnections:false}:undefined;
+    for(const render of [createTaskViews(f.ports).task,createWorkView(f.ports)])assert.equal(render().querySelector('#'+id),null,mode);
   }
 });

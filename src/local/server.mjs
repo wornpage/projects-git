@@ -2,10 +2,10 @@ import http from 'node:http';
 import {parseWorkspacePage, projectWorkspace} from '../../public/workspace-page.js';
 import {parseProjectCatalog,projectCatalog,ProjectCatalogError} from '../../public/project-catalog.js';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, openSync, closeSync, unlinkSync, lstatSync } from 'node:fs';
-import { resolve, dirname, extname, basename } from 'node:path';
+import { resolve, dirname, extname, basename, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWorkspace, createTask, reviseTask, assignRun, startRun, completeRun, verifyRun,
-  failRun, reviewRun, mergeRun, setTaskOwner, updateTaskBase, recordGitCandidate, coordination, MAX_ACTIVE_RUNS, metrics, WorkflowError } from '../core/workflow.mjs';
+  failRun, reviewRun, mergeRun, setTaskOwner, updateTaskBase, recordGitCandidate, coordination, MAX_ACTIVE_RUNS, metrics, WorkflowError, validateCommit } from '../core/workflow.mjs';
 import { GitRunner } from './git-runner.mjs';
 import { chatProvider, executionLimits, runEditingAgent } from '../core/agent.mjs';
 import { DockerChecks } from './sandbox-checks.mjs';
@@ -302,7 +302,7 @@ export function createApplication({ dataDir = resolve(projectRoot, '.local'), pu
     coordination: Object.fromEntries(state.runs.map(run => [run.id, coordination(state, run.id)])),
     capacity: { limit: MAX_ACTIVE_RUNS, running: state.runs.filter(run => run.status === 'running').length, queued: state.runs.filter(run => run.status === 'assigned').length,
       reserved: state.runs.filter(run => run.status === 'assigned').length, occupied: state.runs.filter(run => ['assigned', 'running'].includes(run.status)).length },
-    capabilities: { demo: true, model: Boolean(modelProvider && sandbox), repository: true, merge: true, verify: true, revise: true, handoff: true, coordination: true, dependencies: true, providerVerified: false, publish: Boolean(publication) },
+    capabilities: { demo: true, model: Boolean(modelProvider && sandbox), repository: true, inspectRepository: true, merge: true, verify: true, revise: true, handoff: true, coordination: true, dependencies: true, providerVerified: false, publish: Boolean(publication) },
     githubPublication: publication ? {repository:publication.repository} : null,
     repositoryWorkflow: { cli: resolve(projectRoot, 'scripts/repository-work.mjs'), busyTaskIds: state.tasks.filter(task => repositoryOperations.has(task.projectId)).map(task => task.id), imports: [...repositoryImports.values()] },
     sampleTask,
@@ -449,6 +449,18 @@ export function createApplication({ dataDir = resolve(projectRoot, '.local'), pu
       }
       if (url.pathname === '/api/health' && request.method === 'GET') return json(response, { ok: true, provider: 'local-git' });
       if (url.pathname === '/api/workspace' && request.method === 'GET') return json(response, projectWorkspace(snapshot(),parseWorkspacePage(url.search)));
+      if (url.pathname === '/api/repositories/inspect' && request.method === 'POST') {
+        const input = await bodyJson(request);
+        if (typeof input.repo !== 'string' || input.repo.length > 1000 || !isAbsolute(input.repo) || /[\x00-\x1f]/.test(input.repo)) {
+          throw new WorkflowError('invalid_repository_path', 'Enter an absolute local repository path.', 422);
+        }
+        try {
+          const headCommit = validateCommit((await readOnlyGit(input.repo)(['rev-parse', '--verify', 'HEAD^{commit}'])).trim());
+          return json(response, { headCommit, name: basename(resolve(input.repo)) });
+        } catch {
+          throw new WorkflowError('repository_inspection_failed', 'Could not read a committed HEAD from that repository. Check the path and make an initial commit if it is empty.', 422);
+        }
+      }
       if (url.pathname === '/api/projects/catalog' && request.method === 'GET') return json(response, projectCatalog(snapshot(),parseProjectCatalog(url.search)));
       const publishRoute = /^\/api\/runs\/([a-f0-9-]{36})\/publication\/(preview|publish|([a-f0-9-]{36})\/(refresh|resume))$/.exec(url.pathname);
       if (publishRoute && request.method === 'POST') {

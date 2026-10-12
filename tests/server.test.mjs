@@ -279,3 +279,23 @@ test('restart reconciles an explicitly requested exact-head merge after Git move
     assert.equal(restarted.snapshot().recovery.errors.length, 0);
   } finally { await restarted.close(); }
 });
+
+test('repository inspection reads committed HEAD without changing source or workspace and rejects cross-origin requests',async t=>{
+  const app=await fixture(t),repo=join(app.dataDir,'inspection-source');
+  const git=(...args)=>{const result=spawnSync('git',args,{cwd:app.dataDir,encoding:'utf8',windowsHide:true});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
+  git('init',repo);
+  writeFileSync(join(repo,'note.txt'),'committed\n');
+  git('-C',repo,'add','note.txt');
+  git('-C',repo,'-c','user.name=Test','-c','user.email=test@localhost.invalid','commit','-m','Fixture');
+  const head=git('-C',repo,'rev-parse','HEAD');
+  writeFileSync(join(repo,'note.txt'),'unsaved work\n');
+  const before=app.snapshot();
+  const response=await app.post('/api/repositories/inspect',{repo});
+  assert.equal(response.status,200);assert.equal((await response.json()).headCommit,head);
+  assert.equal(readFileSync(join(repo,'note.txt'),'utf8'),'unsaved work\n');
+  assert.equal(git('-C',repo,'rev-parse','HEAD'),head);assert.deepEqual(app.snapshot(),before);
+  assert.equal((await app.post('/api/repositories/inspect',{repo:'relative/path'})).status,422);
+  assert.equal((await app.post('/api/repositories/inspect',{repo:join(app.dataDir,'missing')})).status,422);
+  const refused=await fetch(app.url+'/api/repositories/inspect',{method:'POST',headers:{'Content-Type':'application/json',Origin:'https://example.invalid'},body:JSON.stringify({repo})});
+  assert.equal(refused.status,403);
+});

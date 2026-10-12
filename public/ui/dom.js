@@ -24,6 +24,7 @@ export function explainDisabledButtons() {
       button.replaceWith(wrapper); wrapper.append(button);
     }
     if (wrapper?.classList.contains('disabled-action')) {
+      wrapper.hidden = button.hidden;
       const reason = button.disabled ? button.title : '';
       wrapper.dataset.help = reason;
       // Disabled buttons ignore pointer input; the wrapper owns their visible help.

@@ -1,11 +1,11 @@
 import {el, panel, timeOnly} from '../dom.js';
-import {taskOutcome,taskBriefing,dependencyState} from '../../workbench-state.js';
+import {taskOutcome,taskBriefing,dependencyState,taskQueued} from '../../workbench-state.js';
 import {taskLifecycle} from '../task-lifecycle.js';
 
 export function createWorkView({
   getContext,
   parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff,
-  switchView, openContinuation, checksFailed, independentlyVerified, openInspector, collections
+  switchView, openContinuation, checksFailed, independentlyVerified, openInspector, collections, openAgentConnection
 }) {
   const {emptyState, taskHeader, timeline, commitValue, runStatus} = parts;
   function agentCard(run, index, brief, result) {
@@ -27,8 +27,8 @@ export function createWorkView({
       el('div', {}, el('dt', {}, 'Files'), el('dd', {}, run.changedFiles.length ? run.changedFiles.join(', ') : 'Awaiting changes')));
     const checks = el('div', {class: 'agent-checks'},
       el('span', {class: 'check-count ' + (failed ? 'failed' : evidence ? '' : 'pending')},
-        evidence ? evidence.passed + ' / ' + evidence.total + ' checks passing' : 'Checks pending'),
-      el('span', {class: 'section-kicker'}, independentlyVerified(run) ? 'VERIFIED AT HEAD' : evidence ? 'REPORTED' : 'NO REPORT YET'));
+        run.verificationPending ? 'Checks running' : evidence ? (failed ? (evidence.total-evidence.passed)+' checks failed · ' : '') + evidence.passed + ' / ' + evidence.total + ' checks passing' : 'Checks not run'),
+      el('span', {class: 'section-kicker'}, independentlyVerified(run) ? 'Checked against this commit' : evidence ? 'Reported · needs verification' : 'No report yet'));
     const activity = run.origin === 'reconciled-git' ? 'Reapplied · verify and review next'
       : run.finishedAt ? 'Finished ' + timeOnly(run.finishedAt)
       : run.startedAt ? 'Started ' + timeOnly(run.startedAt) : 'Awaiting execution';
@@ -94,7 +94,10 @@ export function createWorkView({
       : agentsUnavailable ? 'Your task is saved. This isolated trial has no connected agents or model key, so no agent work has started.'
       : 'No agent has been assigned. Start with one checkout for this task.';
     const assignment = repositoryAgents(task);
-    return el('div', {}, taskHeader(task), runs.length || agentsUnavailable ? null : assignment,
+    return el('div', {}, taskHeader(task),
+      !demo && !agentsUnavailable && taskQueued(workspace,task) && (!workspace.authentication || workspace.authentication.permissions.manage)
+        ? el('button',{type:'button',id:'agent-instructions-'+task.id,class:'button button-primary button-small',onclick:event=>openAgentConnection(task.projectId,event.currentTarget)},'Get agent instructions') : null,
+      runs.length || agentsUnavailable ? null : assignment,
       runs.length ? rows.controls : null,
       runs.length ? rows.items.length?el('ul', { class: 'run-grid collection-list', 'aria-label':'Candidates for this task' }, rows.items.map(run=>el('li',{},agentCard(run,runs.indexOf(run),brief,results.get(run.id))))) : el('p',{},'No matching candidates. Clear filters to browse every retained result.') : panel(emptyTitle,
         el('p', { class: 'no-candidate' }, emptyText)),

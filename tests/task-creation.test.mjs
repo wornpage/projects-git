@@ -53,11 +53,23 @@ for(const chosen of [null,2,4])test(`model allowance submits ${chosen ?? 'the on
   assert.equal(f.calls.length,1);
 });
 
+test('hosted onboarding keeps explicit Artifacts commit entry without local inspection',async()=>{
+  const f=fixture();f.context.workspace.provider='cloudflare-artifacts';
+  f.controller.activate('repository');f.controller.update();
+  assert.equal(f.$('#inspect-repository').hidden,true);
+  f.$('#project-name-input').value='Hosted project';f.$('#repository-path').value='customer-portal';f.$('#repository-base').value='a'.repeat(40);
+  await f.$('#repository-next').dispatch('click');
+  assert.equal(f.$('#task-details-step').hidden,false);
+  assert.match(f.$('#task-source-note').textContent,/Artifacts repository/);
+  assert.equal(f.calls.length,0);
+});
+
 test('connecting code from workspace home opens its saved task queue without launching an agent',async()=>{
   const f=fixture();f.context.view='projects';f.context.projectId=null;
   f.controller.activate('repository');f.controller.update();
   f.$('#project-name-input').value='Connected from home';f.$('#repository-path').value='C:/code/ordinary';f.$('#repository-base').value='a'.repeat(40);
   await f.fill('First agreed task');
+  await f.$('#repository-next').dispatch('click');
   const pending=f.submit(),saved=result('new-project');
   assert.equal(f.calls.length,1);assert.equal(f.calls[0].body.source,'repository');
   assert.equal(f.calls[0].body.tasks[0].owner,'Owner');
@@ -164,4 +176,38 @@ test('choosing a draft destination keeps the modal open and does not navigate th
   f.$('#task-source').value='project:one';await f.$('#task-source').dispatch('change');
   assert.equal(f.$('#task-title-input').value,'First project draft');
   assert.equal(f.$('#task-launcher').open,true);assert.equal(f.calls.length,0);
+});
+
+test('repository inspection reads a commit without queueing and ignores a late changed-path response',async()=>{
+  const f=fixture();f.context.workspace.capabilities.inspectRepository=true;
+  f.controller.activate('repository');f.controller.update();
+  assert.equal(f.$('#task-details-step').hidden,true);
+  f.$('#repository-path').value='C:/code/first';
+  const pending=f.$('#inspect-repository').dispatch('click');
+  assert.equal(f.calls[0].path,'/api/repositories/inspect');
+  f.$('#repository-path').value='C:/code/second';await f.$('#repository-path').dispatch('input');
+  f.calls[0].resolve({headCommit:'a'.repeat(40),name:'first'});await pending;
+  assert.equal(f.$('#repository-base').value,'');
+  const next=f.$('#inspect-repository').dispatch('click');
+  f.calls[1].resolve({headCommit:'b'.repeat(40),name:'second'});await next;
+  assert.equal(f.$('#repository-base').value,'b'.repeat(40));
+  await f.$('#repository-next').dispatch('click');
+  assert.equal(f.$('#task-details-step').hidden,false);
+  assert.equal(f.$('#repository-source-fields').hidden,true);
+  assert.equal(f.calls.length,2);assert.equal(f.selected.length,0);
+  const restored=fixture(JSON.parse(JSON.stringify(f.controller.snapshot())));
+  assert.equal(restored.$('#task-details-step').hidden,false);
+  assert.equal(restored.$('#repository-base').value,'b'.repeat(40));
+});
+
+test('returning from code selection focuses the mounted stacked draft and keeps both briefs',async()=>{
+  const f=fixture();f.controller.activate('repository');f.controller.update();
+  f.$('#project-name-input').value='Stacked project';f.$('#repository-path').value='C:/code/source';f.$('#repository-base').value='a'.repeat(40);
+  await f.$('#repository-next').dispatch('click');await f.fill('First brief');
+  await f.$('#add-task-draft').dispatch('click');
+  const title=f.$('#task-title-input-1');title.value='Second brief';await title.dispatch('input');
+  await f.$('#repository-back').dispatch('click');
+  await f.$('#repository-next').dispatch('click');
+  assert.equal(f.document.activeElement,title);
+  assert.deepEqual(f.controller.snapshot().tasks.map(task=>task.title),['First brief','Second brief']);
 });

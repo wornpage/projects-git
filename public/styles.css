@@ -2974,6 +2974,7 @@ worn-button {
 .brief-criteria li + li {
   margin-top: 6px;
 }
+.review-identity { font-size:13px; color:var(--worn-text-secondary); margin:0 0 12px; overflow-wrap:anywhere; }
 .review-jumps {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3296,6 +3297,13 @@ dialog.inspector-drawer > .connection-dialog-header { margin-block-end:20px; }
 .automatic-merge-settings > p { margin:0; }
 dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90dvh; padding:24px; overflow-y:auto; }
 .task-composer-dialog .task-create-form { padding:0; }
+.task-details-step { display:grid; gap:16px; min-width:0; border:0; padding:0; margin:0; }
+.task-details-step[hidden] { display:none; }
+.task-details-step > legend { margin-bottom:16px; font-weight:600; }
+#repository-source-fields { min-width:0; border:0; padding:0; margin:0; }
+#repository-source-fields[hidden] { display:none; }
+#repository-source-fields legend { margin-bottom:16px; font-weight:600; }
+#task-source-note { overflow-wrap:anywhere; }
 .task-composer-dialog .connection-dialog-header { position:sticky; top:-24px; background:var(--worn-surface); z-index:2; padding-top:16px; }
 .task-stack { display:grid; grid-template-columns:180px minmax(0,1fr); gap:22px; }
 .draft-list { display:flex; flex-direction:column; gap:6px; align-self:start; }

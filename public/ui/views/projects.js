@@ -40,12 +40,14 @@ export function createProjectsView({getContext, getProjectSelection, selectProje
         el('p',{class:'small muted'},'This trial has no connected agents or model key. It does not run agents or manufacture completed work.'),
         !projects.length && (!page || page.totalProjects === 0) && workspace.personalWorkspace.starterAvailable
           ? el('button',{type:'button',class:'button button-primary',disabled:busy,onclick:createStarter},busy?'Preparing starter…':'Create my starter project') : null)) : null,
-      workspace.authentication && !workspace.authentication.permissions.manage ? null : el('div',{class:'directory-actions'},el('button',{type:'button',class:'button button-primary button-small',onclick:()=>openTaskComposer('repository')},'+ New project')),
+      workspace.authentication && !workspace.authentication.permissions.manage ? null : el('div',{class:'directory-actions'},
+        el('button',{type:'button',class:'button button-primary button-small',onclick:()=>openTaskComposer('repository')},'+ New project'),
+        workspace.capabilities?.demo ? el('button',{type:'button',class:'button button-small',onclick:()=>openTaskComposer('sample')},'Try a sample project') : null),
       projects.length ? el('ul',{class:'project-directory collection-list','aria-label':'Projects'},projects.map(project=>el('li',{},projectCard(project))))
         : workspace.personalWorkspace ? null : panel('Your first project',el('div',{class:'panel-body'},
           el('p',{},workspace.authentication && !workspace.authentication.permissions.manage ? 'The workspace owner connects projects and queues tasks. Your assigned work will appear here.' : 'Start with New project. Connect committed code, then describe one useful task.'),
           el('ol',{class:'journey-steps'},
-            el('li',{},workspace.provider==='cloudflare-artifacts' ? 'Have the existing Artifacts repository name and full base commit ready. The current setup does not browse repositories for you.' : 'Have the local repository path and full base commit ready.'),
+            el('li',{},workspace.provider==='cloudflare-artifacts' ? 'Have the existing Artifacts repository name and full base commit ready. The current setup does not browse repositories for you.' : 'Enter your local repository path, read its current commit, and confirm the code to use.'),
             el('li',{},'Write the task purpose and acceptance requirements.'),
             el('li',{},'Open Project settings → Connect agent for the assignment instructions. Your coding chat runs the agent.'),
             el('li',{},'Inspect the submitted change and configure independent checks. In the hosted app, assign a separate reviewer before making your decision.'),

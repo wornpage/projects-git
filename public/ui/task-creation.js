@@ -7,11 +7,13 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
   let composerSource = null, savedComposer = null, taskFormInitialized = false;
   let taskStack = [blankTask()], pendingTaskStart = null, pendingModelStart = null, taskStarting = false;
   let epoch = 0;
+  let codeConfirmed = false, inspectingRepository = false, inspectionRequest = 0;
   const composerSources = new Map();
   const {renderTaskDrafts,validateDrafts} = createTaskComposer({getContext: () => ({...getContext(), taskStack}), saveSession, updateChrome, showError});
   function blankTask(owner = '') { return {title:'', purpose:'', criteria:'', owner}; }
   function restore(saved) {
     epoch++;
+    codeConfirmed = false; inspectionRequest++; inspectingRepository = false;
     composerSources.clear(); composerSource = null; taskFormInitialized = false;
     taskStarting = false; pendingTaskStart = null; pendingModelStart = null;
     savedComposer = saved; taskStack = [blankTask()];
@@ -22,7 +24,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
   }
   function composerSnapshot(source = composerSource ?? $('#task-source').value) {
     return {tasks: structuredClone(taskStack), source, name: $('#project-name-input').value,
-      repo: $('#repository-path').value, base: $('#repository-base').value, pending: structuredClone(pendingTaskStart)};
+      repo: $('#repository-path').value, base: $('#repository-base').value, codeConfirmed, pending: structuredClone(pendingTaskStart)};
   }
   function snapshot() {
     const current = composerSnapshot();
@@ -38,7 +40,10 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
       return false;
     }
     if (composerSource) composerSources.set(composerSource, composerSnapshot());
+    codeConfirmed = false; inspectionRequest++; inspectingRepository = false;
+    $('#repository-inspection-status').textContent = '';
     const saved = composerSources.get(source);
+    codeConfirmed = saved?.codeConfirmed === true;
     taskStack = saved ? structuredClone(saved.tasks) : [{title:'',purpose:'',criteria:'',owner:workspace.projects?.[source.slice(8)]?.owner ?? ''}];
     for (const [id,key] of [['project-name-input','name'],['repository-path','repo'],['repository-base','base']]) $('#' + id).value = saved?.[key] ?? '';
     pendingTaskStart = saved?.pending ?? null;
@@ -55,6 +60,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
       const project = currentProject();
       $('#task-source').value = project ? 'project:' + project.id : workspace.capabilities?.repository ? 'repository' : 'sample';
       if (savedComposer) {
+        codeConfirmed = savedComposer.codeConfirmed === true;
         taskStack = savedComposer.tasks;
         if ([...$('#task-source').options].some(option => option.value === savedComposer.source)) $('#task-source').value = savedComposer.source;
         $('#project-name-input').value = savedComposer.name ?? ''; $('#repository-path').value = savedComposer.repo ?? ''; $('#repository-base').value = savedComposer.base ?? '';
@@ -70,10 +76,23 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
       activateComposer('project:' + project.id);
     const source = $('#task-source').value, mode = $('#task-execution').value;
     const sample = source === 'sample';
+    const codeStep = source === 'repository' && !codeConfirmed && !pendingTaskStart;
+    $('#repository-source-fields').hidden = !codeStep;
+    $('#repository-next').hidden = !codeStep;
+    $('#repository-next').disabled = taskStarting || Boolean(pendingTaskStart) || inspectingRepository;
+    $('#repository-back').hidden = source !== 'repository' || !codeConfirmed;
+    $('#repository-back').disabled = taskStarting || Boolean(pendingTaskStart);
+    $('#task-details-step').hidden = codeStep;
+    $('#task-details-step').disabled = codeStep;
+    $('#task-details-label').textContent = source === 'repository' ? '2. Describe your first task' : 'Describe the work';
+    $('#create-task').hidden = codeStep;
+    $('#inspect-repository').hidden = !workspace.capabilities?.inspectRepository;
+    $('#inspect-repository').disabled = taskStarting || Boolean(pendingTaskStart) || inspectingRepository;
     const activeWork = workspace.runs.some(run => ['assigned', 'running'].includes(run.status));
     const supported = !sample ? workspace.capabilities?.repository : mode === 'model' ? workspace.capabilities?.model : workspace.capabilities?.demo;
-    $('#new-task-summary').textContent = sample ? 'New project · sample starter' : source==='repository' ? 'New project · connect code' : 'Add to the task queue';
-    $('#create-task').disabled = taskStarting || !supported || sample && (busy || activeWork);
+    $('#new-task-summary').textContent = sample ? 'New project · sample starter' : source==='repository' ? codeStep ? 'New project · connect code' : 'New project · first task' : 'Add to the task queue';
+    if (source === 'repository' && !codeStep) $('#task-source-note').textContent = $('#project-name-input').value + ' · ' + $('#repository-path').value + ' · Commit ' + $('#repository-base').value + (workspace.provider === 'cloudflare-artifacts' ? '. The project uses this Artifacts repository and selected base commit.' : '. Only this committed code will be copied.');
+    $('#create-task').disabled = codeStep || taskStarting || !supported || sample && (busy || activeWork);
     $('#create-task').textContent = taskStarting ? source === 'repository' ? 'Connecting code…' : 'Saving tasks…' : pendingTaskStart ? 'Retry this task stack' : sample ? 'Create task' : (source === 'repository' ? 'Create project & queue ' : 'Queue ') + taskStack.length + (taskStack.length === 1 ? ' task' : ' tasks');
     $('#create-task').title = taskStarting ? 'The same request is still in progress.' : !supported ? 'This workspace does not support this project source.' : sample && activeWork ? 'Wait for current sample work to finish.' : 'Save these tasks. Agents can claim queued work when ready.';
     $('#add-task-draft').hidden = sample;
@@ -183,6 +202,34 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
       if (isCurrent()) { taskStarting = false; updateChrome(); schedulePoll(); }
     }
   }
+  $('#repository-next').addEventListener('click', () => {
+    if (taskStarting || pendingTaskStart || inspectingRepository) return;
+    for (const id of ['project-name-input','repository-path','repository-base']) if (!$('#'+id).reportValidity()) return;
+    codeConfirmed = true; updateChrome(); saveSession(); $('#draft-editor').querySelector('input').focus();
+  });
+  $('#repository-back').addEventListener('click', () => {
+    if (taskStarting || pendingTaskStart) return;
+    codeConfirmed = false; $('#task-source-note').textContent = 'Choose the repository and exact committed baseline for this project. Your task draft is kept while you change the code selection.';
+    updateChrome(); saveSession(); $('#repository-path').focus();
+  });
+  $('#inspect-repository').addEventListener('click', async () => {
+    if (taskStarting || pendingTaskStart || inspectingRepository || !getContext().workspace.capabilities?.inspectRepository) return;
+    const repo = $('#repository-path').value.trim();
+    if (!repo) { $('#repository-path').reportValidity(); return; }
+    const request = ++inspectionRequest, isCurrent = requestScope(), previousBase = $('#repository-base').value;
+    const current = () => isCurrent() && request === inspectionRequest && $('#task-source').value === 'repository' && $('#repository-path').value.trim() === repo;
+    inspectingRepository = true; $('#repository-inspection-status').textContent = 'Reading committed code…'; updateChrome();
+    try {
+      const result = await api('/api/repositories/inspect', {repo});
+      if (!current() || $('#repository-base').value !== previousBase) return;
+      if (!/^[a-f0-9]{40}([a-f0-9]{24})?$/.test(result?.headCommit)) throw new Error('The server did not return a valid commit.');
+      $('#repository-base').value = result.headCommit;
+      if (!$('#project-name-input').value.trim()) $('#project-name-input').value = result.name;
+      $('#repository-inspection-status').textContent = 'Current committed HEAD loaded. Confirm the selected commit before continuing. Uncommitted files are not included.';
+      saveSession();
+    } catch (error) { if (current()) $('#repository-inspection-status').textContent = error.message; }
+    finally { if (isCurrent() && request === inspectionRequest) { inspectingRepository = false; updateChrome(); } }
+  });
   async function releaseRequest() {
     if (!pendingTaskStart || taskStarting) return;
     const source = composerSource, isCurrent = requestScope();
@@ -204,7 +251,11 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     renderTaskDrafts(); updateChrome(); saveSession();
     $('#task-title-input-' + (taskStack.length - 1)).focus();
   });
-  for (const id of ['project-name-input', 'repository-path', 'repository-base']) $('#' + id).addEventListener('input', saveSession);
+  for (const id of ['project-name-input', 'repository-path', 'repository-base']) $('#' + id).addEventListener('input', () => {
+    if (id === 'repository-path') { $('#repository-base').value = ''; codeConfirmed = false; }
+    if (id !== 'project-name-input') { inspectionRequest++; inspectingRepository = false; $('#repository-inspection-status').textContent = ''; updateChrome(); }
+    saveSession();
+  });
   function updateExecutionForm() { $('#model-form').hidden = $('#task-execution').value !== 'model'; updateModelBudget(); }
   $('#task-source').addEventListener('change', () => {
     const source = $('#task-source').value;

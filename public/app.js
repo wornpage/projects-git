@@ -102,7 +102,7 @@ const {reviewPanel} = createReviewForm({getContext, drafts, api, mutate, refresh
 const publicationPanel = createPublicationView({getContext, captureSession:connection.captureSession, api, mutate, refresh, openInspector});
 
 const taskViews = createTaskViews({getContext, parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
-  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections});
+  switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections, openAgentConnection});
 const views = {
   projects: createProjectsView({getContext, getProjectSelection:id=>projectSelections.get(id), selectProject, switchView, openTaskComposer, changeProjectPage, createStarter: async () => {
     const result = await mutate(() => api("/api/workspace/starter", {expectedWorkspaceId:workspace.id}), "Your starter project is ready.");
@@ -111,7 +111,7 @@ const views = {
   queue: taskViews.queue,
   overview: taskViews.task,
   work: createWorkView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff, collections,
-    switchView, openContinuation, checksFailed, independentlyVerified, openInspector}),
+    switchView, openContinuation, checksFailed, independentlyVerified, openInspector, openAgentConnection}),
   review: createReviewView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, reviewPanel, publicationPanel, downloadReviewContext,
     verificationDrafts, actionFeedback, actionKey, actionNotice, mutate, runOperation, sha256Text, refresh, finishBaseUpdate, openContinuation, independentlyVerified, openInspector, onSectionChange:updateChrome}),
   evidence: createEvidenceView({getContext, parts, disclosure, currentProject, currentTask, currentRun, taskNumber,
@@ -396,12 +396,7 @@ function updateProjectHeader() {
   projectHeaderKey = key;
   const controlsId = 'project-controls-' + project.id;
   const controls = createProjectControls({id: controlsId, onOpen: (body,opener)=>openInspector('Project settings · '+project.name,body)},
-    demo || workspace.personalWorkspace?.agentConnections === false ? null : el('button', { id: 'shell-connect-agent', class: 'button button-small', onclick: () => {
-      dialogs.skipFocusRestore('inspector-dialog'); $('#inspector-dialog').close();
-      $('#project-connection-title').textContent = 'Connect agent · ' + project.name;
-      $('#project-connection-content').replaceChildren(projectConnection(project));
-      dialogs.show('project-connection-dialog', '#close-project-connection', $('#shell-project-controls'));
-    } }, 'Connect agent'), admissionSwitch(project),
+    demo || workspace.personalWorkspace?.agentConnections === false ? null : el('button', { id: 'shell-connect-agent', class: 'button button-small', onclick: () => openAgentConnection(project.id, $('#shell-project-controls')) }, 'Connect agent'), admissionSwitch(project),
     automaticMergeControls({project, hosted:!demo && workspace.authentication?.mode === 'cloudflare-access', canManage:workspace.authentication?.permissions.manage,
       busy:actions.busy, onChange:(enabled, expectedVersion) => mutate(() => api('/api/projects/' + project.id + '/automatic-merge', {enabled, expectedVersion}),
         enabled ? 'Automatic approval and merge enabled for eligible changes in this project.' : 'Automatic approval and merge disabled. Inspect any in-progress merge separately.')}),
@@ -420,6 +415,14 @@ function openTaskComposer(source) {
   if (!$('#task-launcher').open) dialogs.show('task-launcher','#new-task-summary');
   updateChrome();
   $('#new-task-summary').focus();
+}
+function openAgentConnection(projectId, opener = document.activeElement) {
+  const project = workspace.projects[projectId];
+  if (!project) throw new Error('The selected project is no longer available.');
+  if ($('#inspector-dialog').open) { dialogs.skipFocusRestore('inspector-dialog'); $('#inspector-dialog').close(); }
+  $('#project-connection-title').textContent = 'Connect agent · ' + project.name;
+  $('#project-connection-content').replaceChildren(projectConnection(project));
+  dialogs.show('project-connection-dialog', '#close-project-connection', opener);
 }
 function projectConnection(project) {
   const hosted = workspace.provider === 'cloudflare-artifacts';
