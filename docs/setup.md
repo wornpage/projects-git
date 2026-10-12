@@ -31,10 +31,12 @@ installation is not required.
 npm run dev:demo
 ```
 
-Open `http://127.0.0.1:8894` and choose **Explore a completed project**. Follow
-Queue → Agent work → Review → Evidence. The example contains clearly labeled
-invented records, including passing and failing alternatives and a queued
-follow-up. Browsing does not run an agent or contact the real workspace.
+Open `http://127.0.0.1:8894` and choose **Explore a completed project**. Open the
+project's **Task queue** and select a task for its brief. Browse **Candidates**,
+then open a result's **Changes & checks** and **Candidate record**. The example
+contains clearly labeled invented records, including passing and failing
+alternatives and a queued follow-up. Browsing does not run an agent or contact
+the real workspace.
 
 This entry uses local Workerd and static assets. It needs no Cloudflare account,
 sign-in, model key or Docker runtime. The source configuration disables public
@@ -52,7 +54,7 @@ or the trusted checkout starter. Project records and owned Git copies are stored
 in `.local/`. Local attribution is explicitly labeled; it is separate from the
 hosted authenticated ownership model.
 
-Choose **Project controls → Connect agent → Copy agent instructions** and give
+Choose **Project settings → Connect agent → Copy agent instructions** and give
 those instructions to your existing coding conversation. The host runs the
 agent; the project holds its queue, commits, checks and review record. To inspect
 the source CLI directly:
@@ -69,7 +71,9 @@ immutable runtime image. The trusted starter's scripted proof has its own scope.
 
 ## Check the source
 
-Start Docker Desktop's Linux engine, then run from a clean source checkout:
+Start Docker Desktop's Linux engine, then run from a clean Git checkout. The
+complete CI receipt uses commit metadata, so this command needs a clone rather
+than an extracted source ZIP:
 
 ```sh
 pwsh -NoProfile -File scripts/ci.ps1
@@ -90,11 +94,18 @@ Cloudflare Access, Artifacts, container qualification, deployment and submission
 
 - If Node reports an unsupported engine, install Node.js 24.19 or later, then
   run the locked install again.
-- If a port is occupied, stop the other instance or select a free one. For the
-  demo, `npm run dev:demo -- --port 8895 --inspector-port 9295` supplies alternate
-  local ports. For the working server, set the `PORT` environment variable.
-- If Docker-dependent checks cannot reach the engine, start its Linux engine
-  and rerun the full check. A reduced test population is not the full CI result.
+- If a demo port is occupied, choose unused application and inspector ports and
+  invoke the installed CLI directly from the source root:
+
+  ```sh
+  node node_modules/wrangler/bin/wrangler.js dev --local --config wrangler.demo.jsonc --ip 127.0.0.1 --port 8895 --inspector-port 9295
+  ```
+
+  `npm run dev:demo` already supplies both port flags; appending them repeats
+  those arguments. For the working server, set the `PORT` environment variable.
+- `npm run build` also needs Docker's Linux engine, including its dry-run
+  container-image build. Start the engine before building or running the full
+  checks. A reduced test population is not the full CI result.
 - For an interrupted local workspace, preserve `.local/`. A graceful stop releases
   `.local/server.lock`; a forced stop can leave that lock behind and prevent startup.
   Verify that all servers using this data directory are stopped before deliberately

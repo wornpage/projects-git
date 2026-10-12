@@ -53,7 +53,7 @@ See [setup and troubleshooting](docs/setup.md).
 
 ## Connect your coding agent
 
-Choose **Project controls → Connect agent → Copy agent instructions** and give
+Choose **Project settings → Connect agent → Copy agent instructions** and give
 those instructions to your coding conversation. Its host runs the agent.
 
 ```sh
