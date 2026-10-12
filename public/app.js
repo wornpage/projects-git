@@ -167,10 +167,11 @@ function clearError() { lastError = ""; errorNotice.clear(); }
 function openInspector(title,...body) {
   const opener=document.activeElement;
   if (document.querySelector('dialog[open]') && !$('#inspector-dialog').open) return;
-  if ($('#inspector-dialog').open && compactNavigation.isOpen()) $('#inspector-dialog').close();
+  const restoredNavigation=compactNavigation.restore();
   $('#inspector-title').textContent=title;
   $('#inspector-content').replaceChildren(...body);
   if (!$('#inspector-dialog').open) dialogs.show('inspector-dialog','#close-inspector',opener);
+  else if(restoredNavigation) $('#close-inspector').focus();
 }
 
 function actionNotice(key) {

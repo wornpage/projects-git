@@ -33,6 +33,7 @@ export function createDialogManager(document) {
       if (canDismiss()) dialog.close();
     });
     dialog.addEventListener('close', () => {
+      if (dialog.open) return;
       backdropPress = false;
       const opener = openers.get(id);
       openers.delete(id);
