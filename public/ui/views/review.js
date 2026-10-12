@@ -8,7 +8,7 @@ export function createReviewView({
   getContext,
   parts, disclosure, currentTask, currentRun, taskRuns, reviewPanel, publicationPanel, downloadReviewContext,
   verificationDrafts, actionFeedback, actionKey, actionNotice,
-  mutate, runOperation, sha256Text, refresh, finishBaseUpdate, openContinuation, independentlyVerified, openInspector, onSectionChange
+  mutate, runOperation, sha256Text, refresh, finishBaseUpdate, openContinuation, independentlyVerified, openInspector, onSectionChange, switchView, captureReviewSurface
 }) {
   const {emptyState, taskHeader, candidateNav, evidenceChecks, diffPanel} = parts;
   const findingDecisionDrafts = new Map();
@@ -17,6 +17,15 @@ export function createReviewView({
   const decisionLabel = value => value === 'changes_requested' ? 'Changes requested' : value === 'pass' ? 'Passed' :
     value === 'resolved' ? 'Resolved' : value === 'deferred' ? 'Deferred' : value === 'dismissed' ? 'Dismissed' : value;
   const countLabel = (count, singular, plural) => `${count} ${count === 1 ? singular : plural}`;
+  async function revealVerification(workspaceId, taskId, runId, surfaceCurrent) {
+    if (!await refresh(true) || !surfaceCurrent()) return false;
+    const current = getContext();
+    if (current.workspace.id === workspaceId && current.view === 'review' && current.selectedTask === taskId && current.selectedRun === runId) {
+      await switchView('review', taskId, runId, {section:'verification'});
+      return true;
+    }
+    return false;
+  }
   function reviewerAssignmentPanel(workspace,run) {
     const actor=workspace.authentication?.principal;
     if(getContext().demo||workspace.provider!=='cloudflare-artifacts'||actor?.kind!=='owner'||!['awaiting_review','accepted'].includes(run.status))return null;
@@ -148,7 +157,7 @@ export function createReviewView({
       demo ? el('p',{class:'small'},'This read-only example contains an illustrative review. Its records are invented; browsing does not authenticate a reviewer or run checks.')
       : !hosted ? el('p',{class:'small'},'Local loopback decisions are attribution. This mode does not authenticate an independent reviewer or establish a security boundary between local processes.')
       : el('p',{class:'small'},'Reviewer credentials cannot claim work, edit code, run checks, accept candidates or merge. A changed commit, requirements, owner or verification policy makes the assessment stale.'),
-      !demo && hosted && !workspace.authentication?.reviewerClientIds?.length && !workspace.authentication?.reviewerSubjects?.length ? el('p',{class:'small'},'No independent reviewer is configured. Allowlist a separate Access reviewer identity before owner acceptance.') : null,
+      !demo && hosted && workspace.authentication?.principal?.kind==='owner' && !workspace.authentication?.reviewerClientIds?.length && !workspace.authentication?.reviewerSubjects?.length ? el('p',{class:'small'},'No independent reviewer is configured. Allowlist a separate Access reviewer identity before owner acceptance.') : null,
       reviewerAssignmentPanel(workspace,run),
       hosted && canReadContext && ['awaiting_review','accepted'].includes(run.status) && independentlyVerified(run) ? el('button',{id:'review-context-'+run.id,type:'button',class:'button button-small review-context-download',disabled:getContext().busy,onclick:()=>downloadReviewContext(run)},'Download read-only review context') : null,
       assessment ? el('article',{class:'review-assessment-card'},
@@ -190,21 +199,36 @@ export function createReviewView({
       }));
     };
     drawRows();
+    const resultNotice = el('p', {class:'small',role:'status',hidden:true});
+    const reportButton = el('button', {type:'button',class:'button button-small',hidden:true,onclick:()=>loadReport()}, 'Load check report');
+    async function loadReport() {
+      if (getContext().busy || reportButton.disabled) return;
+      const surfaceCurrent=captureReviewSurface(), draftBefore=JSON.stringify(draft);
+      reportButton.disabled=true;
+      try {
+        if (await revealVerification(workspace.id,task.id,run.id,()=>surfaceCurrent()&&JSON.stringify(draft)===draftBefore)) verificationDrafts.delete(key);
+      } finally { reportButton.disabled=false; }
+    }
     const form = el('form', { class: 'verification-form', onsubmit: async event => {
       event.preventDefault(); if (getContext().busy) return;
+      resultNotice.hidden = reportButton.hidden = true;
       const plan = { format: 'repository-command-checks/v1', commit: run.headCommit, taskRevision: task.revision,
         requirementsSha256: await sha256Text(JSON.stringify({ title:task.title, purpose:task.purpose, criteria:task.criteria, revision:task.revision })), timeoutMs:60000,
         checks:draft.checks.map(check=>({name:check.name,argv:['/bin/sh','-lc',check.command],stdin:check.stdin,expected:{exitCode:check.exitCode,stdout:check.stdout}})) };
       const definition = JSON.stringify(plan), definitionSha256 = await sha256Text(definition);
       const result = await mutate(() => runOperation('/api/runs/' + run.id + '/checks', { definition, definitionSha256, ...(hosted ? {} : { image:draft.image.trim() }) }), 'Check request recorded. Follow the verification report for completion and results.',
         {key:actionKey('checks',task,run),pending:'Checking this commit against the saved expectations. Allow up to 60 seconds; recording a request does not mean the checks passed.'});
-      if (result) { verificationDrafts.delete(key); await refresh(true); $('#verification')?.focus({preventScroll:true}); }
+      if (result) {
+        resultNotice.hidden = reportButton.hidden = false;
+        resultNotice.textContent = 'Check request recorded. Load the latest report without running the checks again.';
+        await loadReport();
+      }
     } }, el('p', { class:'small' }, hosted ? 'Choose checks independently of the agent. Each command runs in a fresh Linux container with Node and Python, the committed files, no Git credentials and no internet access. Expected outputs are compared outside the container. Install other runtimes in the server’s pinned image before using them.' : 'Choose checks independently of the agent. They run in an installed Linux container with read-only source, temporary scratch space and no network. Each result must match its expected exit code and stdout.'),
       el('p', { class:'head-hint' }, 'These checks bind to ' + shortSha(run.headCommit) + ' and requirements r' + task.revision + '. Total allowance: 60 seconds. Additional written criteria still require review.'),
       hosted ? el('p', { class: 'small muted' }, 'Runtime image: configured by the workspace operator. Its immutable digest is recorded with the result. Each check starts again from the same committed files.') : [el('label', { for:image.id }, 'Verification runtime · immutable Docker image'), image], rows,
       addCheck,
       el('button', { id:'check-submit-'+run.id, type:'submit', class:'button button-primary', disabled:busy, title:busy?'Wait for the current operation.':'Run these checks against this exact commit.' }, actionFeedback.get(actionKey('checks',task,run))?.phase==='pending' ? 'Checking commit…' : 'Run independent checks'),
-      actionNotice(actionKey('checks',task,run)));
+      resultNotice, reportButton, actionNotice(actionKey('checks',task,run)));
     return el('button',{type:'button',class:'button button-small',onclick:()=>openInspector('Independent check setup',form)},run.evidence?'Configure checks for this revision':'Configure independent checks');
   }
 
@@ -227,7 +251,7 @@ export function createReviewView({
       canVerify ? el("button", { id:'recheck-'+run.id, type:'button', class: "button button-small", disabled: busy, title: busy ? 'Wait for the current action to finish.' : 'Recheck this exact commit against the current requirements.', onclick: async () => {
         const result = await mutate(() => runOperation(`/api/runs/${encodeURIComponent(run.id)}/verify`, { headCommit: run.headCommit, taskRevision: revision }), 'Recheck request recorded. Follow the current verification report before accepting.',
           {key:actionKey('recheck',task,run),pending:'Rechecking the retained commit against current requirements. No agent code is regenerated.'});
-        if (result) { await refresh(true); $('#review-decision')?.focus({ preventScroll: true }); }
+        if (result) await revealVerification(workspace.id, task.id, run.id, captureReviewSurface());
       } }, run.evidence ? "Recheck retained commit" : "Run preserved checks") : null,
       canVerify ? actionNotice(actionKey('recheck',task,run)) : null,
       earlier));

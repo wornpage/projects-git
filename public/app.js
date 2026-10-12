@@ -117,7 +117,7 @@ const views = {
   work: createWorkView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff, collections,
     switchView, openContinuation, checksFailed, independentlyVerified, openInspector, openAgentConnection}),
   review: createReviewView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, reviewPanel, publicationPanel, downloadReviewContext,
-    verificationDrafts, actionFeedback, actionKey, actionNotice, mutate, runOperation, sha256Text, refresh, finishBaseUpdate, openContinuation, independentlyVerified, openInspector, onSectionChange:updateChrome}),
+    verificationDrafts, actionFeedback, actionKey, actionNotice, mutate, runOperation, sha256Text, refresh, finishBaseUpdate, openContinuation, independentlyVerified, openInspector, onSectionChange:updateChrome, switchView, captureReviewSurface}),
   evidence: createEvidenceView({getContext, parts, disclosure, currentProject, currentTask, currentRun, taskNumber,
     retainedSearches, loadIndexedSearch, rebuildSearch, render, announce, switchView, downloadEvidence, independentlyVerified, checksFailed, collections}),
 };
@@ -172,6 +172,15 @@ function openInspector(title,...body) {
   $('#inspector-content').replaceChildren(...body);
   if (!$('#inspector-dialog').open) dialogs.show('inspector-dialog','#close-inspector',opener);
   else if(restoredNavigation) $('#close-inspector').focus();
+}
+
+function captureReviewSurface() {
+  const isCurrent=connection.captureSession(), surfaces=[...document.querySelectorAll('dialog[open]')];
+  const contents=[...$('#inspector-content').childNodes], focusId=document.activeElement?.id;
+  const sameNodes=(saved,current)=>saved.length===current.length&&saved.every((node,index)=>node===current[index]);
+  return ()=>isCurrent()&&document.activeElement?.id===focusId
+    &&sameNodes(surfaces,[...document.querySelectorAll('dialog[open]')])
+    &&sameNodes(contents,[...$('#inspector-content').childNodes]);
 }
 
 function actionNotice(key) {

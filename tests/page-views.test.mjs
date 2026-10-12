@@ -27,7 +27,7 @@ function fixture(){
     return {task,run};
   }
   const {task,run}=add(project,'Selected work','Selected candidate');add(foreign,'Foreign work','Foreign candidate');
-  const context={workspace,busy:false,view:'overview',selectedRun:run.id,pendingTaskStart:null};
+  const context={workspace,busy:false,view:'overview',selectedTask:task.id,selectedRun:run.id,pendingTaskStart:null};
   const currentTask=()=>task,currentRun=()=>run,currentProject=()=>project;
   const taskRuns=id=>workspace.runs.filter(run=>run.taskId===id);
   const calls=[];
@@ -78,6 +78,15 @@ test('review handoff shows names, roles and actual delivery expectations without
   assert.deepEqual(f.workspace,before);assert.deepEqual(f.calls,[]);
   f.context.demo=true;assert.equal(f.page().querySelector('#human-review-link-'+f.run.id),null);
   f.context.demo=false;f.workspace.authentication.principal.kind='agent';assert.equal(f.page().querySelector('#human-review-link-'+f.run.id),null);
+});
+
+test('an agent redacted reviewer allowlist is not presented as missing workspace configuration',()=>{
+  const f=ownerReviewFixture();f.workspace.authentication.reviewerClientIds=[];f.workspace.authentication.reviewerSubjects=[];
+  assert.match(f.page().textContent,/No independent reviewer is configured/);
+  f.workspace.authentication.principal.kind='agent';f.workspace.authentication.permissions={manage:false,review:false,merge:false};
+  const before=structuredClone(f.workspace),page=f.page();
+  assert.doesNotMatch(page.textContent,/No independent reviewer is configured|Allowlist a separate Access reviewer/);
+  assert.equal(page.querySelector('#assign-reviewers-'+f.run.id),null);assert.deepEqual(f.workspace,before);assert.deepEqual(f.calls,[]);
 });
 
 test('human link copying includes only the saved assignment and has an explicit clipboard failure path',async t=>{
@@ -138,6 +147,7 @@ test('demo review explains its illustrative records while a working hosted works
  assert.match(demo,/illustrative review/);assert.match(demo,/does not authenticate a reviewer or run checks/);
  assert.ok(!demo.includes('No independent reviewer is configured'));
  f.context.demo=false;
+ f.workspace.authentication={principal:{kind:'owner'},permissions:{manage:true,review:true,merge:true},agentClientIds:[],reviewerClientIds:[],reviewerSubjects:[]};
  const hosted=createReviewView(f.ports)().textContent;
  assert.match(hosted,/No independent reviewer is configured/);assert.ok(!hosted.includes('illustrative review'));
  f.workspace.provider='local-git';
@@ -262,6 +272,89 @@ test('shared verification shows pending and stale evidence without presenting it
   const text=f.ports.parts.evidenceChecks(f.run).textContent;
   assert.match(text,/Independent checks are running/);assert.match(text,/REPORTED PASSING · UNVERIFIED/);
   assert.ok(!text.includes('CHECKS PASSING · INDEPENDENT'));
+});
+
+function checkSetupFixture(){
+  const f=fixture();f.context.view='review';let form;
+  f.ports.openInspector=(_title,body)=>{form=body;};
+  f.ports.sha256Text=async()=> 'a'.repeat(64);
+  f.context.surface={};f.ports.captureReviewSurface=()=>{const before=f.context.surface;return()=>f.context.surface===before;};
+  f.ports.mutate=action=>action();f.ports.runOperation=async()=>({recorded:true});f.ports.refresh=async()=>true;
+  const nodes=node=>[node,...node.children.flatMap(nodes)];
+  const open=()=>nodes(createReviewView(f.ports)()).find(node=>node.tagName==='BUTTON'&&node.textContent==='Configure independent checks').dispatch('click');
+  return {...f,open,form:()=>form};
+}
+
+test('confirmed check setup opens the refreshed report through normal review navigation',async()=>{
+  const f=checkSetupFixture();await f.open();await f.form().dispatch('submit');
+  assert.deepEqual(f.calls,[['review',f.task.id,f.run.id,{section:'verification'}]]);
+  assert.equal(f.ports.verificationDrafts.size,0);
+});
+
+for(const change of ['workspace','view','task','candidate'])test(`check completion does not steal navigation after the ${change} changes`,async()=>{
+  const f=checkSetupFixture();
+  f.ports.refresh=async()=>{
+    if(change==='workspace')f.context.workspace={...f.workspace,id:'different'};
+    if(change==='view')f.context.view='work';
+    if(change==='task')f.context.selectedTask='another-task';
+    if(change==='candidate')f.context.selectedRun='another-run';
+    return true;
+  };
+  await f.open();await f.form().dispatch('submit');assert.deepEqual(f.calls,[]);
+});
+
+test('a failed report refresh keeps visible confirmed-request guidance without claiming passing checks',async()=>{
+  const f=checkSetupFixture();f.ports.refresh=async()=>false;await f.open();await f.form().dispatch('submit');
+  assert.deepEqual(f.calls,[]);assert.match(f.form().textContent,/Check request recorded\. Load the latest report without running the checks again\./);
+  assert.ok(!f.form().textContent.includes('Checks passed'));
+});
+
+test('a confirmed check request can retry reading its report without submitting the checks again',async()=>{
+  const f=checkSetupFixture();let writes=0,reads=0;
+  f.ports.runOperation=async()=>{writes++;return {recorded:true};};f.ports.refresh=async()=>++reads>1;
+  await f.open();await f.form().dispatch('submit');
+  const button=f.form().children.find(node=>node.tagName==='BUTTON'&&node.textContent==='Load check report');
+  assert.equal(button.hidden,false);await button.dispatch('click');
+  assert.equal(writes,1);assert.equal(reads,2);assert.deepEqual(f.calls,[['review',f.task.id,f.run.id,{section:'verification'}]]);
+});
+
+test('late report refresh cannot dismiss a newer dialog on the same candidate',async()=>{
+  const f=checkSetupFixture();let release,entered;const reached=new Promise(resolve=>entered=resolve);
+  f.ports.refresh=()=>{entered();return new Promise(resolve=>release=resolve);};
+  await f.open();const pending=f.form().dispatch('submit');await reached;
+  f.context.surface={};release(true);await pending;
+  assert.deepEqual(f.calls,[]);assert.equal(f.ports.verificationDrafts.size,1);
+});
+
+test('editing the next check draft during report refresh keeps the setup and new draft',async()=>{
+  const f=checkSetupFixture();
+  f.ports.refresh=async()=>{[...f.ports.verificationDrafts.values()][0].checks[0].command='new draft';return true;};
+  await f.open();await f.form().dispatch('submit');assert.deepEqual(f.calls,[]);
+  assert.equal([...f.ports.verificationDrafts.values()][0].checks[0].command,'new draft');
+});
+
+test('an unconfirmed new check submission hides the previous confirmed-request guidance',async()=>{
+  const f=checkSetupFixture();let confirmed=true;f.ports.mutate=action=>confirmed?action():null;f.ports.refresh=async()=>false;
+  await f.open();await f.form().dispatch('submit');
+  const report=f.form().children.find(node=>node.tagName==='BUTTON'&&node.textContent==='Load check report');
+  const notice=f.form().children.find(node=>node.tagName==='P'&&node.textContent.startsWith('Check request recorded.'));
+  assert.equal(report.hidden,false);assert.equal(notice.hidden,false);
+  confirmed=false;await f.form().dispatch('submit');assert.equal(report.hidden,true);assert.equal(notice.hidden,true);
+  assert.equal(f.ports.verificationDrafts.size,1);
+});
+
+test('unconfirmed check submission does not close setup or discard its draft',async()=>{
+  const f=checkSetupFixture();f.ports.mutate=async()=>null;let reads=0;f.ports.refresh=async()=>{reads++;return true;};
+  await f.open();await f.form().dispatch('submit');assert.deepEqual(f.calls,[]);assert.equal(reads,0);
+  assert.equal(f.ports.verificationDrafts.size,1);assert.ok(!f.form().textContent.includes('Check request recorded.'));
+});
+
+test('rechecking a retained commit reveals its refreshed report rather than the owner decision',async()=>{
+  const f=checkSetupFixture();f.run.checksConfigured=true;
+  const nodes=node=>[node,...node.children.flatMap(nodes)];
+  const button=nodes(createReviewView(f.ports)()).find(node=>node.tagName==='BUTTON'&&node.textContent==='Run preserved checks');
+  assert.ok(button);await button.dispatch('click');
+  assert.deepEqual(f.calls,[['review',f.task.id,f.run.id,{section:'verification'}]]);
 });
 
 test('shared candidate navigation uses the current view and selection when activated',async()=>{
