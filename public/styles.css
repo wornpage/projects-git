@@ -432,6 +432,7 @@ main {
 .workspace-return:hover { text-decoration: underline; }
 .view-crumb { display: inline-flex; align-items: center; gap: 13px; }
 .projects-home { display: grid; gap: 24px; }
+.directory-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .directory-actions { margin-bottom:16px; }
 .personal-workspace-note { margin-top:16px; font-size:13px; }
 .personal-workspace-note summary { cursor:pointer; min-height:44px; display:flex; align-items:center; }
