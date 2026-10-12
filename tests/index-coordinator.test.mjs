@@ -12,7 +12,7 @@ function coordinator() {
   const compiled = transformSync(readFileSync(file, 'utf8'), { loader: 'ts', format: 'cjs', target: 'es2022' }).code;
   const state = { cleanup: async () => false };
   function load(name) {
-    if (name === 'cloudflare:workers') return { DurableObject: class {} };
+    if (name === 'cloudflare:workers') return { DurableObject: class {}, WorkerEntrypoint: class {} };
     if (name === './check-container.ts') return { RepositoryCheckContainer: class {} };
     if (name === './search-index.ts') return { RetainedIndex: class { cleanup(...args) { return state.cleanup(...args); } } };
     return require(name);

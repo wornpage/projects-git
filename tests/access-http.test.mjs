@@ -9,7 +9,7 @@ import {testAuthority,AGENT_CLIENT,REVIEWER_CLIENT} from './helpers/hosted-autho
 
 const file=new URL('../src/cloudflare/index.ts',import.meta.url),require=createRequire(file),module={exports:{}};
 const compiled=transformSync(readFileSync(file,'utf8'),{loader:'ts',format:'cjs',target:'es2022'}).code;
-new Function('require','module','exports',compiled)(name=>name==='cloudflare:workers'?{DurableObject:class{}}:name==='./check-container.ts'?{RepositoryCheckContainer:class{}}:require(name),module,module.exports);
+new Function('require','module','exports',compiled)(name=>name==='cloudflare:workers'?{DurableObject:class{},WorkerEntrypoint:class{}}:name==='./check-container.ts'?{RepositoryCheckContainer:class{}}:require(name),module,module.exports);
 const policy=testAuthority().policy,pair=await generateKeyPair('RS256'),key={...await exportJWK(pair.publicKey),kid:'key',alg:'RS256'};
 const jwt=async(kind='owner',changes={})=>new SignJWT({type:'app',iss:policy.issuer,aud:[policy.audience],sub:kind==='owner'?policy.ownerSubject:'',...(kind==='owner'?{email:'owner@example.test'}:{common_name:AGENT_CLIENT}),iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+600,...changes}).setProtectedHeader({alg:'RS256',kid:'key'}).sign(pair.privateKey);
 const handler=module.exports.createAuthenticatedFetch(new AccessVerifier(async()=>Response.json({keys:[key]})));

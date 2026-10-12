@@ -5,7 +5,7 @@ import {createRequire} from 'node:module';
 const {transformSync}=createRequire(new URL('../node_modules/wrangler/package.json',import.meta.url))('esbuild');
 function handler(){const file=new URL('../src/cloudflare/index.ts',import.meta.url),require=createRequire(file),module={exports:{}};
  const code=transformSync(readFileSync(file,'utf8'),{loader:'ts',format:'cjs',target:'es2022'}).code;
- new Function('require','module','exports',code)(name=>name==='cloudflare:workers'?{DurableObject:class{}}:name==='./check-container.ts'?{RepositoryCheckContainer:class{}}:require(name),module,module.exports);return module.exports.default.queue;
+ new Function('require','module','exports',code)(name=>name==='cloudflare:workers'?{DurableObject:class{},WorkerEntrypoint:class{}}:name==='./check-container.ts'?{RepositoryCheckContainer:class{}}:require(name),module,module.exports);return module.exports.default.queue;
 }
 const queue='fixture-artifact-events';
 const env={WORKSPACE_ID:'fixture',ARTIFACTS_EVENTS_ACCOUNT_ID:'1'.repeat(32),ARTIFACTS_EVENTS_NAMESPACE:'fixture',ARTIFACTS_EVENTS_QUEUE:queue,ARTIFACTS_EVENTS_SUBSCRIPTIONS:JSON.stringify([{id:'2'.repeat(32),repositoryName:'candidate'}])};
