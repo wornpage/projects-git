@@ -68,7 +68,7 @@ export function createWorkView({
     const {workspace} = getContext();
     const state = taskOutcome(workspace, task);
     const active = runs.filter(run => ['running', 'assigned'].includes(run.status));
-    return el('section', { class: 'task-progress' },
+    return el('section', { class: 'task-progress inspector-section' },
       el('h2', {}, state.label),
       el('p', {}, active.length ? active.filter(run => run.status === 'running').length + ' running · ' + active.filter(run => run.status === 'assigned').length + ' waiting' : state.detail),
       runs.length ? el('p', {}, runs.filter(run => run.headCommit).length + ' / ' + runs.length + ' candidates have commits · ' + runs.filter(independentlyVerified).length + ' / ' + runs.length + ' have current independent reports') : el('p',{},'No candidates have been created for this task.'),

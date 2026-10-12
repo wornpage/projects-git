@@ -2,13 +2,14 @@
 export function createCompactNavigation({document,getWorkspace,openInspector,onRestore}) {
   const find=id=>document.getElementById(id);
   const trigger=find('open-workspace-navigation'),home=find('workspace-home'),views=find('project-views');
+  const newProject=find('new-project');
   const dialog=find('inspector-dialog');
   let open=false;
   function restore() {
     if(!open)return false;
     open=false;
     const navigation=find('project-navigation');
-    navigation.before(home);navigation.after(views);
+    navigation.before(home);navigation.after(newProject);navigation.after(views);
     onRestore();
     return true;
   }
@@ -17,7 +18,7 @@ export function createCompactNavigation({document,getWorkspace,openInspector,onR
     const body=document.createElement('nav');
     body.className='compact-navigation';body.setAttribute('aria-label','Workspace views');
     openInspector('Navigate',body);
-    open=true;body.append(home,views);
+    open=true;body.append(home,views,newProject);
   });
   dialog.addEventListener('close',()=>{
     // A queued close may belong to the dialog before it was reopened.

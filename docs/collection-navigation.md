@@ -6,10 +6,23 @@ for its changes, checks, review and separate integration controls. **Project
 history** retains candidates across that project; **Candidate record** holds one
 candidate's reports and decisions.
 
-On a phone, **Navigate** opens these same project, task and candidate links in the
-existing side panel. The original nodes, counters and handlers move into the
-panel and return to the sidebar on close. Desktop keeps its sidebar; the phone
-header stays compact while the full scoped navigation and counts remain available.
+On narrow screens, **Navigate** opens these same project, task and candidate links,
+plus **New project** for owners, in the existing side panel. The original nodes,
+counters and handlers move into the panel and return to the sidebar on close.
+Desktop keeps its sidebar; the phone header stays compact while the full scoped
+navigation and counts remain available.
+
+A single project shows its name without a project picker. The picker appears only
+when the full workspace contains multiple projects, including projects outside
+the loaded page. **Browse all projects** appears only when more projects are
+available than the picker currently lists. Creation remains a separate button.
+Task details uses the task title and status; tasks are chosen from the queue,
+without repeating a task dropdown above the detail pane.
+
+Vertical sidebars use compact, consistent gaps between navigation rows and scroll
+when the available height cannot hold every task and candidate link. Side panels
+separate major sections from their heading and paragraph groups, so project
+capacity, repository observations, task progress and activity remain easy to scan.
 
 ## Starting a project and an agent
 

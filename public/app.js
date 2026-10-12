@@ -360,16 +360,16 @@ async function selectProject(projectId) {
   void projectDiscovery.sync(projectId);
 }
 function projectPicker() {
-  const project = currentProject();
+  const project = currentProject(), projects = Object.values(workspace.projects ?? {});
+  const totalProjects = workspace.page?.totalProjects ?? projects.length;
+  if (totalProjects < 2) return null;
   return el('div', { class: 'project-selector shell-project-picker' }, el('label', { for: 'shell-project-selection' }, 'PROJECT'),
     el('select', { id: 'shell-project-selection', onchange: event => {
       if (event.target.value === 'all') { switchView('projects'); }
-      else if (event.target.value === 'new') { event.target.value = project.id; openTaskComposer('repository'); }
       else selectProject(event.target.value);
-    } }, Object.values(workspace.projects ?? {}).map(item => el('option', { value: item.id, selected: item.id === project?.id,
+    } }, projects.map(item => el('option', { value: item.id, selected: item.id === project?.id,
       disabled:Boolean(workspace.authentication && !workspace.authentication.permissions.manage && !tasksInProject(item).length) }, item.name)),
-      workspace.page ? el('option',{value:'all'},'Browse all '+workspace.page.totalProjects+' projects…') : null,
-      !workspace.authentication || workspace.authentication.permissions.manage ? el('option', { value: 'new' }, '+ New project') : null));
+      totalProjects > projects.length ? el('option',{value:'all'},'Browse all '+totalProjects+' projects…') : null));
 }
 function updateProjectNavigation() {
   const project = currentProject(), projects = projectDiscovery.items().slice();
@@ -406,7 +406,7 @@ function updateProjectHeader() {
   $('#project-breadcrumb').textContent = project?.name ?? workspace.name;
   header.hidden = !project;
   if (!project) { projectHeaderKey = ''; header.replaceChildren(); return; }
-  const key = JSON.stringify([workspace.id, workspace.provider, project.id, project.name, project.repositoryName, project.mainCommit, project.defaultBranch, project.acceptingWork, project.policyVersion, project.automaticMergePolicy, project.codeConnected, workspace.authentication?.permissions, actions.busy, Object.values(workspace.projects ?? {}).map(item => [item.id, item.name])]);
+  const key = JSON.stringify([workspace.id, workspace.provider, workspace.page?.totalProjects, project.id, project.name, project.repositoryName, project.mainCommit, project.defaultBranch, project.acceptingWork, project.policyVersion, project.automaticMergePolicy, project.codeConnected, workspace.authentication?.permissions, actions.busy, Object.values(workspace.projects ?? {}).map(item => [item.id, item.name])]);
   if (key === projectHeaderKey) return;
   const focused = document.activeElement?.id;
   projectHeaderKey = key;
@@ -428,7 +428,14 @@ function updateProjectHeader() {
 function openTaskComposer(source) {
   if (workspace.authentication && !workspace.authentication.permissions.manage) return;
   if (!taskCreation.locked && source && !taskCreation.activate(source)) return;
-  if (!$('#task-launcher').open) dialogs.show('task-launcher','#new-task-summary');
+  let opener = document.activeElement;
+  if (compactNavigation.isOpen()) {
+    opener = $('#open-workspace-navigation');
+    dialogs.skipFocusRestore('inspector-dialog');
+    $('#inspector-dialog').close();
+    compactNavigation.restore();
+  }
+  if (!$('#task-launcher').open) dialogs.show('task-launcher','#new-task-summary',opener);
   updateChrome();
   $('#new-task-summary').focus();
 }

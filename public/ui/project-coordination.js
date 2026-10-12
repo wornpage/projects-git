@@ -35,12 +35,12 @@ export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCa
 // Operational detail remains available without becoming a nested task list.
 export function projectActivityDetails({workspace,projectId}) {
   const model=projectCoordination(workspace,projectId), cap=model.capacity;
-  return el('section',{'aria-label':'Project operation details'},
-    cap ? el('div',{},el('h3',{},'Workspace capacity'),
+  return el('section',{class:'project-operation-details','aria-label':'Project operation details'},
+    cap ? el('div',{class:'inspector-section'},el('h3',{},'Workspace capacity'),
       Number.isInteger(cap.occupied) ? el('p',{},cap.occupied+' / '+cap.limit+' execution slots · '+cap.running+' running · '+cap.reserved+' reserved · '+cap.queued+' waiting') : null,
       cap.verification ? el('p',{},cap.verification.occupied+' / '+cap.verification.limit+' verification attempts · '+cap.verification.waiting+' waiting for verification') : null,
       el('p',{class:'definition-note'},'Capacity covers all projects in this workspace. Task totals cover the selected project.')) : null,
-    workspace.provider==='cloudflare-artifacts' ? el('div',{},el('h3',{},'Repository observations'),
+    workspace.provider==='cloudflare-artifacts' ? el('div',{class:'inspector-section'},el('h3',{},'Repository observations'),
       model.lastObservation ? el('p',{},'Last observed push in this project: ',el('code',{},shortSha(model.lastObservation.headCommit)),' · '+model.lastObservation.observedAt) : el('p',{},'No repository push observation is recorded for this project.'),
       model.eventCounts ? el('p',{},'Workspace events: '+model.eventCounts.completed+' / '+model.eventCounts.events+' reconciled · '+model.eventCounts.pending+' pending · '+model.eventCounts.failed+' failed · '+model.eventCounts.attempts+' retained attempts.') : null,
       model.subscriptionCounts ? el('p',{},'Workspace automatic registrations: '+model.subscriptionCounts.ready+' / '+model.subscriptionCounts.repositories+' ready · '+model.subscriptionCounts.awaitingRecovery+' awaiting recovery. Operator-configured subscriptions are outside this count.') : null,

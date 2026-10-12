@@ -7,6 +7,7 @@ import {createDialogManager} from '../public/ui/dialogs.js';
 
 const app=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
 const openInspectorSource=app.slice(app.indexOf('function openInspector('),app.indexOf('\nfunction actionNotice('));
+const openTaskComposerSource=app.slice(app.indexOf('function openTaskComposer('),app.indexOf('\nfunction openAgentConnection('));
 
 function fixture() {
   let document;
@@ -26,11 +27,12 @@ function fixture() {
     showModal(){this.open=true;}
     close(){if(!this.open)return;this.open=false;queuedCloses.push(()=>this.dispatch('close'));}
   }
-  const ids=['open-workspace-navigation','workspace-home','project-views','task-count','project-navigation','inspector-dialog','inspector-title','inspector-content','close-inspector'];
+  const ids=['open-workspace-navigation','workspace-home','project-views','task-count','project-navigation','new-project','inspector-dialog','inspector-title','inspector-content','close-inspector','task-launcher','new-task-summary'];
   const nodes=Object.fromEntries(ids.map(id=>[id,new Node(id)]));
   const root=new Node(),sidebar=new Node(),panel=nodes['inspector-content'];
   root.append(sidebar,nodes['inspector-dialog']);
-  sidebar.append(nodes['workspace-home'],nodes['project-navigation'],nodes['open-workspace-navigation']);
+  root.append(nodes['task-launcher']);nodes['task-launcher'].append(nodes['new-task-summary']);
+  sidebar.append(nodes['workspace-home'],nodes['project-navigation'],nodes['new-project'],nodes['open-workspace-navigation']);
   nodes['project-navigation'].append(nodes['project-views']);nodes['project-views'].append(nodes['task-count']);
   nodes['inspector-dialog'].append(nodes['inspector-title'],nodes['close-inspector'],panel);
   const find=(parent,id)=>parent.id===id?parent:parent.children.map(child=>find(child,id)).find(Boolean)??null;
@@ -50,7 +52,7 @@ function fixture() {
   }});
   context.compactNavigation=controller;
   const flushClose=async()=>{await new Promise(resolve=>setImmediate(resolve));for(const close of queuedCloses.splice(0))close();};
-  return {nodes,sidebar,panel,state,controller,document,openInspector,flushClose,Node};
+  return {nodes,sidebar,panel,state,controller,document,openInspector,flushClose,Node,context,dialogs};
 }
 
 test('phone navigation reuses live counters and handlers and restores the same nodes after native close',async()=>{
@@ -58,10 +60,12 @@ test('phone navigation reuses live counters and handlers and restores the same n
   views.fullTasks=120;views.fullCandidates=320;let clicks=0;views.addEventListener('click',()=>clicks++);
   f.nodes['open-workspace-navigation'].dispatch('click');assert.equal(f.controller.isOpen(),true);
   assert.equal(f.panel.children[0].children[0],home);assert.equal(f.panel.children[0].children[1],views);
+  assert.equal(f.panel.children[0].children[2],f.nodes['new-project']);
   views.fullCandidates=321;views.dispatch('click');assert.equal(clicks,1);
   f.nodes['inspector-dialog'].close();assert.equal(f.controller.isOpen(),true,'native close dispatches asynchronously');
   await f.flushClose();assert.equal(f.controller.isOpen(),false);assert.equal(f.state.restores,1);
   assert.equal(f.sidebar.children[0],home);assert.equal(f.nodes['project-navigation'].children[0],views);
+  assert.equal(f.nodes['new-project'].parent,f.sidebar);
   assert.equal(views.fullTasks,120);assert.equal(views.fullCandidates,321);views.dispatch('click');assert.equal(clicks,2);
 });
 
@@ -70,6 +74,20 @@ test('phone navigation never detaches nodes before data loads or through another
   f.nodes['open-workspace-navigation'].dispatch('click');assert.equal(f.controller.isOpen(),false);assert.deepEqual(f.sidebar.children,before);
   f.state.workspace={id:'one'};f.nodes['inspector-dialog'].showModal();f.nodes['open-workspace-navigation'].dispatch('click');
   assert.equal(f.controller.isOpen(),false);assert.deepEqual(f.sidebar.children,before);
+});
+
+test('New project closes navigation before the composer and returns focus to Navigate',async()=>{
+  const f=fixture();f.dialogs.register('task-launcher');
+  Object.assign(f.context,{workspace:f.state.workspace,taskCreation:{locked:false,activate:source=>source==='repository'},updateChrome(){}});
+  const openTaskComposer=runInNewContext(openTaskComposerSource+'\nopenTaskComposer',f.context);
+  f.nodes['open-workspace-navigation'].dispatch('click');f.nodes['new-project'].focus();
+  openTaskComposer('repository');
+  assert.equal(f.nodes['inspector-dialog'].open,false);assert.equal(f.controller.isOpen(),false);
+  assert.equal(f.nodes['new-project'].parent,f.sidebar);assert.equal(f.nodes['task-launcher'].open,true);
+  await f.flushClose();
+  assert.equal(f.document.activeElement,f.nodes['new-task-summary']);
+  f.nodes['task-launcher'].close();await f.flushClose();
+  assert.equal(f.document.activeElement,f.nodes['open-workspace-navigation']);
 });
 
 test('actual inspector replacement restores both navigation nodes before discarding its body',async()=>{
