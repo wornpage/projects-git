@@ -35,7 +35,10 @@
     "ARTIFACTS_EVENTS_AUTOMATIC": "false",
     "ARTIFACTS_EVENTS_QUEUE_ID": ""
   },
-  "services": [{"binding":"EVENT_SUBSCRIPTIONS","service":"projects-git-event-subscriptions","entrypoint":"ArtifactSubscriptionService"}],
+  "services": [
+    {"binding":"EVENT_SUBSCRIPTIONS","service":"projects-git-event-subscriptions","entrypoint":"ArtifactSubscriptionService"},
+    {"binding":"CURRENT_POLICY","service":"projects-agent-git","entrypoint":"WorkspacePolicy"}
+  ],
   "worker_loaders": [
     {
       "binding": "LOADER"

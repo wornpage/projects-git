@@ -37,6 +37,11 @@ node --test tests/cloudflare.test.mjs
 
 Configure Cloudflare Access as described in [authenticated hosted ownership](authenticated-workspace.md). The Worker validates application assertions, pins one owner to its workspace, and authorizes service clients separately. Shared bearer-token authentication is removed. `MODEL_API_KEY` remains optional until explicitly bounded model execution is configured.
 
+The `CURRENT_POLICY` service must target this application's Worker name and its
+`WorkspacePolicy` entrypoint. Automatic integration fails closed if that private
+binding is absent or unavailable. Keep exactly one version in the active
+deployment; see [background authority and rollout checks](automatic-merge.md#fresh-background-authority).
+
 The default configuration disables `workers_dev`, preview/version URLs and custom
 routes. A hosted activation must
 deliberately configure its protected ingress. Static assets and APIs require a

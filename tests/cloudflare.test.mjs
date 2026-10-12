@@ -19,7 +19,7 @@ import {transformSync} from 'esbuild';
 
 const workerFile=new URL('../src/cloudflare/index.ts',import.meta.url),workerRequire=createRequire(workerFile),workerModule={exports:{}};
 new Function('require','module','exports',transformSync(readFileSync(workerFile,'utf8'),{loader:'ts',format:'cjs',target:'es2022'}).code)(
-  name=>name==='cloudflare:workers'?{DurableObject:class{}}:name==='./check-container.ts'?{RepositoryCheckContainer:class{}}:workerRequire(name),workerModule,workerModule.exports);
+  name=>name==='cloudflare:workers'?{DurableObject:class{},WorkerEntrypoint:class{}}:name==='./check-container.ts'?{RepositoryCheckContainer:class{}}:workerRequire(name),workerModule,workerModule.exports);
 
 function retainedCoordinator(c) {
   const instance=Object.create(workerModule.exports.WorkspaceCoordinator.prototype),old=testAuthority().policy;
@@ -156,6 +156,20 @@ test('internal API calls without current policy fail closed without using the re
  assert.equal(response.status,503);assert.equal((await response.json()).code,'AUTH_POLICY_REQUIRED');assert.deepEqual(c.store.read(),before);
 });
 
+for(const enabled of [false,true])test(`background alarm retains an observed reviewer revocation with automatic policy ${enabled?'on':'off'}`,async()=>{
+  const c=await automaticContext();c.toggle(enabled);
+  const coordinator=retainedCoordinator(c),authority=testAuthority();authority.policy.reviewerClientIds=[];
+  c.runtime.currentPolicy=async()=>structuredClone(authority.policy);
+  const before=c.store.read(),checks=c.checks();
+  const refusal=await coordinator.api({...authority,method:'POST',path:`/api/runs/${c.id}/review`,body:c.review(),key:''});
+  assert.equal(refusal.status,409);assert.equal((await refusal.json()).code,'REVIEWER_ACCESS_CHANGED');
+  assert.deepEqual(c.store.read(),before);assert.equal(c.pushes(),0);
+  await coordinator.alarm();
+  console.log(JSON.stringify({probe:'revocation-followed-by-alarm',automaticPolicyEnabled:enabled,status:c.store.read().workspace.runs[0].status,checksBefore:checks,checksAfter:c.checks(),pushes:c.pushes()}));
+  assert.equal(c.pushes(),0,'A background alarm must not integrate the candidate after the current owner request observed its reviewer revocation.');
+  assert.equal(c.checks(),checks,'No verification may begin after that revocation.');
+});
+
 test('reviewer removal at the manual before-push barrier prevents Git writes and retires issued tokens',async()=>{
   const c=await automaticContext();await c.controller.review(c.id,c.review());
   const authority=testAuthority(),controller=new HostedController(c.store,c.artifacts,authority,c.runtime);let writes=0;
@@ -165,6 +179,105 @@ test('reviewer removal at the manual before-push barrier prevents Git writes and
   assert.ok([...c.source.tokens.values(),...c.fork.tokens.values()].every(token=>token.state==='revoked'));
   const operation=Object.values(c.store.read().operations).find(op=>op.kind==='merge');
   assert.equal(operation.state,'failed');assert.equal(operation.errorCode,'REVIEWER_ACCESS_CHANGED');
+});
+
+test('automatic authority is checked between commands and interrupted evidence keeps the full denominator',async()=>{
+  const c=await automaticContext(),plan=JSON.parse(c.plan().definition);
+  plan.checks.push({...plan.checks[0],name:'Read answer again'});
+  const definition=JSON.stringify(plan);
+  await c.controller.configureChecks(c.id,{definition,definitionSha256:checkDigest(definition)},'two-command-policy');
+  await assignTestReview(c,c.id);
+  const reviewer=new HostedController(c.store,c.artifacts,testReviewerAuthority(),c.runtime);
+  await reviewer.codeReview(c.id,reviewInput(codeReviewContext(c.store.read().workspace,c.id).contextId),'two-command-review');
+  c.toggle(true);const policy=testAuthority().policy;c.runtime.currentPolicy=async()=>structuredClone(policy);
+  const beforeChecks=c.checks(),observe=c.runtime.repositoryChecks.observe;
+  c.runtime.repositoryChecks.observe=async(...args)=>{const result=await observe(...args);policy.reviewerClientIds=[];return result;};
+  await c.system().drainAutomaticMerges();
+  const state=c.store.read(),run=state.workspace.runs[0];
+  assert.equal(c.checks()-beforeChecks,1,'The second command must not start after reviewer revocation');
+  assert.equal(c.pushes(),0);assert.equal(run.automaticMergeStop.phase,'before-write');
+  const retained=run.evidenceHistory.find(report=>report.operation==='merge');
+  assert.ok(retained,'Keep the interrupted merge report');assert.equal(retained.verified,false);
+  assert.equal(retained.passed,1);assert.equal(retained.total,2);
+  assert.equal(retained.checks[1].passed,false);
+});
+
+for(const phase of ['source-read','verification','before-push'])test(`fresh automatic authority blocks reviewer revocation during ${phase}`,async()=>{
+  const c=await automaticContext();c.toggle(true);const policy=testAuthority().policy;
+  c.runtime.currentPolicy=async()=>structuredClone(policy);
+  let writes=0;
+  const initialChecks=c.checks();
+  if(phase==='source-read'){
+    const read=c.fork.readBlob.bind(c.fork);c.fork.readBlob=async(...args)=>{const value=await read(...args);policy.reviewerClientIds=[];return value;};
+  }
+  if(phase==='verification'){
+    const observe=c.runtime.repositoryChecks.observe;
+    c.runtime.repositoryChecks.observe=async(...args)=>{const value=await observe(...args);policy.reviewerClientIds=[];return value;};
+  }
+  c.runtime.git.merge=async input=>{if(phase==='before-push')policy.reviewerClientIds=[];await input.beforePush();writes++;};
+  await c.system().drainAutomaticMerges();
+  const snapshot=c.store.read(),run=snapshot.workspace.runs[0];
+  assert.equal(writes,0);assert.equal(run.status,'accepted');assert.equal(run.automaticMergeStop.code,'AUTOMATIC_POLICY_CHANGED');
+  assert.equal(run.automaticMergeStop.phase,'before-write');
+  if(phase==='source-read')assert.equal(c.checks(),initialChecks,'Revocation during source loading must stop verifier admission');
+  assert.ok([...c.source.tokens.values(),...c.fork.tokens.values()].every(token=>token.state==='revoked'));
+  const checks=c.checks();await c.system().drainAutomaticMerges();assert.equal(c.checks(),checks);assert.equal(writes,0);
+});
+
+for(const missing of [true,false])test(`automatic admission refuses ${missing?'missing':'unavailable'} current authority without provider work`,async()=>{
+  const c=await automaticContext();c.toggle(true);
+  if(missing)delete c.runtime.currentPolicy;
+  else c.runtime.currentPolicy=async()=>{throw new ApiError(503,'CURRENT_POLICY_UNAVAILABLE','Controlled outage');};
+  const before=c.store.read(),checks=c.checks();c.artifacts.get=async()=>assert.fail('Authority failure reached provider');
+  await assert.rejects(c.system().drainAutomaticMerges(),{code:'CURRENT_POLICY_UNAVAILABLE'});
+  assert.deepEqual(c.store.read(),before);assert.equal(c.checks(),checks);assert.equal(c.pushes(),0);
+});
+
+test('a restarted scheduler and an older forwarded request cannot restore a revoked reviewer',async()=>{
+  const c=await automaticContext();c.toggle(true);const revoked=testAuthority();revoked.policy.reviewerClientIds=[];
+  c.runtime.currentPolicy=async()=>structuredClone(revoked.policy);
+  for(let restart=0;restart<2;restart++){
+    const coordinator=retainedCoordinator(c),old=testAuthority();
+    const response=await coordinator.api({...old,method:'GET',path:'/api/review-inbox',body:{},key:''});assert.equal(response.status,200);
+    const before=c.store.read(),checks=c.checks();await coordinator.alarm();
+    assert.equal(c.checks(),checks);assert.equal(c.pushes(),0);assert.deepEqual(c.store.read(),before);assert.equal(c.store.read().workspace.runs[0].review,null);
+  }
+});
+
+test('a current-policy outage stops automatic work without starving the index outbox',async()=>{
+  const c=await automaticContext();c.toggle(true);c.runtime.currentPolicy=async()=>{throw new ApiError(503,'CURRENT_POLICY_UNAVAILABLE','Controlled outage');};
+  const coordinator=retainedCoordinator(c);let deliveries=0;coordinator.deliverIndexJobs=async()=>{deliveries++;};
+  const checks=c.checks();await assert.rejects(coordinator.alarm(),{code:'CURRENT_POLICY_UNAVAILABLE'});
+  assert.equal(deliveries,1);assert.equal(c.checks(),checks);assert.equal(c.pushes(),0);
+});
+
+test('unavailable or revoked current authority preserves factual automatic-write reconciliation without a second push',async()=>{
+  const c=await automaticContext();c.toggle(true);c.loseAcknowledgement();await c.system().drainAutomaticMerges();assert.equal(c.pushes(),1);
+  const checks=c.checks();c.runtime.currentPolicy=async()=>{throw new ApiError(503,'CURRENT_POLICY_UNAVAILABLE','Controlled outage');};
+  const revoked=testAuthority();revoked.policy.reviewerClientIds=[];
+  const owner=new HostedController(c.store,c.artifacts,revoked,c.runtime);
+  await owner.merge(c.id,{headCommit:HEAD});assert.equal(c.store.read().workspace.runs[0].status,'merged');assert.equal(c.pushes(),1);assert.equal(c.checks(),checks);
+});
+
+test('unrelated durable writes during automatic authority lookup do not strand a valid candidate',async()=>{
+  const c=await automaticContext();c.toggle(true);let readCount=0;
+  c.runtime.currentPolicy=async()=>{
+    if(++readCount===2){const state=c.store.read();state.workspace.name='Independent metadata update';state.workspace.version++;c.store.write(state,state.revision);}
+    return testAuthority().policy;
+  };
+  await c.system().drainAutomaticMerges();const state=c.store.read();assert.equal(state.workspace.name,'Independent metadata update');
+  assert.equal(state.workspace.runs[0].status,'merged');assert.equal(c.pushes(),1);assert.equal(state.workspace.runs[0].automaticMergeStop,undefined);
+});
+
+test('authority lookup cannot issue new Git credentials after its merge lease is displaced',async()=>{
+  const c=await automaticContext();c.toggle(true);let displaced=false,issuedAfterDisplacement=0;
+  const create=c.source.createToken.bind(c.source);c.source.createToken=async(...args)=>{if(displaced)issuedAfterDisplacement++;return create(...args);};
+  c.runtime.currentPolicy=async()=>{
+    const snapshot=c.store.read(),entry=Object.values(snapshot.operations).find(op=>op.kind==='merge'&&op.state==='pending');
+    if(entry&&snapshot.workspace.runs[0].evidenceHistory?.length&&!displaced){entry.attemptId=crypto.randomUUID();c.store.write(snapshot,snapshot.revision);displaced=true;}
+    return testAuthority().policy;
+  };
+  await c.system().drainAutomaticMerges();assert.equal(displaced,true);assert.equal(issuedAfterDisplacement,0);assert.equal(c.pushes(),0);
 });
 
 test('revoked reviewer cannot retry an uncertain manual merge while the target is still at base',async()=>{
@@ -896,6 +1009,7 @@ async function commandContext() {
 
 async function automaticContext() {
   const c = await commandContext(), id = c.assignment.runId;
+  c.runtime.currentPolicy=async()=>testAuthority().policy;
   await c.controller.configureChecks(id, c.plan(), 'automatic-checks');
   await assignTestReview(c, id);
   const reviewer = new HostedController(c.store, c.artifacts, testReviewerAuthority(), c.runtime);
@@ -958,6 +1072,7 @@ test('automatic approval will not choose alternatives or consume either of two o
 test('policy authorization cannot outlive the current owner or reviewer allowlist', async () => {
   const c = await automaticContext(); c.toggle(true);
   const authority = testAuthority(); authority.policy.reviewerClientIds = [];
+  c.runtime.currentPolicy=async()=>structuredClone(authority.policy);
   const controller = new HostedController(c.store, c.artifacts, systemAuthority(authority.policy), c.runtime);
   assert.equal(controller.hasAutomaticMergeWork(), false); await controller.drainAutomaticMerges();
   const changedOwner = testAuthority(); changedOwner.policy.ownerSubject = 'replacement-owner';

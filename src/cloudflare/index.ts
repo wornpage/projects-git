@@ -1,6 +1,7 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { AccessVerifier, accessPolicy, assertAuthority, authorizeRoute, systemAuthority, ownerBinding } from './access.ts';
 import type { AccessPolicy, AccessPrincipal, HostedAuthority } from './access.ts';
+import {currentPolicy} from './current-policy.ts';
 import { publicEntrance } from '../entrance/handler.mjs';
 import { privateWorkbench } from './workbench-assets.mjs';
 const accessVerifier = new AccessVerifier();
@@ -31,6 +32,17 @@ interface ApiCall {
   body: Record<string, unknown>;
   key: string;
   search?: string;
+}
+
+// Named RPC entrypoint only; the public HTTP handler never exposes this method.
+// A service invocation gets a new WorkerEntrypoint with current Worker bindings.
+export class WorkspacePolicy extends WorkerEntrypoint<Env> {
+  readPolicy(workspaceId: string, nonce: string) {
+    const policy = accessPolicy(this.env);
+    if (workspaceId !== policy.workspaceId || typeof nonce !== 'string' || !/^[a-f0-9-]{36}$/.test(nonce))
+      throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'Policy requests must target the configured workspace.');
+    return {nonce, policy};
+  }
 }
 
 export class WorkspaceCoordinator extends DurableObject<Env> {
@@ -129,6 +141,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   private controller(authority: HostedAuthority): HostedController {
     const provider = this.modelProvider();
     return new HostedController(this.store, this.artifacts(), authority, {
+      currentPolicy: () => currentPolicy(this.env.CURRENT_POLICY, this.env.WORKSPACE_ID),
       ensureSubscription:(repository,validate)=>this.ensureSubscription(repository,validate),
       checks: { verify: (source, commit, signal, attemptId) => this.verifyCheckout(source, commit, signal, attemptId) }, git: this.gitTransport(), provider,
       repositoryChecks: { observe: (attemptId, index, files, argv, input, timeoutMs) => {
@@ -178,8 +191,8 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   async alarm(): Promise<void> {
     const controller = this.controller(systemAuthority(accessPolicy(this.env)));
     await controller.drainJobs();
-    await controller.drainAutomaticMerges();
-    await this.deliverIndexJobs();
+    try { await controller.drainAutomaticMerges(); }
+    finally { await this.deliverIndexJobs(); }
     await this.schedule(controller);
   }
 

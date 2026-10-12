@@ -1,6 +1,7 @@
 import {readFile,writeFile} from 'node:fs/promises';
 const config=JSON.parse(await readFile('qa/identity-concurrency/hosted.wrangler.jsonc','utf8'));
 config.name+='-second';config.workers_dev=false;config.preview_urls=false;config.vars.WORKSPACE_ID+='-isolation';config.vars.ACCESS_AGENT_CLIENT_IDS='[]';
+config.services=config.services.map(binding=>binding.binding==='CURRENT_POLICY'?{...binding,service:config.name}:binding);
 config.vars.ACCESS_REVIEWER_CLIENT_IDS='[]';
 config.vars.ACCESS_REVIEWER_SUBJECTS='[]';
 // Owner-only and private-binding-only: the first workspace's agent credentials

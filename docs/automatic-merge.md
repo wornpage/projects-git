@@ -48,6 +48,48 @@ Turning the switch off, changing its version or revoking workspace sessions
 prevents a later automatic push. A Git update already sent may still finish and
 must be reconciled. Revoking sessions also switches enabled policies off.
 
+## Fresh background authority
+
+Automatic integration requires the private `CURRENT_POLICY` service binding to
+the **same application Worker**, with named entrypoint `WorkspacePolicy`. Both
+shipped application configurations include it; update its `service` when renaming
+the Worker. The entrypoint has no public HTTP route and returns no session or
+service-token secrets.
+
+Each lookup reads the active Worker's Access configuration. The alarm never
+authorizes an automatic merge from its retained Durable Object environment or a
+cached policy forwarded by an earlier API request. It checks current ownership
+and reviewer access before approval, before each verification command, before
+issuing Git credentials and immediately before push. Lookups are scoped to the
+workspace, bound to a fresh request nonce and limited to five seconds. Missing,
+unavailable or invalid authority fails closed. Index delivery can still run
+when automatic authority is unavailable.
+
+An in-flight check or Git write cannot be undone by revocation. No subsequent
+command or push is admitted after a revocation is observed. Already-issued
+credentials are retired, interrupted reports keep their full check denominator,
+and uncertain writes retain the existing owner-only reconciliation path. A
+confirmed exact target commit can be recorded without a second check or push.
+
+### Deployment requirement
+
+Use **exactly one version in the active application deployment** when changing
+identity policy or running automatic integration. Do not use a gradual split,
+retain an old policy version at 0%, or pin `CURRENT_POLICY` to another version or
+service. A fresh RPC and nonce are not proof of the newest policy if routing can
+still select older configuration. Keep the project switch off during a policy
+rollout until the single-version deployment is confirmed. See Cloudflare's
+[service RPC behavior](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/),
+[gradual deployments](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/)
+and [version overrides](https://developers.cloudflare.com/workers/versions-and-deployments/version-overrides/).
+
+Local Node and Workerd/SQLite tests exercise revocation, actual Worker binding
+changes, restarts, authority outages and uncertain writes with scripted checks
+and Git transport. They do not qualify hosted routing. Before enabling a new
+deployment, separately verify the private binding and reviewer revocation against
+that deployment, including a coordinator with retained state. Preserve its exact
+source, configuration and deployment-version receipt.
+
 Owner API: `POST /api/projects/:projectId/automatic-merge` with
 `{"enabled":true,"expectedVersion":0}` for the first change. Read the current
 version from the project response before subsequent changes. The server derives

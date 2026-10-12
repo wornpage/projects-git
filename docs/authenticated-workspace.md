@@ -42,7 +42,11 @@ and merge; it must not reconstruct it from a retained Durable Object environment
 that may predate a settings-only deployment. Missing forwarded policy fails closed.
 Request bodies and headers cannot override this internal policy field. The policy
 is a request snapshot, not a claim of instantaneous revocation of already-admitted
-work or background alarms; keep automatic merge off while changing reviewer access.
+work. Background automatic integration separately reads current policy through
+the private `CURRENT_POLICY` RPC before admission and side effects; it never
+reuses the last request's policy. Follow the single-version deployment and
+qualification requirements in [automatic integration](automatic-merge.md#fresh-background-authority),
+and keep automatic merge off during identity-policy rollouts.
 
 ## Permissions and identities
 

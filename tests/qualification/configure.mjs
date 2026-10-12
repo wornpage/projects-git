@@ -20,6 +20,7 @@ if(!Array.isArray(reviewers)||reviewers.length!==2||reviewers.some(reviewer=>!to
 const config={name:setup.workerName,account_id:setup.account,main:'../../tests/qualification/worker.ts',compatibility_date:'2026-10-05',compatibility_flags:['nodejs_compat'],workers_dev:false,preview_urls:false,routes:[],
   assets:{directory:'../../public',binding:'ASSETS',run_worker_first:true},
   vars:{WORKSPACE_ID:setup.workspace,ACCESS_TEAM_DOMAIN:setup.issuer,ACCESS_AUD:setup.audience,ACCESS_OWNER_SUB:setup.ownerSubject,ACCESS_AGENT_CLIENT_IDS:JSON.stringify(agents.map(agent=>agent.client_id)),MODEL:'scripted-qualification-fixture',MODEL_REPOSITORY:setup.repository,MODEL_ENDPOINT:'',SEARCH_EMBEDDINGS_ENABLED:'false'},
+  services:[{binding:'CURRENT_POLICY',service:setup.workerName,entrypoint:'WorkspacePolicy'}],
   worker_loaders:[{binding:'LOADER'}],artifacts:[{binding:'ARTIFACTS',namespace:setup.artifactsNamespace}],
   containers:[{class_name:'RepositoryCheckContainer',scheduling_policy:'durable_object',images:{verifier:{dockerfile:'../../containers/verification/Dockerfile'}}}],
   durable_objects:{bindings:[{name:'WORKSPACES',class_name:'WorkspaceCoordinator'},{name:'REPOSITORY_CHECKS',class_name:'RepositoryCheckContainer'},{name:'GATES',class_name:'QualificationGates'}]},

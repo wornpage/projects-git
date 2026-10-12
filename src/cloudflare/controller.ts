@@ -16,7 +16,7 @@ import type { CheckPolicy, RepositoryCheckRuntime } from './repository-checks.ts
 import { checkoutCases } from '../../fixtures/checkout-cases.mjs';
 import { hostedMergeStateByRun, mergeEvidence, mergeEvidenceChanged, retainMergeEvidence } from '../core/merge-lifecycle.mjs';
 import { assertAuthority, assertSession, ownerBinding } from './access.ts';
-import type { HostedAuthority, AccessPrincipal } from './access.ts';
+import type { HostedAuthority, AccessPrincipal, AccessPolicy } from './access.ts';
 import { automaticApprovalEligible, approveRunByPolicy } from '../core/workflow.mjs';
 import { setAutomaticMergePolicy } from '../core/project-work.mjs';
 import { automaticMergePolicyCurrent, independentReviewStatus } from '../../public/review-boundary.js';
@@ -71,6 +71,7 @@ interface Operation {
 }
 interface HostedJob { status: 'queued' | 'running' | 'finished' | 'failed'; task: Task; limits: ExecutionLimits; phase: string; pendingCommit?: string; attemptId?: string }
 export interface HostedRuntime {
+  currentPolicy?: () => Promise<AccessPolicy>;
   ensureSubscription?: (repositoryName:string,validate:()=>void)=>Promise<void>;
   checks: { verify(source: string, commit: string, signal?: AbortSignal, attemptId?: string): Promise<Evidence> };
   cancelVerification?: (attemptId: string, profile: 'commands' | 'checkout', checkCount: number) => Promise<void>;
@@ -228,6 +229,15 @@ export class HostedController {
     this.checkBinding();
     if (!['owner', 'system'].includes(this.authority.principal.kind)) throw new ApiError(403, 'OWNER_REQUIRED', 'Only the authenticated owner can perform this operation.');
     if (!this.store.identity().authentication) throw new ApiError(409, 'OWNER_ADOPTION_REQUIRED', 'Explicitly adopt the retained workspace before changing it.');
+  }
+
+  private async refreshAutomaticAuthority(): Promise<void> {
+    if (!this.runtime?.currentPolicy) throw new ApiError(503, 'CURRENT_POLICY_UNAVAILABLE', 'Automatic integration requires current private authority.');
+    // Replace only this operation's policy, never a shared or durable last-request
+    // cache. A later operation and each write boundary must read it again.
+    const policy = await this.runtime.currentPolicy();
+    this.authority = {...this.authority, policy: structuredClone(policy)};
+    this.checkBinding();
   }
 
   private requireAssignment(runId: string): void {
@@ -607,14 +617,18 @@ export class HostedController {
   }
 
   async drainAutomaticMerges(): Promise<void> {
-    this.requireOwner();
     if (this.authority.principal.kind !== 'system') throw new ApiError(403, 'ALARM_REQUIRED', 'Automatic decisions run only through the private workspace alarm.');
+    this.requireOwner();
     let snapshot = this.store.read(), repaired = false;
     for (const run of this.orphanedAutomaticStops(snapshot)) {
       const decisionId = run.review!.policy!.decisionId, operation = snapshot.operations['automatic-merge:' + decisionId];
       repaired = this.retainAutomaticMergeStop(snapshot, run.id, decisionId, operation.errorCode ?? 'AUTOMATIC_MERGE_FAILED', false) || repaired;
     }
     if (repaired) { this.save(snapshot); snapshot = this.store.read(); }
+    if (!Object.values(snapshot.workspace.projects ?? {}).some(project => project.automaticMergePolicy?.enabled)) return;
+    await this.refreshAutomaticAuthority();
+    this.requireOwner();
+    snapshot = this.store.read();
     const runId = this.automaticMergeCandidate(snapshot);
     if (!runId) return;
     const run = snapshot.workspace.runs.find(item => item.id === runId)!;
@@ -902,20 +916,26 @@ export class HostedController {
     return this.verify(runId, { headCommit: run.headCommit, taskRevision: task.revision }, requestKey, { definition: input.definition, definitionSha256: input.definitionSha256 });
   }
 
-  private async candidateChecks(snapshot: HostedSnapshot, runId: string, repo: ArtifactsRepo, attemptId: string): Promise<Evidence> {
+  private async candidateChecks(snapshot: HostedSnapshot, runId: string, repo: ArtifactsRepo, attemptId: string, beforeVerify?: () => Promise<void>): Promise<Evidence> {
     const run = snapshot.workspace.runs.find(item => item.id === runId)!;
     const task = snapshot.workspace.tasks.find(item => item.id === run.taskId)!;
     if (task.verificationProfile === 'checkout') {
       if (run.changedFiles.some(file => !['checkout.mjs', '.projects/task.json'].includes(file))) throw new ApiError(422, 'UNSUPPORTED_CONTRACT', 'This retained task uses the checkout contract only.');
-      return { ...await this.runtime!.checks.verify(await this.checkoutSource(repo, run.headCommit!), run.headCommit!, undefined, attemptId), taskRevision: task.revision };
+      const source = await this.checkoutSource(repo, run.headCommit!);
+      await beforeVerify?.();
+      return { ...await this.runtime!.checks.verify(source, run.headCommit!, undefined, attemptId), taskRevision: task.revision };
     }
     const policy = snapshot.checkPolicies?.[runId];
     if (!policy || !this.runtime?.repositoryChecks) throw new ApiError(422, 'CHECK_DEFINITION_REQUIRED', 'Configure independent command checks for this candidate.');
     const plan = readCheckDefinition(Buffer.from(policy.definition), policy.definitionSha256, task, run);
     try {
       const handoff = await buildTaskHandoff(snapshot.workspace, task.id);
-      return await verifyArtifactCandidate(this.runtime.repositoryChecks, await readArtifactSnapshot(repo, run.headCommit!), task, run, policy, handoff.sha256, attemptId);
-    } catch {
+      const source = await readArtifactSnapshot(repo, run.headCommit!);
+      await beforeVerify?.();
+      const runtime = this.runtime.repositoryChecks;
+      return await verifyArtifactCandidate({observe:async(...args) => {await beforeVerify?.();return runtime.observe(...args);}}, source, task, run, policy, handoff.sha256, attemptId);
+    } catch (error) {
+      if (error instanceof ApiError && ['CURRENT_POLICY_UNAVAILABLE','AUTOMATIC_POLICY_CHANGED','REVIEWER_ACCESS_CHANGED','STALE_OPERATION','WORKSPACE_OWNER_MISMATCH'].includes(error.code)) throw error;
       const checks = plan.checks.map(check => ({ name: check.name, passed: false, detail: 'Not run: the exact source snapshot or verification runtime was unavailable.' }));
       return { verified: false, source: 'independent-sandbox-checks', commit: run.headCommit!, taskRevision: task.revision, checks, passed: 0, total: checks.length, exitCode: 1,
         command: 'Declared repository command checks', output: 'Verification interrupted. Earlier reports are retained as history.', verifiedAt: new Date().toISOString() };
@@ -1340,11 +1360,20 @@ export class HostedController {
     snapshot = this.store.read();
     const prior = this.checkOperation(snapshot.operations[key], fingerprint, 'merge');
     if (prior?.state === 'complete') return this.workspace();
-    const requirePolicy = () => {
+    const operationFence = JSON.stringify(snapshot.operations[key] ?? null);
+    const readAdmission = () => {
+      const current = this.store.read();
+      if (JSON.stringify(current.operations[key] ?? null) !== operationFence)
+        throw new ApiError(409, 'STALE_OPERATION', 'The retained merge operation changed during authorization.');
+      this.requireTaskIdle(current, run.taskId, key);
+      return current;
+    };
+    const requirePolicy = async () => {
+      if (automatic) await this.refreshAutomaticAuthority();
       if (automatic && !this.automaticDecisionCurrent(this.store.read(), runId)) throw new ApiError(409, 'AUTOMATIC_POLICY_CHANGED', 'Automatic approval is no longer authorized. Record a fresh owner decision before a new merge.');
       this.requireCurrentReviewer(this.store.read().workspace, runId);
     };
-    if (prior?.state !== 'pending') requirePolicy();
+    if (prior?.state !== 'pending') { await requirePolicy(); snapshot = readAdmission(); }
     if (automatic && prior?.state === 'pending' && this.authority.principal.kind === 'system') throw new ApiError(409, 'MERGE_RECOVERY_REQUIRED', 'The owner must reconcile the interrupted automatic merge.');
     this.requireTaskIdle(snapshot, task.id, key);
     this.requireProjectMergeIdle(snapshot, task.projectId!, key);
@@ -1371,7 +1400,8 @@ export class HostedController {
       }
       if (current !== task.baseCommit) throw new ApiError(409, 'MERGE_RECOVERY_REQUIRED', 'The target head differs from both the retained base and candidate. Inspect it before changing the locked merge intent.');
     }
-    requirePolicy();
+    await requirePolicy();
+    snapshot = readAdmission();
     if (prior?.state === 'pending') {
       if (!prior.attemptId || !runtime.cancelVerification) throw new ApiError(409, 'VERIFICATION_RECOVERY_REQUIRED', 'Stop the previous merge verifier before retrying.');
       const recoveryId = crypto.randomUUID(), previousAttempt = prior.executorAttemptId ?? prior.attemptId;
@@ -1379,7 +1409,8 @@ export class HostedController {
       const policy = snapshot.checkPolicies?.[runId];
       await runtime.cancelVerification(previousAttempt, task.verificationProfile === 'checkout' ? 'checkout' : 'commands', policy ? JSON.parse(policy.definition).checks.length : checkoutCases.length);
       snapshot = this.assertLease(key,recoveryId);
-      requirePolicy();
+      await requirePolicy();
+      snapshot = this.assertLease(key,recoveryId);
     }
     this.requireProjectMergeIdle(snapshot, task.projectId!, key);
     if (verificationOccupancy(snapshot, key) >= 2) throw new ApiError(409, 'VERIFICATION_CAPACITY', 'Two verification attempts are active. Retry when a slot is free.');
@@ -1392,7 +1423,12 @@ export class HostedController {
       using target = await this.artifacts.get(snapshot.repositories[run.taskId]);
       await this.revokeRunTokens(candidate, () => this.assertLease(key, attemptId));
       await branchHead(candidate, run.branch, head);
-      const checked = await this.candidateChecks(snapshot, runId, candidate, attemptId);
+      await requirePolicy();
+      snapshot = this.assertLease(key, attemptId);
+      const checked = await this.candidateChecks(snapshot, runId, candidate, attemptId, async () => {
+        await requirePolicy();
+        this.assertLease(key, attemptId);
+      });
       const evidence = mergeEvidence(checked, attemptId) as Evidence;
       const failed = !evidence.verified || evidence.passed !== evidence.total || evidence.exitCode !== 0;
       const changed = mergeEvidenceChanged(run.evidence, evidence, task.verificationProfile);
@@ -1405,21 +1441,22 @@ export class HostedController {
       const current = (await target.log({ ref: targetInfo.defaultBranch, limit: 1 }))[0]?.hash;
       if (current !== task.baseCommit && current !== head) throw new ApiError(409, 'STALE_BASE', 'The target branch changed after review.');
       if (current !== head) {
+        await requirePolicy();
         this.assertLease(key, attemptId);
-        requirePolicy();
         const write = await target.createToken('write', 180);
         let read: Awaited<ReturnType<typeof candidate.createToken>> | undefined;
         try {
+          await requirePolicy();
           this.assertLease(key, attemptId);
-          requirePolicy();
           read = await candidate.createToken('read', 180);
-          requirePolicy();
+          await requirePolicy();
+          this.assertLease(key, attemptId);
           await runtime.git.merge({ remote: safeRemote(targetInfo.remote), token: write.plaintext, defaultBranch: targetInfo.defaultBranch,
             candidateRemote: resource.remote, candidateToken: read.plaintext, candidateBranch: run.branch, baseCommit: task.baseCommit, headCommit: head,
             beforePush: async () => {
               await branchHead(candidate, run.branch, head);
+              await requirePolicy();
               const fresh = this.assertLease(key, attemptId);
-              requirePolicy();
               core(() => mergeRun(structuredClone(fresh.workspace), runId, { headCommit: head, baseCommit: task.baseCommit, mergedCommit: head }));
               pushMayHaveStarted = true;
             } });

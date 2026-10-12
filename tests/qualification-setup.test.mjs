@@ -41,6 +41,7 @@ test('generated qualification resources use operator inputs, stay offline and om
   assert.equal(hosted.account_id,valid.account);assert.equal(hosted.name,valid.workerName);
   assert.equal(hosted.vars.WORKSPACE_ID,valid.workspace);assert.equal(hosted.vars.MODEL_REPOSITORY,valid.repository);
   assert.equal(hosted.artifacts[0].namespace,valid.artifactsNamespace);
+  assert.deepEqual(hosted.services,[{binding:'CURRENT_POLICY',service:hosted.name,entrypoint:'WorkspacePolicy'}]);
   assert.equal(driver.services[0].service,valid.workerName);assert.equal(driver.name,valid.workerName+'-local-driver');
   assert.deepEqual(JSON.parse(hosted.vars.ACCESS_AGENT_CLIENT_IDS),f.agents.map(a=>a.client_id));
   assert.deepEqual(JSON.parse(hosted.vars.ACCESS_REVIEWER_CLIENT_IDS),['9'.repeat(32)+'.access','a'.repeat(32)+'.access']);
@@ -51,6 +52,11 @@ test('generated qualification resources use operator inputs, stay offline and om
   for(const agent of f.agents)assert.ok(![JSON.stringify(hosted),JSON.stringify(driver),updated,result.stdout,result.stderr].some(text=>text.includes(agent.client_secret)));
   const key=await readFile(join(f.qa,'.dev.vars'),'utf8');assert.match(key,/^HARNESS_KEY=[a-f0-9]{64}\n$/);
   assert.equal(configure(f).status,0);assert.equal(await readFile(join(f.qa,'.dev.vars'),'utf8'),key);
+  const isolation=spawnSync(process.execPath,[resolve('tests/qualification/configure-isolation.mjs')],{cwd:f.root,encoding:'utf8',windowsHide:true});
+  assert.equal(isolation.status,0,isolation.stderr);
+  const second=JSON.parse(await readFile(join(f.qa,'second.wrangler.jsonc'),'utf8'));
+  assert.notEqual(second.vars.WORKSPACE_ID,hosted.vars.WORKSPACE_ID);
+  assert.deepEqual(second.services,[{binding:'CURRENT_POLICY',service:second.name,entrypoint:'WorkspacePolicy'}]);
 });
 
 test('qualification refuses missing, overlapping or duplicate reviewers before writing configuration',async t=>{

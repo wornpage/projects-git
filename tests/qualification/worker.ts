@@ -1,5 +1,6 @@
 import {DurableObject,WorkerEntrypoint} from 'cloudflare:workers';
 import production, {WorkspaceCoordinator as ProductionWorkspace} from '../../src/cloudflare/index.ts';
+export {WorkspacePolicy} from '../../src/cloudflare/index.ts';
 import {RepositoryCheckContainer as ProductionCheck} from '../../src/cloudflare/check-container.ts';
 import {WorkspaceStore} from '../../src/cloudflare/workspace-store.ts';
 import {ArtifactGit} from '../../src/cloudflare/git-transport.mjs';

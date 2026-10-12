@@ -5,6 +5,7 @@
   "preview_urls": false,
   "routes": [],
   "main": "src/cloudflare/index.ts",
+  "services": [{"binding":"CURRENT_POLICY","service":"projects-git-your-workspace","entrypoint":"WorkspacePolicy"}],
   "compatibility_date": "2026-10-03",
   "compatibility_flags": [
     "nodejs_compat"
