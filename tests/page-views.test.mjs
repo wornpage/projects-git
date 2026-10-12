@@ -80,6 +80,20 @@ test('review handoff shows names, roles and actual delivery expectations without
   f.context.demo=false;f.workspace.authentication.principal.kind='agent';assert.equal(f.page().querySelector('#human-review-link-'+f.run.id),null);
 });
 
+test('review result and next responsibility precede collapsed role explanations',()=>{
+  const f=ownerReviewFixture(),page=f.page(),body=page.querySelector('#code-review').children[0].children[1];
+  const text=body.textContent;
+  assert.ok(text.indexOf('Independent code review required')<text.indexOf('Next step'));
+  assert.ok(text.indexOf('Next step')<text.indexOf('Roles and security checks'));
+  assert.match(text,/Assigned reviewer · Code review agent, Alex Chen/);
+  assert.match(text,/Waiting onA submitted assessment/);
+  const explanation=page.querySelector('#review-authorities-'+f.run.id);
+  assert.equal(explanation.tagName,'DETAILS');assert.equal(explanation.open,false);
+  assert.equal(page.querySelector('#code-review').attrs.tabindex,'-1');
+  assert.equal(page.querySelector('#assign-reviewers-'+f.run.id).disabled,false);
+  assert.deepEqual(f.calls,[]);
+});
+
 test('an agent redacted reviewer allowlist is not presented as missing workspace configuration',()=>{
   const f=ownerReviewFixture();f.workspace.authentication.reviewerClientIds=[];f.workspace.authentication.reviewerSubjects=[];
   assert.match(f.page().textContent,/No independent reviewer is configured/);
@@ -144,12 +158,13 @@ test('demo review explains its illustrative records while a working hosted works
  f.workspace.authentication={permissions:{manage:false,review:false,merge:false}};
  f.context.demo=true;
  const demo=createReviewView(f.ports)().textContent;
- assert.match(demo,/illustrative review/);assert.match(demo,/does not authenticate a reviewer or run checks/);
+ assert.match(demo,/Illustrative review/);assert.match(demo,/does not authenticate a reviewer or run checks/);
+ assert.match(demo,/Sample review: not recorded/);assert.match(demo,/Next stepViewer/);
  assert.ok(!demo.includes('No independent reviewer is configured'));
  f.context.demo=false;
  f.workspace.authentication={principal:{kind:'owner'},permissions:{manage:true,review:true,merge:true},agentClientIds:[],reviewerClientIds:[],reviewerSubjects:[]};
  const hosted=createReviewView(f.ports)().textContent;
- assert.match(hosted,/No independent reviewer is configured/);assert.ok(!hosted.includes('illustrative review'));
+ assert.match(hosted,/No independent reviewer is configured/);assert.ok(!hosted.includes('Illustrative review'));
  f.workspace.provider='local-git';
  const local=createReviewView(f.ports)().textContent;
  assert.match(local,/Local loopback decisions are attribution/);assert.ok(!local.includes('No independent reviewer is configured'));
@@ -163,6 +178,7 @@ test('review view renders structured findings and labels older prose as history'
    location:{path:'index.js',side:'head',startLine:2,endLine:2},evidence:'The checked line lacks a bound.'}],
    identity:{displayName:'Reviewer'},context:{headCommit:f.run.headCommit}};
  const structured=createReviewView(f.ports)().textContent;
+ assert.ok(structured.indexOf('Next step')<structured.indexOf('Found a line-level issue'),'Long assessments must not bury next-step responsibility');
  for(const phrase of ['Found a line-level issue','P1 · Unsafe arithmetic','index.js · current source · line 2','The sum can overflow.'])assert.ok(structured.includes(phrase),phrase);
  delete f.run.codeReview.format;f.run.codeReview.findings='Old prose, preserved';f.run.codeReview.summary=undefined;
  const historical=createReviewView(f.ports)().textContent;assert.ok(historical.includes('Historical prose assessment: Old prose, preserved'));

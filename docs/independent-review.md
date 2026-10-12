@@ -177,8 +177,18 @@ code review was recorded; they are never relabeled as having passed this gate.
 ## User interface and exports
 
 The review view separates Changes, Checks, Independent review and Owner decision.
-The independent panel shows the four authorities, pending/stale/changes-requested/
-passed state, authenticated attribution, findings and earlier assessments. The
+The independent panel leads with the result, identifies who owns the next step
+and what is waiting, then shows the assessment. Guidance distinguishes a recorded review
+request from a started agent, current verification from stale evidence, owner
+decisions from automatic policy evaluation, and queued merges from recovery.
+Read-only examples label their status as sample data and show no pending live
+work. The project integration mode is shown alongside the next step. The four
+authorities and security explanation remain available in **Roles and security
+checks**; findings, authenticated attribution and earlier assessments remain
+visible. After a current passing review, assignment and renewal controls move
+into a disclosure so they do not look like required work. They remain directly
+visible when a review needs attention. These are snapshot-based display hints,
+not authorization checks. The
 owner can download context and label configured reviewers, but cannot supply
 the authenticated identity recorded on an independent assessment.
 The owner assigns allowlisted reviewers and records finding decisions. Human

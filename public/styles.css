@@ -3414,6 +3414,19 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
   .lifecycle-state { text-align:right; }
   .lifecycle-detail { grid-column:1 / -1; }
 }
+.review-result-label { margin:0; font-size:20px; font-weight:700; line-height:1.35; }
+.review-result[data-state="passed"] .review-result-label { color:var(--worn-accent); }
+.review-sample-note { margin:8px 0 0; }
+.review-next-step { margin-block:22px 18px; padding-top:18px; border-top:1px solid var(--worn-border); }
+.review-next-step h3 { margin:0 0 10px; }
+.review-next-step p { margin:8px 0; max-width:75ch; }
+.review-next-owner { font-weight:650; overflow-wrap:anywhere; }
+.review-waiting { display:grid; grid-template-columns:90px minmax(0,1fr); gap:12px; margin:12px 0; }
+.review-waiting dt { font-weight:650; }
+.review-waiting dd { margin:0; overflow-wrap:anywhere; }
+.review-waiting ul { margin:0; padding-inline-start:20px; }
+.review-integration-mode { color:var(--worn-text-secondary); }
+@media (max-width:620px) { .review-waiting { grid-template-columns:minmax(0,1fr); gap:5px; } #code-review { scroll-margin-top:76px; } }
 .review-boundaries { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; padding:0; list-style:none; }
 .review-boundaries li { border-left:2px solid var(--worn-border); padding-left:10px; }
 .review-boundaries strong, .review-boundaries span { display:block; }
@@ -3422,11 +3435,11 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
 .review-findings > li { margin-block:14px; padding:12px 14px; border:1px solid var(--worn-border); border-radius:10px; background:var(--worn-surface); }
 .review-findings li > p { margin-block:8px; }
 .review-finding-location { color:var(--worn-text-secondary); font-size:13px; overflow-wrap:anywhere; }
-.review-assessment-card { border:1px solid var(--worn-border); border-radius:12px; padding:18px 20px; margin-block:20px; background:var(--worn-surface); }
+.review-assessment-card { padding:0; margin-block:20px; }
 .review-assessment-card h3 { margin:0 0 6px; }
 .review-assessment-meta { margin:0 0 18px; color:var(--worn-text-secondary); font-size:13px; overflow-wrap:anywhere; }
 .review-assessment-summary { margin-block:0 14px; }
-.review-assessment-earlier { background:var(--worn-bg-secondary); }
+.review-assessment-earlier { padding:18px 20px; border:1px solid var(--worn-border); border-radius:12px; background:var(--worn-bg-secondary); }
 .finding-history { border-inline-start:2px solid var(--worn-border); padding-inline-start:12px; }
 .finding-decision-history { padding-inline-start:20px; }
 .finding-decision-history li { margin-block:12px; }

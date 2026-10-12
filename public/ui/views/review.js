@@ -2,7 +2,7 @@ import {$, el, panel, shortSha, dateTime} from '../dom.js';
 import {candidateOutcome, reviewContext} from '../../workbench-state.js';
 import {mergeReportPanel, earlierReportPanel} from '../workbench-parts.js';
 import {independentReviewBinding,independentReviewStatus} from '../../review-boundary.js';
-import {reviewerChoices,reviewRequestLabel,humanReviewLink} from '../../review-handoff.js';
+import {reviewerChoices,reviewRequestLabel,humanReviewLink,reviewNextStep} from '../../review-handoff.js';
 
 export function createReviewView({
   getContext,
@@ -96,13 +96,13 @@ export function createReviewView({
         el('span',{class:'reviewer-choice-text'},el('strong',{},option.name),el('span',{class:'small'},option.role))))),
       selectedCount,el('p',{id:'reviewer-selection-help-'+run.id,class:'small'},!canAssign?'Finish current passing checks before requesting review.':current?
         'Renewing replaces the current request and any acceptance. A fresh assessment is required.':'Select one to eight configured reviewers, then save the request.'),assignButton):null,
-      el('div',{class:'review-handoff'},el('h4',{},'Next steps'),
+      disclosure('review-delivery-'+run.id,'Review delivery instructions',el('div',{class:'review-handoff'},
         el('p',{},'Assigning records the request only. No email is sent and no reviewer agent is launched.'),
         !current?el('p',{class:'small'},'After assigning, give the agent its review task or copy the human review link.'):null,
         current&&!canShare?el('p',{class:'small'},'Refresh the candidate and checks, then renew the request before handing it off.'):null,
         agentAssigned?el('p',{},'Agent review: give the task to a separate agent session using its reviewer credentials. It reads the assigned review context and submits an assessment.'):null,
-        humanAssigned?el('p',{},'Human review: send the link yourself. The assigned person signs in and reviews the candidate. Login codes authenticate them; they are not review invitations.'):null,
-        link?el('div',{class:'review-link'},el('label',{for:'human-review-link-'+run.id},'Link for the saved human review assignment'),linkField,copy,notice):null),
+        humanAssigned?el('p',{},'Human review: send the link yourself. The assigned person signs in and reviews the candidate. Login codes authenticate them; they are not review invitations.'):null)),
+      link?el('div',{class:'review-link'},el('label',{for:'human-review-link-'+run.id},'Link for the saved human review assignment'),linkField,copy,notice):null,
       naming);
   }
   function assessmentDetails(workspace, run, assessment) {
@@ -147,23 +147,32 @@ export function createReviewView({
     const demo = getContext().demo;
     const actor=workspace.authentication?.principal;
     const canReadContext=workspace.authentication?.permissions.review || actor?.kind==='reviewer'&&run.reviewAssignments?.at(-1)?.reviewerIds.includes(actor.id);
+    const next = reviewNextStep(workspace, run, {demo});
+    const requestControls = reviewerAssignmentPanel(workspace, run);
+    const resultLabel = demo ? 'Sample review: ' + ({passed:'passed',pending:'not recorded','changes-requested':'changes requested',stale:'stale',historical:'historical',invalid:'invalid',unavailable:'unavailable'}[state.state]) : state.label;
     const boundaries = el('ol', {class:'review-boundaries', 'aria-label':'Review authority boundaries'},
       el('li',{},el('strong',{},'Builder'),el('span',{},'Produces the candidate commit')),
       el('li',{},el('strong',{},'Verifier'),el('span',{},'Runs trusted checks')),
       el('li',{},el('strong',{},'Independent reviewer'),el('span',{},'Reads source and records an assessment')),
-      el('li',{},el('strong',{},'Owner'),el('span',{},'Accepts or rejects; merge is separate')));
-    return panel('Independent code review',el('div',{class:'panel-body'},boundaries,
-      el('p',{role:'status'},state.label),
-      demo ? el('p',{class:'small'},'This read-only example contains an illustrative review. Its records are invented; browsing does not authenticate a reviewer or run checks.')
-      : !hosted ? el('p',{class:'small'},'Local loopback decisions are attribution. This mode does not authenticate an independent reviewer or establish a security boundary between local processes.')
-      : el('p',{class:'small'},'Reviewer credentials cannot claim work, edit code, run checks, accept candidates or merge. A changed commit, requirements, owner or verification policy makes the assessment stale.'),
-      !demo && hosted && workspace.authentication?.principal?.kind==='owner' && !workspace.authentication?.reviewerClientIds?.length && !workspace.authentication?.reviewerSubjects?.length ? el('p',{class:'small'},'No independent reviewer is configured. Allowlist a separate Access reviewer identity before owner acceptance.') : null,
-      reviewerAssignmentPanel(workspace,run),
-      hosted && canReadContext && ['awaiting_review','accepted'].includes(run.status) && independentlyVerified(run) ? el('button',{id:'review-context-'+run.id,type:'button',class:'button button-small review-context-download',disabled:getContext().busy,onclick:()=>downloadReviewContext(run)},'Download read-only review context') : null,
+      el('li',{},el('strong',{},'Owner'),el('span',{},'Sets integration policy and resolves exceptions; can accept or reject and request a guarded merge')));
+    return panel('Independent code review',el('div',{class:'panel-body'},
+      el('div',{class:'review-result','data-state':state.state},el('p',{class:'review-result-label',role:'status'},resultLabel),
+        demo ? el('p',{class:'small review-sample-note'},'Illustrative review · invented example records. Browsing does not authenticate a reviewer or run checks.') : null,
+        !demo && !hosted ? el('p',{class:'small'},'Local loopback decisions are attribution. This mode does not authenticate an independent reviewer or establish a security boundary between local processes.') : null),
+      el('section',{class:'review-next-step','aria-label':'Next review step'},
+        el('h3',{},'Next step'),el('p',{class:'review-next-owner'},next.owner),el('p',{},next.next),
+        el('dl',{class:'review-waiting'},el('dt',{},'Waiting on'),el('dd',{},next.waiting.length === 0 ? 'Nothing for this candidate.' : next.waiting.length === 1 ? next.waiting[0] : el('ul',{},next.waiting.map(text=>el('li',{},text))))),
+        el('p',{class:'small review-integration-mode'},'Integration: '+next.integration)),
       assessment ? el('article',{class:'review-assessment-card'},
-        el('h3',{},state.state === 'stale' ? 'Earlier assessment · stale' : assessment.verdict === 'pass' ? 'Passing assessment' : 'Changes requested'),
+        el('h3',{},state.passed ? 'Recorded assessment' : state.state === 'changes-requested' ? 'Requested changes' : 'Earlier assessment · not current approval'),
         el('p',{class:'review-assessment-meta'},`${assessment.identity.displayName} · ${dateTime(assessment.at)} · commit ${shortSha(assessment.context.headCommit)}`),
         assessmentDetails(workspace,run,assessment)) : null,
+      !demo && hosted && actor?.kind==='owner' && !workspace.authentication?.reviewerClientIds?.length && !workspace.authentication?.reviewerSubjects?.length ? el('p',{class:'small'},'No independent reviewer is configured. Allowlist a separate Access reviewer identity before owner acceptance.') : null,
+      state.passed && requestControls ? disclosure('review-assignment-settings-'+run.id,'Reviewer assignment and renewal',requestControls) : requestControls,
+      hosted && canReadContext && ['awaiting_review','accepted'].includes(run.status) && independentlyVerified(run) ? el('button',{id:'review-context-'+run.id,type:'button',class:'button button-small review-context-download',disabled:getContext().busy,onclick:()=>downloadReviewContext(run)},'Download read-only review context') : null,
+      disclosure('review-authorities-'+run.id,'Roles and security checks',boundaries,
+        el('p',{class:'small'},'These are permission boundaries, not four required people. The coding host runs the agents. Owner-enabled automatic integration handles eligible submissions after current checks and independent review.'),
+        el('p',{class:'small'},'Reviewer credentials cannot claim work, edit code, run checks, accept candidates or merge. A changed commit, requirements, owner or verification policy makes the assessment stale.')),
       run.codeReviewHistory?.length ? disclosure('code-review-history-'+run.id, `${run.codeReviewHistory.length} earlier independent assessment(s)`,
         run.codeReviewHistory.map(item=>el('article',{class:'review-assessment-card review-assessment-earlier'},
           el('h3',{},decisionLabel(item.verdict)),
