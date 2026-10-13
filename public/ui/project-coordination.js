@@ -4,7 +4,7 @@ import {taskQueued} from '../workbench-state.js';
 
 // The project queue lists tasks. Candidate files, checks and review details
 // belong to their candidate page, not to nested workbenches inside this list.
-export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCandidates,collections}) {
+export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCandidates,collections,disclosure}) {
   const model=projectCoordination(workspace,projectId), cap=model.capacity;
   const rows=collections({id:'tasks-'+projectId,label:'Tasks',items:model.cards,text:card=>card.title,
     filters:[['all','All statuses'],['queued','Queued'],['active','Active'],['decision','Needs decision'],['integrated','Integrated']],
@@ -27,9 +27,10 @@ export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCa
           }},card.retainedCandidates+' candidate'+(card.retainedCandidates===1?'':'s')))))
       : el('p',{},model.totalTasks?'No matching tasks. Clear the filters to browse the full queue.':'No tasks yet. Add a task to this project.'),
     rows.navigation,
-    el('p',{class:'definition-note'},model.totalCandidates+' retained candidate'+(model.totalCandidates===1?'':'s')+' across '+model.totalTasks+' total task'+(model.totalTasks===1?'':'s')+'.'),
-    cap&&Number.isInteger(cap.occupied)?el('p',{class:'definition-note'},'Workspace capacity: '+cap.occupied+' / '+cap.limit+' execution slots across all projects. Task and candidate totals cover this project only.'):null,
-    el('p',{class:'definition-note'},'Full totals include every status, including integrated and failed work. Filters change the visible rows. A candidate is one proposed result for a task.'));
+    el('p',{class:'definition-note'},model.totalCandidates+' retained candidate'+(model.totalCandidates===1?'':'s')
+      +(cap&&Number.isInteger(cap.occupied)?' · Workspace execution: '+cap.occupied+' / '+cap.limit+' slots':'')),
+    disclosure('task-count-help-'+projectId,'About task counts',
+      el('p',{},'Task totals include every status. Filters change only the visible rows. A candidate is one proposed result for a task. Execution capacity covers all projects.')));
 }
 
 // Operational detail remains available without becoming a nested task list.

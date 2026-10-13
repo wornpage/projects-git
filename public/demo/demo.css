@@ -18,7 +18,7 @@
 .demo-guide-content{display:grid;gap:16px}.demo-guide-content[hidden]{display:none}.demo-guide-content p{margin:0;font-size:14px;line-height:1.6}
 .demo-guide-content nav{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.demo-step{display:inline-flex;align-items:center;min-height:36px;padding:6px 9px;border:1px solid #9ab3a5;border-radius:6px;background:#fff;color:#174638;font-size:12px;font-weight:600;text-decoration:none}
 .demo-step[aria-current="step"]{background:#cfe9dd;border-color:#4a8671}.demo-step:focus-visible{outline:3px solid #0e746d;outline-offset:3px}
-body[data-demo] .topbar .avatar{display:none}body[data-demo] .topbar-right{gap:16px}body[data-demo] .connection-status::before{display:none}
+body[data-demo] .topbar-right{column-gap:16px}body[data-demo] .connection-status::before{display:none}
 @media(max-width:1000px){.welcome-path{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:650px){.welcome-header,.welcome-main,.welcome-footer{width:calc(100% - 32px)}.welcome-header{padding-block:18px;gap:16px;flex-wrap:wrap}.welcome-main{padding-block:32px;gap:32px}.welcome-path{grid-template-columns:1fr}.welcome-path li{padding:20px}.welcome-actions .button{width:100%;justify-content:center;white-space:normal;text-align:center}.welcome-project .panel-body,.welcome-working .panel-body{padding:22px}.demo-guide{gap:4px 12px}.demo-guide-content nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.demo-step{font-size:13px;min-height:44px;overflow-wrap:anywhere}}
 @media(prefers-reduced-motion:reduce){.demo-welcome{scroll-behavior:auto}}

@@ -21,7 +21,7 @@ export function mergeStatusNotice(workspace, redact = value => value) {
 export function mergeReportPanel(workspace, run, disclosure) {
   const completed=completedVerification(workspace,run), reports=mergeReports(workspace,run);
   if (!reports.length) return completed ? panel('Merge-attempt checks',el('div',{class:'panel-body'},
-    el('p',{},completed.missingMergeReport),el('p',{class:'definition-note'},completed.definition))) : null;
+    el('p',{},completed.missingMergeReport),disclosure('merge-report-help-'+run.id,'About these checks',el('p',{},completed.definition)))) : null;
   return createReportList({id:'merge-reports-'+run.id,title:completed?'Merge-attempt checks':'Fresh merge verification',
     entries:reports.map(({report,label})=>({report,label:label+' · attempt '+report.attemptId})),disclosure,
     definition:'These server-tagged reports record merge attempts. The acceptance-time report remains separate; older unmarked history is not merge proof.'});
@@ -104,8 +104,8 @@ export function createWorkbenchParts({
     const completed = completedVerification(workspace, run);
     const title = completed?.acceptance.label ?? 'Independent verification';
     const evidence = run.evidence;
-    const pending=run.verificationPending ? el('div',{class:'action-notice action-pending',role:'status'},el('strong',{},'Independent checks are running'),el('p',{},'This view follows the saved result. Acceptance remains unavailable until current checks finish and pass.')) : null;
-    if (!evidence) return panel(title, el("div", { class: "panel-body" }, pending,el("p", { class: "small muted" }, completed ? 'No acceptance-time check report was retained.' : "No evidence has been recorded for this candidate. Acceptance stays unavailable until all independent checks pass against its exact head commit.")));
+    const pending=run.verificationPending ? el('div',{class:'action-notice action-pending',role:'status'},el('strong',{},'Independent checks are running')) : null;
+    if (!evidence) return panel(title, el("div", { class: "panel-body" }, pending,el("p", { class: "small muted" }, completed ? 'No acceptance-time check report was retained.' : 'No independent checks recorded for this commit.')));
     const valid = independentlyVerified(run);
     const failed = evidence.checks.filter(check => !check.passed);
     const passed = evidence.checks.filter(check => check.passed);

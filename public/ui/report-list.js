@@ -43,6 +43,7 @@ export function createReportList({id, title, entries, definition, disclosure}) {
         el('pre',{class:'output'},JSON.stringify(report.verification,null,2))) : null].filter(node=>node!==null));
   }
   drawRows();draw();
-  return panel(title,el('div',{class:'panel-body report-browser'},el('p',{class:'definition-note'},definition),
-    entries.length>25?navigation:null,entries.length>1?list:null,detail));
+  return panel(title,el('div',{class:'panel-body report-browser'},
+    entries.length>25?navigation:null,entries.length>1?list:null,detail,
+    disclosure(id+'-scope','About these reports',el('p',{},definition))));
 }

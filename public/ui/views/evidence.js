@@ -104,7 +104,7 @@ export function createEvidenceView({
     const rows=view==='history'?collections({id:'history-candidates-'+project.id,label:'History candidates',items:runs,text:run=>run.label+' '+(run.headCommit??'')+' '+workspace.tasks.find(task=>task.id===run.taskId)?.title,
       filters:[['all','All statuses'],...['assigned','running','awaiting_review','accepted','rejected','merged','failed','superseded'].map(status=>[status,status.replaceAll('_',' ')])],
       matches:(run,status)=>status==='all'||run.status===status,sorts:[['order','Original order'],['name','Candidate name'],['newest','Newest first']],sortKey:(run,sort)=>sort==='name'?run.label.toLowerCase():run.createdAt??run.finishedAt??''}):null;
-    const columns = ["Candidate", "Head commit", "Checks", "Verification", "Decision"];
+    const columns = ["Candidate", "Head commit", "Latest checks", "Verification", "Decision"];
     const cell = (label, value) => el("td", { role: "cell" },
       el("span", { class: "evidence-field-label", "aria-hidden": "true" }, label),
       el("div", { class: "evidence-field-value" }, value));
@@ -119,7 +119,7 @@ export function createEvidenceView({
         return el("tr", { role: "row" },
           cell("Candidate", [inspect, el("p", { class: "evidence-task" }, `Task ${taskNumber(candidateTask)} · ${candidateTask.title}`)]),
           cell("Head commit", el("span", { class: "mono", title: candidate.headCommit || "No commit" }, shortSha(candidate.headCommit))),
-          cell("Checks", el("span", { class: `mono ${checksFailed(candidate) ? "checks-failed" : ""}` }, candidate.evidence ? `${candidate.evidence.passed} / ${candidate.evidence.total}` : "No report")),
+          cell("Latest checks", el("span", { class: `mono ${checksFailed(candidate) ? "checks-failed" : ""}` }, candidate.evidence ? `${candidate.evidence.passed} / ${candidate.evidence.total}` : "No report")),
           cell("Verification", independentlyVerified(candidate) ? "Independent · exact head" : candidate.evidence ? "Unverified report" : "Pending"),
           cell("Decision", runStatus(candidate)));
       }))) : el("div", { class: "no-candidate" }, "No candidates or evidence yet. Start a task to create the first records.");
@@ -143,7 +143,8 @@ export function createEvidenceView({
             el('pre', { class: 'output' }, evidence.output || 'No output retained')) : null) : null) : null,
       view==='history' ? el('div',{},
       el('section',{'aria-label':'Retained project candidates'},rows.controls,table,rows.navigation),
-      el('p', { class: 'definition-note' }, 'Each row shows passed / total from that candidate’s latest report, including stale reports. Earlier reports keep their own counts above and in the task export. Independent verification and human acceptance are separate.'),
+      disclosure('history-count-help-'+project.id,'About these records',
+        el('p',{},'Checks show passed / total from each candidate’s latest report, which may be stale. Verification identifies current independent evidence. Earlier reports remain in the candidate record.')),
       project ? disclosure('history-search-'+project.id,'Search retained contents and filenames',retainedWorkSearch(project)) : null,
       disclosure('project-events-' + (project?.id ?? workspace.id), 'Complete project activity · ' + events.length + ' events', timeline(events, Infinity,'project-events-'+project.id)),
       unscopedEvents.length ? disclosure('unscoped-events', 'Workspace activity without project attribution · ' + unscopedEvents.length + (unscopedEvents.length === 1 ? ' event' : ' events'),

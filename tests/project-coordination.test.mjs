@@ -8,6 +8,7 @@ import {projectCoordinationView,projectActivityDetails} from '../public/ui/proje
 import {installFakeDOM} from './helpers/fake-dom.mjs';
 import {createWorkView} from '../public/ui/views/work.js';
 import {el} from '../public/ui/dom.js';
+const disclosure=(id,title,...body)=>el('details',{id},el('summary',{},title),...body);
 
 function fixture(){
  const workspace=createWorkspace();workspace.provider='cloudflare-artifacts';
@@ -42,8 +43,9 @@ test('project cards preserve scope, prerequisites, failed evidence and every can
 
 test('task collection uses exact task links, includes every status and keeps candidate details out of the list',async()=>{
  installFakeDOM();const f=fixture(),calls=[],before=structuredClone(f.workspace);
- const view=projectCoordinationView({collections:makePager(f.workspace),workspace:f.workspace,projectId:f.project.id,onOpenTask:id=>calls.push(id),onOpenCandidates:id=>calls.push(['candidates',id])});
- assert.match(view.textContent,/2 total tasks/);assert.match(view.textContent,/4 \/ 4 execution slots across all projects/);
+ const view=projectCoordinationView({collections:makePager(f.workspace),disclosure,workspace:f.workspace,projectId:f.project.id,onOpenTask:id=>calls.push(id),onOpenCandidates:id=>calls.push(['candidates',id])});
+ assert.match(view.textContent,/2 total tasks/);assert.match(view.textContent,/Workspace execution: 4 \/ 4 slots/);
+ const help=view.querySelector('#task-count-help-'+f.project.id);assert.equal(help.tagName,'DETAILS');assert.equal(help.open,false);assert.match(help.textContent,/Execution capacity covers all projects/);
  const nodes=flatten(view),list=nodes.find(n=>n.tagName==='UL'&&n.attrs['aria-label']==='Tasks in this project');
  assert.equal(list.children.length,2);assert.ok(!view.textContent.includes('checkout.py'));assert.ok(!view.textContent.includes('Inspect candidate'));
  const link=nodes.find(n=>n.tagName==='A'&&n.textContent==='Foundation');
@@ -71,7 +73,7 @@ test('queue preserves status and denominator without mixing repository event cou
  installFakeDOM();const f=fixture();f.project.acceptingWork=false;
  f.workspace.artifactEvents={events:3,completed:1,pending:1,failed:1,attempts:5};
  f.run.repositoryObservation={observedAt:'2026-10-09T15:00:00Z',headCommit:'c'.repeat(40),requiresSubmission:true};
- const view=projectCoordinationView({collections:makePager(f.workspace),workspace:f.workspace,projectId:f.project.id,onOpenTask(){}});
+ const view=projectCoordinationView({collections:makePager(f.workspace),disclosure,workspace:f.workspace,projectId:f.project.id,onOpenTask(){}});
  assert.match(view.textContent,/New assignments are paused/);assert.match(view.textContent,/New push observed/);
  assert.match(view.textContent,/2 total tasks/);assert.ok(!view.textContent.includes('undefined'));
  assert.equal(f.run.headCommit,'b'.repeat(40));
@@ -106,8 +108,8 @@ test('an empty candidate view reflects paused admission or unavailable agents wi
  assert.ok(!text.includes('Ready for work'));assert.ok(!text.includes('Start with one checkout'));
 });
 
-test('a one-task collection uses its actual singular population',()=>{
+test('a one-task collection retains its candidate count and full task denominator',()=>{
  installFakeDOM();const f=fixture();f.workspace.tasks=[f.task];
- const text=projectCoordinationView({collections:makePager(f.workspace),workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}).textContent;
- assert.match(text,/1 retained candidate across 1 total task\./);
+ const text=projectCoordinationView({collections:makePager(f.workspace),disclosure,workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}).textContent;
+ assert.match(text,/1 retained candidate(?!s)/);assert.match(text,/1 matching \/ 1 total tasks/);
 });

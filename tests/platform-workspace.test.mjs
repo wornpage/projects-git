@@ -98,7 +98,7 @@ test('project directory opens a project collection without silently restoring a 
 });
 
 test('task collection includes ongoing and integrated work with the unchanged project denominator',()=>{
- const f=fixture(),view=projectCoordinationView({collections:makePager(f.workspace),workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}),text=view.textContent;
+ const f=fixture(),view=projectCoordinationView({collections:makePager(f.workspace),disclosure:f.ports.disclosure,workspace:f.workspace,projectId:f.project.id,onOpenTask(){}}),text=view.textContent;
  assert.match(text,/2 total tasks/);assert.ok(text.includes('Current task'));assert.ok(text.includes('Integrated task'));assert.ok(!text.includes('Other queue'));
 });
 

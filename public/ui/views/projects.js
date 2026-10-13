@@ -2,7 +2,7 @@ import {el, panel, shortSha} from '../dom.js';
 import {projectBrief} from '../../workbench-state.js';
 
 // Workspace discovery is a read-only projection of the same project selectors.
-export function createProjectsView({getContext, getProjectSelection, selectProject, switchView, openTaskComposer, changeProjectPage, createStarter}) {
+export function createProjectsView({getContext, disclosure, getProjectSelection, selectProject, switchView, openTaskComposer, changeProjectPage, createStarter}) {
   function projectCard(project) {
     const {workspace}=getContext(),brief=projectBrief(workspace,project.id);
     const code=project.codeConnected===false ? 'Code unavailable' : workspace.provider==='cloudflare-artifacts' ? 'Artifacts code' : 'Workspace Git copy';
@@ -53,7 +53,9 @@ export function createProjectsView({getContext, getProjectSelection, selectProje
             el('li',{},'Inspect the submitted change and configure independent checks. In the hosted app, assign a separate reviewer before making your decision.'),
             el('li',{},'Accept a suitable candidate, then merge it as a separate action. Merging does not deploy.')))),
       pagination(),
-      projects.length ? el('p',{class:'definition-note'},(page?page.totalProjects:projects.length)+' project'+((page?page.totalProjects:projects.length)===1?'':'s')+' total · Counts are tasks / all tasks in each project, including integrated work. Active and decision tasks can overlap. Ready to claim still requires admission, available code and capacity.') : null,
+      projects.length ? el('div',{},
+        !page?el('p',{class:'definition-note'},projects.length+' project'+(projects.length===1?'':'s')+' total'):null,
+        disclosure('project-count-help','About task counts',el('p',{},'Counts are tasks / all tasks in each project, including integrated work. Active and decision tasks can overlap. Ready to claim also requires admission, available code and execution capacity.'))) : null,
       workspace.personalWorkspace && projects.length ? el('details',{class:'personal-workspace-note'},el('summary',{},'About your isolated workspace'),
         el('p',{},'Your projects, tasks and repositories are separate from other visitors and the working workspace. This trial has no connected agents or model key; it does not manufacture completed work.')) : null);
   };

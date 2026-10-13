@@ -12,6 +12,11 @@ counters and handlers move into the panel and return to the sidebar on close.
 Desktop keeps its sidebar; the phone header stays compact while the full scoped
 navigation and counts remain available.
 
+The header keeps Find work on one line and groups connection state above the
+signed-in identity. Long identities truncate visually while retaining their full
+text and title. Breadcrumbs have their own space on desktop; smaller layouts use
+the selected project and navigation below. The decorative initial badge is removed.
+
 A single project shows its name without a project picker. The picker appears only
 when the full workspace contains multiple projects, including projects outside
 the loaded page. **Browse all projects** appears only when more projects are
@@ -81,6 +86,13 @@ Changing a query or status starts at the first page. Filtering never removes
 records or changes workflow state. Counts and eligibility use the complete
 selected project, independent of the visible page. Execution-slot capacity
 remains workspace-wide, including work outside the loaded projects.
+
+Everyday screens lead with results, next actions and short count labels. Routine
+definitions use **About task counts**, **About these records** and **About these
+reports** disclosures. Check setup puts runtime detail under **How checks run**.
+These use the existing disclosure state and keyboard behavior. Sample labels,
+blocking warnings, current status, report numerators/denominators and workflow
+actions remain visible; stored evidence and decisions are unchanged.
 
 Task details defines the agreed work and requirements. A compact candidate
 summary links to the separate result collection. Candidates keeps brief task

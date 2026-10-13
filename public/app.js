@@ -108,7 +108,7 @@ const publicationPanel = createPublicationView({getContext, captureSession:conne
 const taskViews = createTaskViews({getContext, parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
   switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections, openAgentConnection});
 const views = {
-  projects: createProjectsView({getContext, getProjectSelection:id=>projectSelections.get(id), selectProject, switchView, openTaskComposer, changeProjectPage, createStarter: async () => {
+  projects: createProjectsView({getContext, disclosure, getProjectSelection:id=>projectSelections.get(id), selectProject, switchView, openTaskComposer, changeProjectPage, createStarter: async () => {
     const result = await mutate(() => api("/api/workspace/starter", {expectedWorkspaceId:workspace.id}), "Your starter project is ready.");
     if (result) await refresh(true);
   }}),
@@ -262,7 +262,6 @@ function updateChrome() {
   const local = workspace.provider === "local-git";
   $("#workspace-name").textContent = workspace.name;
   $("#provider-label").textContent = demo ? 'Example records' : local ? "Local Git workspace" : "Cloudflare Artifacts";
-  $("#provider-note").textContent = demo ? 'This sample illustrates the workflow. Recorded Cloudflare qualification is linked from the welcome page.' : local ? 'Projects keep their code, task queue, agent work and decisions together. Git stores the changes underneath.' : 'Cloudflare Workers + Artifacts. Hosted reports require independent verification before acceptance.';
   $("#provider-dot").classList.toggle("connected", !connection.state.error);
   const project = currentProject();
   const context = project ? projectContext(workspace, project.id) : null;
@@ -617,7 +616,9 @@ function workspaceReceived(data, previous, {force, recoveredError}) {
   loadSession(); resolveLocation(); saveLocation();
   void projectDiscovery.sync(currentProject()?.id??null);
   $('#auth-panel').hidden = true;
-  $('#identity-status').textContent = demo ? 'No sign-in required' : workspace.authentication ? workspace.authentication.principal.displayName + ' · ' + workspace.authentication.principal.kind : 'Local attribution';
+  const identity = $('#identity-status');
+  identity.textContent = demo ? 'No sign-in required' : workspace.authentication ? workspace.authentication.principal.kind + ' · ' + workspace.authentication.principal.displayName : 'Local attribution';
+  identity.title = identity.textContent;
   $('#workspace-access-controls').hidden = !workspace.authentication?.permissions.manage;
   $('#adopt-owner').hidden = !workspace.authentication?.adoptionRequired;
   for (const run of data.runs) {

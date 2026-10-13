@@ -232,9 +232,12 @@ export function createReviewView({
         resultNotice.textContent = 'Check request recorded. Load the latest report without running the checks again.';
         await loadReport();
       }
-    } }, el('p', { class:'small' }, hosted ? 'Choose checks independently of the agent. Each command runs in a fresh Linux container with Node and Python, the committed files, no Git credentials and no internet access. Expected outputs are compared outside the container. Install other runtimes in the server’s pinned image before using them.' : 'Choose checks independently of the agent. They run in an installed Linux container with read-only source, temporary scratch space and no network. Each result must match its expected exit code and stdout.'),
-      el('p', { class:'head-hint' }, 'These checks bind to ' + shortSha(run.headCommit) + ' and requirements r' + task.revision + '. Total allowance: 60 seconds. Additional written criteria still require review.'),
-      hosted ? el('p', { class: 'small muted' }, 'Runtime image: configured by the workspace operator. Its immutable digest is recorded with the result. Each check starts again from the same committed files.') : [el('label', { for:image.id }, 'Verification runtime · immutable Docker image'), image], rows,
+    } }, el('p', { class:'small' }, hosted ? 'Choose Node or Python commands and their expected results.' : 'Choose commands and their expected results.'),
+      el('p', { class:'head-hint' }, 'Commit ' + shortSha(run.headCommit) + ' · Requirements r' + task.revision + ' · 60-second total limit'),
+      disclosure('check-runtime-help-'+run.id,'How checks run',
+        el('p',{},hosted ? 'Each command runs in a fresh Linux container with the committed files, no Git credentials and no internet access. Expected outputs are compared outside the container. The workspace operator configures other runtimes in its pinned image; the result records that image’s digest.' : 'Commands run in an installed Linux container with read-only source, temporary scratch space and no network. Each result must match its expected exit code and output.'),
+        el('p',{},'Choose checks independently of the agent. Written requirements also need review.')),
+      hosted ? null : [el('label', { for:image.id }, 'Verification runtime · immutable Docker image'), image], rows,
       addCheck,
       el('button', { id:'check-submit-'+run.id, type:'submit', class:'button button-primary', disabled:busy, title:busy?'Wait for the current operation.':'Run these checks against this exact commit.' }, actionFeedback.get(actionKey('checks',task,run))?.phase==='pending' ? 'Checking commit…' : 'Run independent checks'),
       resultNotice, reportButton, actionNotice(actionKey('checks',task,run)));

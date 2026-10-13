@@ -36,7 +36,7 @@ export function createTaskViews({
         el('li', {}, 'Inspect each result: the changes, current requirements and independently run checks.'),
         el('li', {}, 'Review the change and record your decision. Compare approaches when you have requested alternatives.'),
         el('li', {}, 'Merge the accepted change into the project. Unstarted tasks pick up its new baseline.')),
-      el('p', { class: 'definition-note' }, 'A project owns the code and task queue. A task keeps its requirements, changes, checks and decisions. Start with one agent; prepare another candidate when a different approach is useful. Agent clients pull queued tasks; this local workspace does not launch an external model for them.')));
+      el('p', { class: 'definition-note' }, 'Projects keep code and queued tasks together. Each task keeps its requirements, candidates, checks and decisions.')));
   }
 
   function projectHome(project) {
@@ -105,7 +105,7 @@ export function createTaskViews({
       pendingProject ? el('div', { class: 'capability-note' },
         el('p', {}, 'A task request for ' + pendingProject.name + ' is awaiting confirmation. Its destination and request ID are preserved.'),
         el('button', { class: 'button button-small', onclick: () => { selectProject(pendingProject.id); openTaskComposer('project:' + pendingProject.id); } }, 'Return to saved request')) : null,
-      project ? projectCoordinationView({workspace,projectId:project.id,collections,
+      project ? projectCoordinationView({workspace,projectId:project.id,collections,disclosure,
         onOpenTask:id=>switchView('overview',id,null),
         onOpenCandidates:id=>switchView('work',id,null)}) : null,
 
