@@ -1,4 +1,4 @@
-import {el, panel} from './dom.js';
+import {el, panel, captureFocus, restoreFocus} from './dom.js';
 import {collectionPage} from '../collection-page.js';
 
 // Each report keeps its own denominator and provenance; selection is local to this list.
@@ -19,9 +19,13 @@ export function createReportList({id, title, entries, definition, disclosure}) {
     el('span',{class:'small'},entry.report?.verifiedAt ?? 'Timestamp not retained'),
     !entry.report || typeof entry.report!=='object' ? el('span',{class:'inline-error'},'Malformed data · inspect the workspace export') : null)) : [];
     list.replaceChildren(...buttons);
-    navigation.replaceChildren(el('p',{role:'status'},`Showing ${page.from}–${page.to} of ${page.total} retained reports`),
-      el('button',{class:'button button-small',disabled:page.previous===null,onclick:()=>{offset=page.previous;drawRows();}},'Earlier reports'),
-      el('button',{class:'button button-small',disabled:page.next===null,onclick:()=>{offset=page.next;drawRows();}},'Later reports'));
+    navigation.replaceChildren(el('p',{id:id+'-page-status',role:'status',tabindex:'-1'},`Showing ${page.from}–${page.to} of ${page.total} retained reports`),
+      el('button',{id:id+'-earlier','data-focus-fallback':id+'-page-status',class:'button button-small',disabled:page.previous===null,onclick:()=>pageReports(page.previous)},'Earlier reports'),
+      el('button',{id:id+'-later','data-focus-fallback':id+'-page-status',class:'button button-small',disabled:page.next===null,onclick:()=>pageReports(page.next)},'Later reports'));
+  }
+  function pageReports(nextOffset) {
+    const focus = captureFocus(navigation);
+    offset = nextOffset; drawRows(); restoreFocus(focus);
   }
   function draw() {
     buttons.forEach((button,index)=>button.setAttribute('aria-pressed',String(index+offset===selected)));

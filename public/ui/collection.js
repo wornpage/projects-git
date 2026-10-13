@@ -14,11 +14,11 @@ export function createCollectionPager({getScope,render}) {
         el('input',{id:id+'-query',type:'search',maxlength:200,value:state.query,placeholder:'Search '+label.toLowerCase(),oninput:event=>change('query',event.target.value)}),
         filters.length>1?el('select',{id:id+'-filter','aria-label':label+' status',onchange:event=>change('filter',event.target.value)},filters.map(([value,name])=>el('option',{value,selected:value===state.filter},name))):null,
         el('select',{id:id+'-sort','aria-label':label+' order',onchange:event=>change('sort',event.target.value)},sorts.map(([value,name])=>el('option',{value,selected:value===state.sort},name))),
-        state.query||state.filter!=='all'?el('button',{type:'button',class:'button button-small',onclick:()=>{state.query='';state.filter='all';state.offset=0;render(true);}},'Clear'):null));
-    const navigation=el('nav',{class:'collection-page-controls','aria-label':label+' pages'},el('p',{role:'status'},`Showing ${page.from}–${page.to} · ${page.matched} matching / ${page.total} total ${label.toLowerCase()}`),
+        state.query||state.filter!=='all'?el('button',{id:id+'-clear','data-focus-fallback':id+'-query',type:'button',class:'button button-small',onclick:()=>{state.query='';state.filter='all';state.offset=0;render(true);}},'Clear'):null));
+    const navigation=el('nav',{class:'collection-page-controls','aria-label':label+' pages'},el('p',{id:id+'-page-status',role:'status',tabindex:'-1'},`Showing ${page.from}–${page.to} · ${page.matched} matching / ${page.total} total ${label.toLowerCase()}`),
       page.previous!==null||page.next!==null ? [
-        el('button',{type:'button',class:'button button-small',disabled:page.previous===null,onclick:()=>{state.offset=page.previous;render(true);}},'Previous '+label.toLowerCase()),
-        el('button',{type:'button',class:'button button-small',disabled:page.next===null,onclick:()=>{state.offset=page.next;render(true);}},'Next '+label.toLowerCase())] : null);
+        el('button',{id:id+'-previous','data-focus-fallback':id+'-page-status',type:'button',class:'button button-small',disabled:page.previous===null,onclick:()=>{state.offset=page.previous;render(true);}},'Previous '+label.toLowerCase()),
+        el('button',{id:id+'-next','data-focus-fallback':id+'-page-status',type:'button',class:'button button-small',disabled:page.next===null,onclick:()=>{state.offset=page.next;render(true);}},'Next '+label.toLowerCase())] : null);
     const input=controls.querySelector('#'+id+'-query');
     return {...page,controls,navigation};
   };
