@@ -59,7 +59,8 @@ export function createTaskViews({
     const brief = taskBriefing(workspace, task), change = brief.change;
     const directionChanged = change && (change.purposeChanged || change.added.length || change.removed.length);
     const next = brief.outcome;
-    const canConnect = !demo && workspace.personalWorkspace?.agentConnections !== false && (!workspace.authentication || workspace.authentication.permissions.manage);
+    const canManage = !demo && (!workspace.authentication || workspace.authentication.permissions.manage);
+    const canConnect = canManage && workspace.personalWorkspace?.agentConnections !== false;
     const revisions=collections({id:'requirement-history-'+task.id,label:'Requirement revisions',items:task.revisions??[],text:item=>item.reason+' '+item.purpose,
       sorts:[['newest','Newest first'],['oldest','Oldest first']],sortKey:item=>item.revision,pageSize:10});
     const body = el('div', { class: 'panel-body focused-task-body' },
@@ -77,7 +78,7 @@ export function createTaskViews({
           change.added.length ? el('div', {}, el('strong', {}, 'Added'), el('ul', {}, change.added.map(text => el('li', {}, text)))) : null,
           change.removed.length ? el('div', {}, el('strong', {}, 'Removed'), el('ul', {}, change.removed.map(text => el('li', {}, text)))) : null) : null,
         el('ol', { class: 'brief-criteria' }, task.criteria.map(text => el('li', {}, text))),
-        !task.mergedCommit ? el('button', { class: 'button button-small', disabled: busy || !workspace.capabilities?.revise,
+        canManage && !task.mergedCommit ? el('button', { class: 'button button-small', disabled: busy || !workspace.capabilities?.revise,
           title: busy ? 'Wait for the current action.' : !workspace.capabilities?.revise ? 'Requirement revisions need the updated server.' : 'Update the purpose and requirements while retaining earlier work.', onclick: () => openRevision(task) }, 'Revise direction') : null,
         task.revisions?.length > 1 ? disclosure('task-history-' + task.id, 'Requirement history · ' + task.revisions.length + ' revisions',
           revisions.controls,...revisions.items.map(item => el('div', { class: 'requirement-record' }, el('strong', {}, 'r' + item.revision + ' · ' + item.reason), el('p', {}, item.purpose), el('ul', {}, item.criteria.map(text => el('li', {}, text))))),revisions.navigation) : null),

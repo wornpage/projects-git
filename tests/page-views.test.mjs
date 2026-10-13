@@ -458,3 +458,22 @@ test('agent instructions stay absent from read-only examples, restricted roles a
     for(const render of [createTaskViews(f.ports).task,createWorkView(f.ports)])assert.equal(render().querySelector('#'+id),null,mode);
   }
 });
+
+test('task requirement editing is shown only for editable owner workspaces',()=>{
+  const f=fixture(),views=createTaskViews(f.ports),before=structuredClone(f.workspace);
+  const revisionButton=()=>{
+    const nodes=node=>[node,...node.children.flatMap(nodes)];
+    return nodes(views.task()).find(node=>node.tagName==='BUTTON'&&node.textContent==='Revise direction');
+  };
+  assert.equal(revisionButton().disabled,false,'Local owner can revise an unmerged task.');
+  f.workspace.authentication={permissions:{manage:true}};
+  assert.equal(revisionButton().disabled,false,'Authenticated owner keeps the same action.');
+  f.context.busy=true;assert.equal(revisionButton().disabled,true);f.context.busy=false;
+  f.context.demo=true;assert.equal(revisionButton(),undefined,'Invented demo records have no revision action.');
+  f.context.demo=false;f.workspace.authentication.permissions.manage=false;
+  assert.equal(revisionButton(),undefined,'Restricted identities are not told to update the server.');
+  f.workspace.authentication.permissions.manage=true;f.task.mergedCommit=f.run.headCommit;
+  assert.equal(revisionButton(),undefined,'Merged work stays immutable through this entry point.');
+  delete f.workspace.authentication;f.task.mergedCommit=before.tasks.find(task=>task.id===f.task.id).mergedCommit;
+  assert.deepEqual(f.workspace,before,'Rendering does not change workflow state.');assert.deepEqual(f.calls,[]);
+});
