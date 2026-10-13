@@ -115,7 +115,8 @@ const views = {
   queue: taskViews.queue,
   overview: taskViews.task,
   work: createWorkView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff, collections,
-    switchView, openContinuation, checksFailed, independentlyVerified, openInspector, openAgentConnection}),
+    switchView, openContinuation, checksFailed, independentlyVerified, openInspector, openAgentConnection,
+    hasPendingAssignment:taskId=>assignmentRequests.has(taskId)}),
   review: createReviewView({getContext, parts, disclosure, currentTask, currentRun, taskRuns, reviewPanel, publicationPanel, downloadReviewContext,
     verificationDrafts, actionFeedback, actionKey, actionNotice, mutate, runOperation, sha256Text, refresh, finishBaseUpdate, openContinuation, independentlyVerified, openInspector, onSectionChange:updateChrome, switchView, captureReviewSurface}),
   evidence: createEvidenceView({getContext, parts, disclosure, currentProject, currentTask, currentRun, taskNumber,
@@ -490,18 +491,34 @@ function repositoryAgents(task) {
     el('p', { class: 'small' }, hosted ? 'Prepare an isolated Artifacts fork. Your agent clones it, reports its start, and submits a Git commit. Fork access is issued once and expires after 15 minutes.' : 'Prepare one isolated checkout for this task. Give it to your coding agent, which reports its start and submits a Git commit using the handoff commands.'),
     el('form', { class: 'assignment-form', onsubmit: async event => {
       event.preventDefault(); if (disabled) return;
-      const isCurrent = connection.captureSession();
+      const isCurrent = connection.captureSession(), retrying = assignmentRequests.has(task.id);
+      const form = event.currentTarget, inspector = form.closest('dialog');
       const request = assignmentRequests.get(task.id) ?? { label: name.value.trim(), ...(client ? {agentClientId: client.value} : {}), requestId: crypto.randomUUID() };
       assignmentRequests.set(task.id, request); saveSession();
       const result = await mutate(async () => {
-        try { return await api('/api/tasks/' + task.id + '/agents', request, request.requestId); }
+        try {
+          const result = await api('/api/tasks/' + task.id + '/agents', request, request.requestId);
+          if (result?.taskId !== task.id || !/^[a-f0-9-]{36}$/.test(result?.runId ?? '')) {
+            const error = new Error('The server did not confirm this assignment. Inspect its saved outcome before preparing another.');
+            error.uncertain = true; throw error;
+          }
+          return result;
+        }
         catch (error) {
-          if (isCurrent() && assignmentRequests.get(task.id) === request && error.status >= 400 && error.status < 500 && !['assignment_preparing', 'repository_busy', 'ASSIGNMENT_PREPARING', 'OPERATION_IN_PROGRESS'].includes(error.code)) { assignmentRequests.delete(task.id); saveSession(); }
+          if (retrying) error.uncertain = true;
+          else if (isCurrent() && assignmentRequests.get(task.id) === request && error.status >= 400 && error.status < 500 && !['assignment_preparing', 'repository_busy', 'ASSIGNMENT_PREPARING', 'OPERATION_IN_PROGRESS'].includes(error.code)) { assignmentRequests.delete(task.id); saveSession(); }
           throw error;
         }
       }, hosted ? 'Agent fork prepared. Give its handoff to your agent.' : 'Agent checkout prepared. No model was started.',
         {key:feedbackKey,pending:hosted ? 'Preparing isolated code access. Your coding agent starts work after receiving the handoff.' : 'Preparing an isolated checkout. This does not start a model.'});
-      if (result) { if (result.credentials) forkCredentials.set(result.runId, result.credentials); assignmentRequests.delete(task.id); saveSession(); selectedRun = result.runId; await refresh(true); if (isCurrent()) saveLocation(); }
+      if (result) {
+        if (result.credentials) forkCredentials.set(result.runId, result.credentials);
+        assignmentRequests.delete(task.id); saveSession(); selectedRun = result.runId; await refresh(true);
+        if (isCurrent()) {
+          saveLocation();
+          if (inspector?.open && inspector.contains(form)) inspector.close();
+        }
+      }
     } }, el('label', { for: 'agent-label' }, 'Agent or approach name'), name, client ? el('label', {for:'agent-client'}, 'Access agent client') : null, client,
       el('button', { id:'assign-'+task.id, type: 'submit', class: 'button button-primary', disabled, title: !dependency.ready ? dependency.invalid ?? 'Wait for prerequisite integration before preparing this checkout.' : paused ? 'New agent work is paused. Enable it in the project home.' : disabled ? 'Assignments close when a candidate is chosen, or while an operation is in progress.' : 'Prepare isolated code access without starting a model.' }, actionFeedback.get(feedbackKey)?.phase==='pending' ? 'Preparing code access…' : pending ? 'Retry same assignment' : hosted ? 'Prepare agent fork' : 'Prepare checkout')),
     actionNotice(feedbackKey)));

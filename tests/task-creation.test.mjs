@@ -208,6 +208,19 @@ for(const status of [422,409,503])test(`task rejection ${status} ${status===422?
   assert.deepEqual(f.errors,['Request refused']);
 });
 
+for(const status of [403,422,429])test(`later task retry refusal ${status} cannot discard an earlier uncertain task stack`,async()=>{
+  const f=fixture();await f.fill();const first=f.submit(),original=f.calls[0];
+  original.reject(Object.assign(new Error('Lost task response'),{uncertain:true}));await first;
+  const retry=f.submit();assert.equal(f.calls[1].key,original.key);
+  f.calls[1].reject(Object.assign(new Error('Retry refused'),{status}));await retry;
+  assert.equal(f.controller.locked,true);assert.equal(f.controller.snapshot().pending.requestId,original.key);
+  assert.deepEqual(f.controller.snapshot().pending,original.body);
+  const release=f.release();assert.ok(f.calls[2].path.includes(original.key));
+  const saved=result();f.calls[2].resolve({result:saved});await release;
+  assert.deepEqual(f.selected,[saved.taskId]);assert.equal(f.controller.locked,false);
+  assert.equal(f.calls.filter(call=>call.path==='/api/tasks').length,2,'Recovery reads the saved outcome without creating another stack.');
+});
+
 test('malformed success and unconfirmed release cannot silently discard an unresolved task request',async()=>{
   const f=fixture();await f.fill();const pending=f.submit(),requestId=f.calls[0].key;
   f.calls[0].resolve({});await pending;

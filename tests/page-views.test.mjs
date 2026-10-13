@@ -37,7 +37,7 @@ function fixture(){
     disclosure:(id,title,...body)=>el('details',{id},el('summary',{},title),...body),
     independentlyVerified:run=>independentlyVerified(workspace,run),checksFailed:run=>Boolean(run.evidence&&run.evidence.passed<run.evidence.total),
     switchView:(...args)=>calls.push(args),showError(){},announce(){},selectProject(){},openTaskComposer(){},openRevision(){},openContinuation(){},
-    repositoryAgents:()=>null,taskSettings:()=>null,externalHandoff:()=>null,reviewPanel:()=>el('div',{},'Decision controls'),publicationPanel:()=>null,downloadReviewContext:run=>calls.push(['review-context',run.id]),
+    repositoryAgents:()=>null,hasPendingAssignment:()=>false,taskSettings:()=>null,externalHandoff:()=>null,reviewPanel:()=>el('div',{},'Decision controls'),publicationPanel:()=>null,downloadReviewContext:run=>calls.push(['review-context',run.id]),
     verificationDrafts:new Map(),actionFeedback:new Map(),retainedSearches:new Map(),actionKey:()=> 'key',actionNotice:()=>null,
     mutate(){throw new Error('Rendering must not mutate');},runOperation(){throw new Error('Rendering must not request work');},sha256Text(){},refresh(){},finishBaseUpdate(){},
     loadIndexedSearch(){throw new Error('Local view must not issue an indexed search');},rebuildSearch(){},render(){},downloadHandoff(){},downloadEvidence(){},onSectionChange(){},

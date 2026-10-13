@@ -206,7 +206,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     event.preventDefault();
     if (taskStarting || $('#create-task').disabled) return;
     if ($('#task-source').value !== 'sample' && !validateDrafts()) return;
-    const source = $('#task-source').value, mode = $('#task-execution').value, isCurrent = requestScope(), retryingModel = Boolean(pendingModelStart);
+    const source = $('#task-source').value, mode = $('#task-execution').value, isCurrent = requestScope(), retryingRequest = pendingRequest();
     taskStarting = true; clearError(); updateChrome(); schedulePoll();
     try {
       let result;
@@ -227,11 +227,8 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
       await showSavedTasks(result, source, isCurrent);
     } catch (error) {
       if (!isCurrent()) return;
-      if (error.status >= 400 && error.status < 500 && error.status !== 409) {
-        pendingTaskStart = null;
-        // A refused retry cannot prove that an earlier uncertain start failed.
-        if (!retryingModel) pendingModelStart = null;
-      }
+      // A refused retry cannot prove that an earlier uncertain request failed.
+      if (!retryingRequest && error.status >= 400 && error.status < 500 && error.status !== 409) { pendingTaskStart = null; pendingModelStart = null; }
       showError(error.message); saveSession();
     } finally {
       if (isCurrent()) {

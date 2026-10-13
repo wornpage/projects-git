@@ -96,6 +96,12 @@ only reads the workspace and never resubmits work. Existing request IDs still
 govern safe retries. Connection status and the last-sync time describe the last
 workspace response, so switching views does not hide a disconnected state.
 
+A refused retry does not settle an earlier unconfirmed attempt. Retrying the
+unchanged task, assignment or verification request keeps its saved identity until
+the result is confirmed. Assignment controls show **Resolve pending assignment**
+while that outcome is unknown. A valid recovered assignment closes its old retry
+form so another click cannot appear to repeat the same request after completion.
+
 After a successful connection, ordinary background reads keep **Workspace
 connected** steady. The footer still updates the last successful sync time.
 Initial connection, interruption, authentication failure and reconnection remain
