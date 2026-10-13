@@ -34,8 +34,10 @@ capacity, repository observations, task progress and activity remain easy to sca
 New project separates code selection from the first task brief. In the local
 app, enter the repository path and choose **Read current commit**; confirm the
 selected committed HEAD before continuing. Inspection reads code metadata and
-does not change the source checkout or queue tasks. Hosted Artifacts projects
-keep explicit repository-name and commit entry; local inspection is unavailable.
+does not change the source checkout or queue tasks. Hosted owners choose from a
+paginated Artifacts repository list; selection loads the current default branch
+and full base commit. Credentials remain behind the server binding, and creation
+rechecks the selected head. Local inspection remains a separate local capability.
 The selected stage and each draft are saved under the existing tab/workspace
 scope, including stacked drafts and unresolved request recovery.
 
