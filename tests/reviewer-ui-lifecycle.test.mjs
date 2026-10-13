@@ -7,10 +7,11 @@ const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;})
 const find=(node,predicate)=>predicate(node)?node:node.children?.map(child=>find(child,predicate)).find(Boolean);
 const response=(value,status=200)=>({status,ok:status<400,json:async()=>value});
 
-async function fixture({search='',status='pending',packetAssignment='assignment-a',sourceText,diff=''}={}){
+async function fixture({search='',status='pending',packetAssignment='assignment-a',sourceText,diff='',secondCandidate=false,deferContexts=false}={}){
   const {document}=installFakeDOM();document.body=document.createElement('body');
   location.search=search;
   const item={workspaceId:'workspace',assignmentId:'assignment-a',runId:'candidate',taskTitle:'Review',runLabel:'Candidate',headCommit:'b'.repeat(40),assignmentScope:'personal',status};
+  const items=secondCandidate?[item,{...item,runId:'candidate-b',assignmentId:'assignment-b',runLabel:'Candidate B'}]:[item],contexts=[];
   let principal={kind:'reviewer',id:'reviewer-a',displayName:'Reviewer A'};
   const calls=[],arrivals=[],reads=[];
   const packet={contextId:'context',context:{workspaceId:'workspace',runId:'candidate',reviewAssignmentId:packetAssignment,headCommit:item.headCommit,baseCommit:'a'.repeat(40),taskRevision:1},
@@ -18,8 +19,13 @@ async function fixture({search='',status='pending',packetAssignment='assignment-
   if(sourceText!==undefined){packet.source.files=[{name:'example.js',base64:Buffer.from(sourceText).toString('base64')}];packet.candidate={changedFiles:['example.js'],diff};}
   const previousFetch=globalThis.fetch;
   globalThis.fetch=async(path,options)=>{
-    if(path==='/api/review-inbox')return response({workspaceId:'workspace',principal,total:1,items:[item]});
-    if(path.endsWith('/review-context')){reads.push(path);return response(packet);}
+    if(path==='/api/review-inbox')return response({workspaceId:'workspace',principal,total:items.length,items});
+    if(path.endsWith('/review-context')){
+      reads.push(path);const selected=items.find(item=>path===`/api/runs/${item.runId}/review-context`);assert.ok(selected);
+      const current=selected===item?packet:{...packet,context:{...packet.context,runId:selected.runId,reviewAssignmentId:selected.assignmentId}};
+      if(deferContexts){const pending=deferred();contexts.push({release:()=>pending.resolve(response(current))});return pending.promise;}
+      return response(current);
+    }
     assert.equal(path,'/api/runs/candidate/code-review');
     const call={body:JSON.parse(options.body),key:options.headers['Idempotency-Key'],...deferred()};
     calls.push(call);arrivals[calls.length-1]?.resolve(call);return call.promise;
@@ -43,11 +49,26 @@ async function fixture({search='',status='pending',packetAssignment='assignment-
       if(this.textContent==='Choose an assigned candidate.')loaded.resolve();},get(){return this.classValue;}});
     await button(inbox(),'All · 1').dispatch('click');await loaded.promise;
   }
-  return {calls,reads,document,review,inspect,submit,changeIdentity,
+  return {calls,reads,contexts,document,inbox,review,inspect,submit,changeIdentity,
     submitButton:()=>button(form(),'Submit independent assessment'),
     controls:()=>find(form(),node=>node.tagName==='FIELDSET'),
     waitForCall:index=>calls[index]?Promise.resolve(calls[index]):(arrivals[index]??=deferred()).promise};
 }
+
+test('an older opening cannot restore focus while a newer candidate is loading',async()=>{
+  const f=await fixture({secondCandidate:true,deferContexts:true}),walk=node=>[node,...node.children.flatMap(walk)];
+  const [firstButton,secondButton]=walk(f.inbox()).filter(node=>node.tagName==='BUTTON'&&node.textContent==='Inspect candidate');
+  firstButton.focus();const first=firstButton.dispatch('click');
+  secondButton.focus();const second=secondButton.dispatch('click');
+  // The small fake DOM does not blur disabled controls; native buttons do.
+  f.document.activeElement=f.document.body;
+  f.contexts[0].release();await first;
+  assert.equal(f.document.activeElement,f.document.body,'A superseded read must not take focus.');
+  f.contexts[1].release();await second;
+  assert.match(f.review().textContent,/Candidate B/);
+  assert.equal(f.document.activeElement.id,'review-title');
+  assert.equal(f.calls.length,0,'Opening reviews must not submit an assessment.');
+});
 
 test('reopening a candidate retains its pending guard and uncertain retry identity',async()=>{
   const f=await fixture();await f.inspect();

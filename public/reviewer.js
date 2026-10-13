@@ -208,7 +208,8 @@ async function loadInbox(){
     element('span',`${item.runLabel} · ${item.headCommit?.slice(0,10)??'No commit'}`),element('span',reviewRequestLabel(item.status),'request-state'));
     if(item.status==='stale')text.append(element('span','Ask the owner to renew the assignment for the current code and checks.'));
     const button=element('button','Inspect candidate');button.type='button';button.disabled=!['pending','pass','changes_requested'].includes(item.status);button.addEventListener('click',async()=>{button.disabled=true;button.textContent='Reading candidate…';
-      try{await openReview(item,button);}finally{button.disabled=false;button.textContent='Inspect candidate';if(button.isConnected&&document.activeElement===document.body)button.focus({preventScroll:true});}});row.append(text,button);card.append(row);}
+      const opening=openReview(item,button),openingEpoch=reviewEpoch;
+      try{await opening;}finally{button.disabled=false;button.textContent='Inspect candidate';if(openingEpoch===reviewEpoch&&button.isConnected&&document.activeElement===document.body)button.focus({preventScroll:true});}});row.append(text,button);card.append(row);}
   section.append(card);restoreFocus(focus);status(inbox.total?'Choose an assigned candidate.':'No reviews are assigned to this identity.');
   const target=linkedReview(location.search,inbox),linkKey=identity+':'+(location.search??'');
   if(target.kind==='unavailable')status('This review link is unavailable to this signed-in identity or workspace. Ask the owner to check your assignment and access.',true);
