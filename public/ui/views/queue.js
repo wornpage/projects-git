@@ -78,7 +78,7 @@ export function createTaskViews({
           change.added.length ? el('div', {}, el('strong', {}, 'Added'), el('ul', {}, change.added.map(text => el('li', {}, text)))) : null,
           change.removed.length ? el('div', {}, el('strong', {}, 'Removed'), el('ul', {}, change.removed.map(text => el('li', {}, text)))) : null) : null,
         el('ol', { class: 'brief-criteria' }, task.criteria.map(text => el('li', {}, text))),
-        canManage && !task.mergedCommit ? el('button', { class: 'button button-small', disabled: busy || !workspace.capabilities?.revise,
+        canManage && !task.mergedCommit ? el('button', { id: 'revise-task-'+task.id, class: 'button button-small', disabled: busy || !workspace.capabilities?.revise,
           title: busy ? 'Wait for the current action.' : !workspace.capabilities?.revise ? 'Requirement revisions need the updated server.' : 'Update the purpose and requirements while retaining earlier work.', onclick: () => openRevision(task) }, 'Revise direction') : null,
         task.revisions?.length > 1 ? disclosure('task-history-' + task.id, 'Requirement history · ' + task.revisions.length + ' revisions',
           revisions.controls,...revisions.items.map(item => el('div', { class: 'requirement-record' }, el('strong', {}, 'r' + item.revision + ' · ' + item.reason), el('p', {}, item.purpose), el('ul', {}, item.criteria.map(text => el('li', {}, text))))),revisions.navigation) : null),
