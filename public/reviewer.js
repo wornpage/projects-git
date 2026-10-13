@@ -1,5 +1,6 @@
 import {createApiClient} from './api-client.js';
 import {createErrorNotice} from './ui/error-notice.js';
+import {captureFocus,restoreFocus} from './ui/dom.js';
 import {linkedReview,reviewRequestLabel} from './review-handoff.js';
 import {highlightSyntax,paintSyntax,syntaxLanguage,syntaxLabel,SYNTAX_RENDER_LINES,syntaxRenderWithinLimit} from './code-syntax.js';
 import {recordedDiff} from './review-diff.js';
@@ -94,13 +95,13 @@ function findingFields(paths,onRemove){
   const side=field('Source side','select');for(const name of ['head','base']){const option=element('option',name);option.value=name;side.append(option);}
   const priority=field('Priority','select');for(const value of [0,1,2,3]){const option=element('option','P'+value);option.value=String(value);priority.append(option);}priority.value='2';
   const start=field('Start line'),end=field('End line');for(const input of [start,end]){input.type='number';input.min='1';input.step='1';input.value='1';}
-  const remove=element('button','Remove finding');remove.type='button';remove.addEventListener('click',()=>{row.remove();onRemove();});row.append(remove);
+  const remove=element('button','Remove finding');remove.type='button';remove.addEventListener('click',()=>onRemove(row));row.append(remove);
   const read=()=>({title:title.value,body:body.value,priority:Number(priority.value),
     location:{path:path.value,side:side.value,startLine:Number(start.value),endLine:Number(end.value)},evidence:evidence.value});
-  return {row,read};
+  return {row,read,firstField:title};
 }
 
-async function openReview(item){
+async function openReview(item,opener=document.activeElement){
   const epoch=++reviewEpoch,session=viewerSession,path=`/api/runs/${item.runId}/code-review`;
   refreshReviewControls=()=>{};
   status('Reading the committed candidate…');const container=byId('review');container.replaceChildren();
@@ -109,7 +110,7 @@ async function openReview(item){
   if(packet.context.workspaceId!==item.workspaceId||packet.context.runId!==item.runId||packet.context.reviewAssignmentId!==item.assignmentId){
     status('This assignment changed while opening it. Refresh your inbox and ask the owner for the current review link.',true);return;
   }
-  const title=element('h2',item.taskTitle+' · '+item.runLabel),context=packet.context;
+  const title=element('h2',item.taskTitle+' · '+item.runLabel),context=packet.context;title.id='review-title';title.tabIndex=-1;
   const details=element('section','','card');details.append(title,
     element('p',`Head ${context.headCommit} · Base ${context.baseCommit} · requirements r${context.taskRevision}`),
     element('p',context.requirements?.purpose??''));
@@ -141,7 +142,12 @@ async function openReview(item){
       `${total} / 50 findings. Changes requested requires at least one finding.`;}
   refreshReviewControls=updateButtons;
   add.addEventListener('click',()=>{if(rows.filter(field=>field.row.isConnected).length>=50)return;
-    const field=findingFields(paths,updateButtons);rows.push(field);findings.append(field.row);updateButtons();});
+    const field=findingFields(paths,row=>{
+      const index=rows.findIndex(field=>field.row===row),restore=row.contains(document.activeElement);
+      const neighbor=rows[index+1]??rows[index-1];
+      rows.splice(index,1);row.remove();updateButtons();
+      if(restore)(neighbor?.firstField??add).focus();
+    });rows.push(field);findings.append(field.row);updateButtons();field.firstField.focus();});
   verdict.addEventListener('change',updateButtons);
   const actions=element('div','','buttons review-actions');actions.append(add,submit);
   controls.append(verdictLabel,summaryLabel,findings,count,actions);
@@ -166,7 +172,9 @@ async function openReview(item){
       if(session===viewerSession&&epoch===reviewEpoch&&submit.isConnected)submit.focus({preventScroll:true});}
   });
   container.append(form);updateButtons();status(`Reviewing ${item.taskTitle} at ${context.headCommit.slice(0,10)}.`);
-  container.scrollIntoView({behavior:'smooth',block:'start'});
+  if(document.activeElement===opener||document.activeElement===document.body){
+    title.focus({preventScroll:true});container.scrollIntoView({behavior:'instant',block:'start'});
+  }
 }
 
 async function loadInbox(){
@@ -180,16 +188,19 @@ async function loadInbox(){
   viewerKey=identity;viewerKind=inbox.principal.kind;
   byId('reviewer-sign-in').hidden=true;
   byId('identity').textContent=(inbox.reviewerName?`${inbox.reviewerName} · `:'')+`Signed in: ${inbox.principal.displayName} · ${inbox.principal.kind}`;
-  const section=byId('inbox');section.replaceChildren();
+  const section=byId('inbox'),focus=captureFocus(section);section.replaceChildren();
   const card=element('section','','card');card.append(element('h2',`${inbox.total} assigned review${inbox.total===1?'':'s'}`));
   const filters=element('div','','buttons'),counts={all:inbox.total,personal:inbox.items.filter(item=>item.assignmentScope==='personal').length,
     team:inbox.items.filter(item=>item.assignmentScope==='team').length};
   filters.setAttribute('role','group');filters.setAttribute('aria-label','Review assignment filter');
   for(const [key,label] of [['all','All'],['personal','Assigned only to me'],['team','Shared assignments']]){
-    const button=element('button',`${label} · ${counts[key]}`);button.type='button';button.setAttribute('aria-pressed',String(inboxFilter===key));
+    const button=element('button',`${label} · ${counts[key]}`);button.type='button';button.setAttribute('id','review-filter-'+key);button.setAttribute('aria-pressed',String(inboxFilter===key));
     button.addEventListener('click',()=>{inboxFilter=key;loadInbox();});filters.append(button);
   }
-  const reload=element('button','Refresh reviews');reload.type='button';reload.addEventListener('click',async()=>{reload.disabled=true;try{await loadInbox();}finally{reload.disabled=false;}});filters.append(reload);
+  const reload=element('button','Refresh reviews');reload.type='button';reload.setAttribute('id','review-inbox-refresh');reload.addEventListener('click',async()=>{
+    const wasFocused=document.activeElement===reload;reload.disabled=true;
+    try{await loadInbox();}finally{reload.disabled=false;if(wasFocused&&document.activeElement===document.body)byId('review-inbox-refresh')?.focus({preventScroll:true});}
+  });filters.append(reload);
   card.append(filters);
   const visible=inboxFilter==='all'?inbox.items:inbox.items.filter(item=>item.assignmentScope===inboxFilter);
   if(!visible.length)card.append(element('p','No reviews in this view.','muted'));
@@ -197,8 +208,8 @@ async function loadInbox(){
     element('span',`${item.runLabel} · ${item.headCommit?.slice(0,10)??'No commit'}`),element('span',reviewRequestLabel(item.status),'request-state'));
     if(item.status==='stale')text.append(element('span','Ask the owner to renew the assignment for the current code and checks.'));
     const button=element('button','Inspect candidate');button.type='button';button.disabled=!['pending','pass','changes_requested'].includes(item.status);button.addEventListener('click',async()=>{button.disabled=true;button.textContent='Reading candidate…';
-      try{await openReview(item);}finally{button.disabled=false;button.textContent='Inspect candidate';}});row.append(text,button);card.append(row);}
-  section.append(card);status(inbox.total?'Choose an assigned candidate.':'No reviews are assigned to this identity.');
+      try{await openReview(item,button);}finally{button.disabled=false;button.textContent='Inspect candidate';if(button.isConnected&&document.activeElement===document.body)button.focus({preventScroll:true});}});row.append(text,button);card.append(row);}
+  section.append(card);restoreFocus(focus);status(inbox.total?'Choose an assigned candidate.':'No reviews are assigned to this identity.');
   const target=linkedReview(location.search,inbox),linkKey=identity+':'+(location.search??'');
   if(target.kind==='unavailable')status('This review link is unavailable to this signed-in identity or workspace. Ask the owner to check your assignment and access.',true);
   else if(target.kind==='stale')status('This review link needs a renewed assignment. Ask the owner for a current link; the old link will not open a different revision.',true);
