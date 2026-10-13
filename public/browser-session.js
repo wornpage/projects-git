@@ -1,10 +1,13 @@
 const uuid = /^[a-f0-9-]{36}$/;
 const text = (value, limit) => typeof value === 'string' && value.length <= limit;
 const entries = value => Array.isArray(value) ? value.filter(item => Array.isArray(item) && item.length === 2) : [];
+const partial = workspace => workspace.page?.scope === 'loaded-projects';
+const unloadedProject = (workspace, id) => partial(workspace) && uuid.test(id) && !Object.hasOwn(workspace.projects ?? {}, id);
 
 function validComposer(value, workspace) {
   const source = value?.source;
-  return (['repository', 'sample'].includes(source) || typeof source === 'string' && source.startsWith('project:') && Object.hasOwn(workspace.projects ?? {}, source.slice(8)))
+  return (['repository', 'sample'].includes(source) || typeof source === 'string' && source.startsWith('project:')
+    && (Object.hasOwn(workspace.projects ?? {}, source.slice(8)) || unloadedProject(workspace, source.slice(8))))
     && Array.isArray(value.tasks) && value.tasks.length > 0 && value.tasks.length <= 8
     && value.tasks.every(task => task && ['title','purpose','criteria','owner'].every(key => text(task[key], 6000))
       && (task.dependsOn === undefined || Array.isArray(task.dependsOn) && task.dependsOn.length <= 16 && task.dependsOn.every(id => typeof id === 'string' && /^(?:[a-f0-9-]{36}|draft:[1-8])$/.test(id))))
@@ -29,6 +32,8 @@ export function createBrowserSession({drafts, disclosures, assignmentRequests, o
         const task=workspace.tasks.find(task=>task.id===selection?.taskId && task.projectId===projectId);
         if (task && (!selection.runId || workspace.runs.some(run=>run.id===selection.runId && run.taskId===task.id)))
           projectSelections.set(projectId,{taskId:task.id,runId:selection.runId??null});
+        else if (unloadedProject(workspace,projectId) && uuid.test(selection?.taskId) && (!selection.runId || uuid.test(selection.runId)))
+          projectSelections.set(projectId,{taskId:selection.taskId,runId:selection.runId??null});
       }
       if (text(saved.reviewerName, 100)) reviewerName = saved.reviewerName.trim();
       for (const [path, request] of entries(saved.operations)) {
@@ -36,7 +41,8 @@ export function createBrowserSession({drafts, disclosures, assignmentRequests, o
           operationRequests.set(path, {fingerprint: request.fingerprint, requestId: request.requestId});
       }
       for (const [taskId, request] of entries(saved.assignments)) {
-        if (workspace.tasks.some(task => task.id === taskId) && text(request?.label, 160) && uuid.test(request?.requestId)
+        // A page omits other projects; absence here cannot settle their requests.
+        if ((workspace.tasks.some(task => task.id === taskId) || partial(workspace) && uuid.test(taskId)) && text(request?.label, 160) && uuid.test(request?.requestId)
           && (!principal || /^[a-f0-9]{32}\.access$/.test(request.agentClientId)))
           assignmentRequests.set(taskId, {label: request.label, requestId: request.requestId, ...(principal ? {agentClientId:request.agentClientId} : {})});
       }

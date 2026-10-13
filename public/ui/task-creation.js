@@ -2,7 +2,7 @@ import {$, el} from './dom.js';
 import {createTaskComposer} from './task-composer.js';
 
 // Owns draft destinations, stable submission IDs and explicit request recovery.
-export function createTaskCreation({getContext, currentProject, selectTask, switchView, api, refresh,
+export function createTaskCreation({getContext, currentProject, selectProject, selectTask, switchView, api, refresh,
   render, updateChrome, schedulePoll, saveSession, clearError, showError, announce}) {
   let composerSource = null, savedComposer = null, taskFormInitialized = false;
   let taskStack = [blankTask()], pendingTaskStart = null, pendingModelStart = null, taskStarting = false;
@@ -92,6 +92,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
       activateComposer('project:' + project.id);
     const source = $('#task-source').value, mode = $('#task-execution').value;
     const sample = source === 'sample';
+    const unloadedSource = source.startsWith('project:') && !Object.hasOwn(workspace.projects ?? {}, source.slice(8));
     const codeStep = source === 'repository' && !codeConfirmed && !pendingTaskStart;
     $('#repository-source-fields').hidden = !codeStep;
     $('#repository-next').hidden = !codeStep;
@@ -108,12 +109,12 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     const supported = !sample ? workspace.capabilities?.repository : mode === 'model' ? workspace.capabilities?.model : workspace.capabilities?.demo;
     $('#new-task-summary').textContent = sample ? 'New project · sample starter' : source==='repository' ? codeStep ? 'New project · connect code' : 'New project · first task' : 'Add to the task queue';
     if (source === 'repository' && !codeStep) $('#task-source-note').textContent = $('#project-name-input').value + ' · ' + $('#repository-path').value + ' · Commit ' + $('#repository-base').value + (workspace.provider === 'cloudflare-artifacts' ? '. The project uses this Artifacts repository and selected base commit.' : '. Only this committed code will be copied.');
-    $('#create-task').disabled = codeStep || taskStarting || !supported || sample && (busy || activeWork);
+    $('#create-task').disabled = codeStep || taskStarting || unloadedSource || !supported || sample && (busy || activeWork);
     $('#create-task').textContent = taskStarting ? source === 'repository' ? 'Connecting code…' : sample ? 'Starting agents…' : 'Saving tasks…'
       : pendingModelStart ? 'Retry same model start' : pendingTaskStart ? 'Retry this task stack'
       : sample ? mode === 'model' ? 'Start model agents' : 'Start 2 scripted agents'
       : (source === 'repository' ? 'Create project & queue ' : 'Queue ') + taskStack.length + (taskStack.length === 1 ? ' task' : ' tasks');
-    $('#create-task').title = taskStarting ? 'The same request is still in progress.' : !supported ? 'This workspace does not support this project source.'
+    $('#create-task').title = taskStarting ? 'The same request is still in progress.' : unloadedSource ? 'Load the original project before submitting this saved work.' : !supported ? 'This workspace does not support this project source.'
       : sample && activeWork ? 'Wait for current sample work to finish.'
       : pendingModelStart ? 'Retry the saved model request with its original allowance and request ID.'
       : sample ? mode === 'model' ? 'Create the sample project and start model agents within the displayed allowance.' : 'Create the sample project and start two scripted agents. No model calls are made.'
@@ -122,10 +123,13 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     $('#add-task-draft').disabled = taskStack.length >= 8 || taskStarting || pendingRequest();
     const progress = workspace.repositoryWorkflow?.imports?.find(item => item.requestId === pendingTaskStart?.requestId);
     const status = $('#task-creation-status');
-    status.hidden = !taskStarting && !pendingRequest();
+    status.hidden = !taskStarting && !pendingRequest() && !unloadedSource;
+    $('#open-saved-project').hidden = !unloadedSource;
+    $('#open-saved-project').disabled = taskStarting;
     $('#release-task-request').hidden = !pendingTaskStart || taskStarting;
     status.textContent = progress ? progress.phase + (progress.total ? ' · ' + progress.completed + ' / ' + progress.total + ' objects' : '') + ' · ' + Math.max(0, Math.round((Date.now() - progress.startedAt) / 1000)) + 's'
       : taskStarting ? sample ? 'Starting agents with this request…' : 'Saving this task stack…'
+      : unloadedSource ? 'This saved work belongs to another project. Open the original project before reviewing or retrying it.'
       : pendingModelStart ? 'This model start has not been confirmed. The original allowance is locked. Retry uses the same request ID; refreshing this page does not start another run.'
       : pendingTaskStart ? 'This request has not been confirmed. Retry uses the same request ID.' : '';
     for (const control of $('#task-form').querySelectorAll('input, textarea, select')) control.disabled = taskStarting || pendingRequest();
@@ -138,10 +142,13 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     const select = $('#task-source');
     const projects = Object.values(workspace.projects ?? {});
     const modelRequest = pendingModelStart ?? savedComposer?.modelStart;
-    const signature = JSON.stringify([projects.map(project => [project.id, project.name, project.codeConnected]), workspace.capabilities, modelRequest?.key]);
+    const retainedSource = composerSource ?? savedComposer?.source;
+    const unloadedSource = retainedSource?.startsWith('project:') && !Object.hasOwn(workspace.projects ?? {}, retainedSource.slice(8));
+    const signature = JSON.stringify([projects.map(project => [project.id, project.name, project.codeConnected]), workspace.capabilities, modelRequest?.key, unloadedSource ? retainedSource : null]);
     if (select.dataset.projects === signature) return;
     const selected = select.value;
     select.replaceChildren(...projects.map(project => el('option', { value: 'project:' + project.id, disabled: project.codeConnected === false }, project.name)),
+      ...(unloadedSource ? [el('option',{value:retainedSource,disabled:true},'Saved project · load before continuing')] : []),
       el('option', { value: 'repository', disabled: !workspace.capabilities?.repository }, 'New project · connect code'),
       ...(workspace.capabilities?.demo || workspace.capabilities?.model || modelRequest
         ? [el('option', { value: 'sample', disabled: !workspace.capabilities?.demo && !workspace.capabilities?.model }, modelRequest ? 'Sample project · unconfirmed model start' : 'New project · checkout starter')] : []));
@@ -318,6 +325,10 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
 
   $('#task-form').addEventListener('submit', createWorkbenchTask);
   $('#release-task-request').addEventListener('click', releaseRequest);
+  $('#open-saved-project').addEventListener('click', () => {
+    const source = $('#task-source').value;
+    if (!taskStarting && source.startsWith('project:')) void selectProject(source.slice(8));
+  });
   return {update, restore, snapshot, activate: activateComposer,
     get starting() { return taskStarting; }, get locked() { return taskStarting || pendingRequest(); }};
 }

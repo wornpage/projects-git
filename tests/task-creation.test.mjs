@@ -221,6 +221,26 @@ for(const status of [403,422,429])test(`later task retry refusal ${status} canno
   assert.equal(f.calls.filter(call=>call.path==='/api/tasks').length,2,'Recovery reads the saved outcome without creating another stack.');
 });
 
+for(const reloaded of [false,true])test(`an off-page pending task request ${reloaded?'restores':'stays'} bound to its original project`,async()=>{
+  const f=fixture();await f.fill('Original project draft');const first=f.submit(),original=f.calls[0],project=f.context.workspace.projects.one;
+  original.reject(Object.assign(new Error('Unconfirmed response'),{uncertain:true}));await first;
+  const saved=JSON.parse(JSON.stringify(f.controller.snapshot()));
+  f.context.workspace.projects={two:f.context.workspace.projects.two};f.context.projectId='two';
+  f.context.workspace.page={scope:'loaded-projects',totalProjects:2};
+  if(reloaded)f.controller.restore(saved);f.controller.update();
+  assert.equal(f.$('#task-source').value,'project:one');
+  assert.equal(f.$('#task-source').options.find(option=>option.value==='project:one').disabled,true);
+  assert.equal(f.$('#create-task').disabled,true);assert.equal(f.$('#open-saved-project').hidden,false);
+  assert.match(f.$('#task-creation-status').textContent,/Open the original project/);
+  await f.submit();assert.equal(f.calls.length,1,'An unavailable project cannot be substituted with the loaded project.');
+  await f.$('#open-saved-project').dispatch('click');assert.equal(f.context.projectId,'one');assert.equal(f.calls.length,1);
+  f.context.workspace.projects={one:project};f.controller.update();
+  assert.equal(f.$('#open-saved-project').hidden,true);assert.equal(f.$('#create-task').disabled,false);
+  assert.equal(f.$('#task-title-input').value,'Original project draft');
+  const retry=f.submit();assert.equal(f.calls[1].key,original.key);assert.deepEqual(f.calls[1].body,original.body);
+  f.calls[1].resolve(result());await retry;assert.equal(f.controller.locked,false);
+});
+
 test('malformed success and unconfirmed release cannot silently discard an unresolved task request',async()=>{
   const f=fixture();await f.fill();const pending=f.submit(),requestId=f.calls[0].key;
   f.calls[0].resolve({});await pending;

@@ -12,6 +12,28 @@ function fixture() {
 const workspace = {id:'one', projects:{project: {id:'project'}}, tasks:[{id:'task',projectId:'project'}],runs:[]};
 const composer = {source:'project:project', name:'', repo:'', base:'', tasks:[{title:'Saved', purpose:'Purpose', criteria:'One\nTwo', owner:'Owner'}], pending:null};
 
+test('partial project pages retain same-workspace drafts, pending assignments and navigation hints',()=>{
+  const f=fixture(),a=crypto.randomUUID(),b=crypto.randomUUID(),taskId=crypto.randomUUID(),runId=crypto.randomUUID(),requestId=crypto.randomUUID();
+  const first={id:'paged',projects:{[a]:{id:a}},tasks:[{id:taskId,projectId:a}],runs:[{id:runId,taskId}],page:{scope:'loaded-projects',totalProjects:2}};
+  const saved={...composer,source:'project:'+a,pending:{requestId,source:'project',projectId:a,tasks:[]},sources:[{...composer,source:'project:'+b}]};
+  f.session.enter(first);f.assignmentRequests.set(taskId,{label:'Pending assignment',requestId});f.projectSelections.set(a,{taskId,runId});f.session.save(saved);
+  const next=fixture();next.storage.getItem=f.storage.getItem;next.storage.setItem=f.storage.setItem;
+  const page={...first,projects:{[b]:{id:b}},tasks:[],runs:[]},restored=next.session.enter(page);
+  assert.deepEqual(restored.composer.pending,saved.pending);assert.equal(restored.composer.sources[0].source,'project:'+b);
+  assert.equal(next.assignmentRequests.get(taskId).requestId,requestId);assert.deepEqual(next.projectSelections.get(a),{taskId,runId});
+  next.session.save(restored.composer);next.session.enter({...page,id:'another-workspace'});
+  assert.equal(next.assignmentRequests.size,0);assert.equal(next.projectSelections.size,0);
+  assert.equal(next.session.enter(first).composer.pending.requestId,requestId);
+});
+
+test('a partial page does not restore malformed IDs or a known invalid loaded-project selection',()=>{
+  const f=fixture(),projectId=crypto.randomUUID(),taskId=crypto.randomUUID();
+  f.data.set('projects-git-ui:paged',JSON.stringify({composer:{...composer,source:'project:missing'},
+    assignments:[['bad-task',{label:'Pending',requestId:crypto.randomUUID()}]],projects:[[projectId,{taskId}]]}));
+  const state={id:'paged',projects:{[projectId]:{id:projectId}},tasks:[],runs:[],page:{scope:'loaded-projects'}};
+  assert.equal(f.session.enter(state).composer,null);assert.equal(f.assignmentRequests.size,0);assert.equal(f.projectSelections.size,0);
+});
+
 test('a pending model allowance and request identity survive storage only in their own principal scope',()=>{
   const f=fixture(),state={...workspace,authentication:{principal:{issuer:'fixture',kind:'owner',id:'owner-a'}}};
   const modelStart={key:crypto.randomUUID(),body:{candidates:3,limits:{maxRequests:2,maxOutputTokens:4096,timeoutMs:120000,maxInputBytes:32768}}};

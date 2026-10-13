@@ -94,7 +94,7 @@ createNavigation({getContext, dialogs, announce, selectProject, switchView, proj
 const {openContinuation} = createContinuationDialog({getContext, api, dialogs, showError});
 const {openRevision, renderRevisionPreview} = createRequirementsForm({getContext, api, dialogs, refresh, announce});
 const browserSession = createBrowserSession({drafts, disclosures, assignmentRequests, operationRequests, projectSelections, onWarning: showError});
-const taskCreation = createTaskCreation({getContext, currentProject,
+const taskCreation = createTaskCreation({getContext, currentProject, selectProject,
   selectTask: taskId => { selectedTask = taskId; selectedRun = null; }, switchView, api, refresh,
   render, updateChrome, schedulePoll, saveSession, clearError, showError, announce});
 const parts = createWorkbenchParts({getContext, disclosure, currentRun, taskRuns, collections,
