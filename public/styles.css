@@ -2658,6 +2658,30 @@ worn-button {
   display: grid;
   gap: 8px;
 }
+#repository-source-fields > div { align-content: start; }
+.repository-field-help { margin: 0; }
+.field-grid .hosted-repository-help {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0 14px;
+  border: 1px solid var(--worn-border);
+  border-radius: var(--worn-radius-sm);
+  background: var(--worn-bg-secondary);
+}
+.hosted-repository-help ol { padding-left: 20px; }
+.hosted-repository-help li + li { margin-top: 18px; }
+.hosted-repository-help p { margin: 8px 0 12px; }
+.hosted-repository-help pre {
+  padding: 12px;
+  border: 1px solid var(--worn-border);
+  border-radius: 6px;
+  background: var(--worn-surface);
+  color: var(--worn-text);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .repository-identity {
   font: 13px/1.6 var(--worn-font-mono);
   overflow-wrap: anywhere;

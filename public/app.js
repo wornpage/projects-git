@@ -260,6 +260,13 @@ function updateChrome() {
   updateProjectNavigation();
   updateProjectHeader();
   const local = workspace.provider === "local-git";
+  const hostedRepositoryHelp = !demo && workspace.provider === 'cloudflare-artifacts';
+  $('#repository-inspection-controls').hidden = !workspace.capabilities?.inspectRepository;
+  for (const id of ['hosted-repository-name-help','hosted-repository-commit-help','hosted-repository-guidance']) $('#' + id).hidden = !hostedRepositoryHelp;
+  for (const [id, help] of [['repository-path','hosted-repository-name-help'],['repository-base','hosted-repository-commit-help']]) {
+    if (hostedRepositoryHelp) $('#' + id).setAttribute('aria-describedby', help);
+    else $('#' + id).removeAttribute('aria-describedby');
+  }
   $("#workspace-name").textContent = workspace.name;
   $("#provider-label").textContent = demo ? 'Example records' : local ? "Local Git workspace" : "Cloudflare Artifacts";
   $("#provider-dot").classList.toggle("connected", !connection.state.error);

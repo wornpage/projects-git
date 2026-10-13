@@ -66,9 +66,21 @@
               <fieldset id="repository-source-fields" class="field-grid">
                 <legend>1. Connect committed code</legend>
                 <div><label for="project-name-input">Project name</label><input id="project-name-input" placeholder="For example: Customer portal" maxlength="100" required></div>
-                <div><label for="repository-path">Local repository path</label><input id="repository-path" placeholder="C:/code/my-project" maxlength="1000" required></div>
-                <div><label for="repository-base">Base commit · full Git ID</label><input id="repository-base" placeholder="Paste git rev-parse HEAD" pattern="[a-f0-9]{40}([a-f0-9]{24})?" required></div>
-                <div><button id="inspect-repository" class="button" type="button" hidden>Read current commit</button><p id="repository-inspection-status" class="small" role="status"></p></div>
+                <div><label for="repository-path">Local repository path</label><input id="repository-path" placeholder="C:/code/my-project" maxlength="1000" required><p id="hosted-repository-name-help" class="small repository-field-help" hidden>Use the Artifacts name, such as <code>customer-portal</code>, without the namespace, URL or <code>.git</code>.</p></div>
+                <div><label for="repository-base">Base commit · full Git ID</label><input id="repository-base" placeholder="Paste git rev-parse HEAD" pattern="[a-f0-9]{40}([a-f0-9]{24})?" required><p id="hosted-repository-commit-help" class="small repository-field-help" hidden>Paste the full 40-character commit ID at that repository’s default-branch head.</p></div>
+                <div id="repository-inspection-controls"><button id="inspect-repository" class="button" type="button" hidden>Read current commit</button><p id="repository-inspection-status" class="small" role="status"></p></div>
+                <details id="hosted-repository-guidance" class="context-disclosure hosted-repository-help" hidden>
+                  <summary>Where do I find these values?</summary>
+                  <ol>
+                    <li><strong>Find the workspace’s namespace.</strong><p>Check the deployed Worker’s <code>ARTIFACTS</code> binding, or ask the person who configured this workspace. Use Wrangler signed in to that Cloudflare account.</p></li>
+                    <li><strong>Find the repository name.</strong><p>Replace the placeholders and run these read-only commands:</p><pre><code>npx wrangler artifacts repos list --namespace "&lt;namespace&gt;" --json
+npx wrangler artifacts repos get "&lt;repository&gt;" --namespace "&lt;namespace&gt;" --json</code></pre><p>Copy the <code>name</code> into the repository field. Keep the returned <code>remote</code> and <code>default_branch</code> for the next step.</p></li>
+                    <li><strong>Read the default branch’s full commit.</strong><p>Using your existing Git access, query the exact <code>remote</code> returned above:</p><pre><code>git ls-remote --symref "&lt;remote&gt;" HEAD</code></pre><p>Copy the full hexadecimal ID from the line ending in <code>HEAD</code>. The <code>ref:</code> line identifies the default branch.</p><p class="small">Example output — your branch and commit will differ:</p><pre class="repository-output-example"><code>ref: refs/heads/main HEAD
+0123456789abcdef0123456789abcdef01234567 HEAD</code></pre></li>
+                  </ol>
+                  <p class="small">No commit row? The repository needs a committed default branch. If you lack account or Git access, ask the workspace operator for these two values. Tokens and authenticated URLs do not belong in this form.</p>
+                  <p class="small"><a href="https://developers.cloudflare.com/artifacts/api/wrangler/" target="_blank" rel="noopener noreferrer">Cloudflare repository commands ↗</a> · <a href="https://developers.cloudflare.com/artifacts/guides/authentication/" target="_blank" rel="noopener noreferrer">Git access setup ↗</a></p>
+                </details>
               </fieldset>
               <p id="task-source-note" class="definition-note"></p>
               <button id="repository-next" class="button button-primary" type="button" hidden>Use this commit · continue to task</button>
