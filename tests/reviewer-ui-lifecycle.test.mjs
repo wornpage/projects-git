@@ -82,6 +82,13 @@ test('reopening a candidate retains its pending guard and uncertain retry identi
   f.calls[1].resolve(response({error:{message:'Invalid assessment'}},422));await retry;
 });
 
+test('a definite first assessment refusal permits a new request identity',async()=>{
+  const f=await fixture();await f.inspect();const first=f.submit('Same assessment');await f.waitForCall(0);
+  f.calls[0].resolve(response({error:{message:'Not permitted'}},403));await first;
+  const retry=f.submit('Same assessment');await f.waitForCall(1);assert.notEqual(f.calls[1].key,f.calls[0].key);
+  f.calls[1].resolve(response({codeReview:{id:'confirmed'}}));await retry;
+});
+
 test('a human link opens only the matching saved assignment and performs no mutation',async()=>{
   const f=await fixture({search:'?workspace=workspace&run=candidate&assignment=assignment-a'});
   assert.equal(f.reads.length,1);assert.equal(f.calls.length,0);

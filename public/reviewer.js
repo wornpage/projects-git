@@ -158,15 +158,21 @@ async function openReview(item,opener=document.activeElement){
       verdict:verdict.value,summary:summary.value,findings:rows.filter(field=>field.row.isConnected).map(field=>field.read()),
       resolvedPriorFindingIds:[...resolved]};
     const fingerprint=JSON.stringify(body);
-    if(pending.get(path)?.fingerprint!==fingerprint||pending.get(path)?.session!==session)
+    const retrying=pending.get(path)?.fingerprint===fingerprint&&pending.get(path)?.session===session;
+    if(!retrying)
       pending.set(path,{fingerprint,key:crypto.randomUUID(),session});
     const request=pending.get(path),clearRequest=()=>{if(session===viewerSession&&pending.get(path)===request)pending.delete(path);};
     activeSubmissions.set(path,request);updateButtons();status('Submitting assessment for this exact source…');
-    try{const result=await api(path,body,request.key);clearRequest();
+    try{const result=await api(path,body,request.key);
+      if(typeof result?.codeReview?.id!=='string'||!result.codeReview.id){
+        const error=new Error('The server did not confirm this assessment. Its original request is retained.');error.uncertain=true;throw error;
+      }
+      clearRequest();
       if(session!==viewerSession||epoch!==reviewEpoch)return;
       const saved=element('p',`Receipt ${result.codeReview.id}`,'pass');form.append(saved);await loadInbox();
       if(epoch===reviewEpoch)status('Assessment recorded. Acceptance and merge are handled separately.');
-    }catch(error){if(error.status>=400&&error.status<500&&!['OPERATION_IN_PROGRESS','STATE_CONFLICT'].includes(error.code))clearRequest();
+    }catch(error){if(retrying)error.uncertain=true;
+      else if(error.status>=400&&error.status<500&&!['OPERATION_IN_PROGRESS','STATE_CONFLICT'].includes(error.code))clearRequest();
       if(session===viewerSession&&epoch===reviewEpoch)status(error.message+(error.uncertain?' The outcome is not confirmed. Refresh the assigned review before retrying.':''),true);}
     finally{if(activeSubmissions.get(path)===request)activeSubmissions.delete(path);refreshReviewControls();
       if(session===viewerSession&&epoch===reviewEpoch&&submit.isConnected)submit.focus({preventScroll:true});}
