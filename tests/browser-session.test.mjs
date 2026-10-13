@@ -12,6 +12,16 @@ function fixture() {
 const workspace = {id:'one', projects:{project: {id:'project'}}, tasks:[{id:'task',projectId:'project'}],runs:[]};
 const composer = {source:'project:project', name:'', repo:'', base:'', tasks:[{title:'Saved', purpose:'Purpose', criteria:'One\nTwo', owner:'Owner'}], pending:null};
 
+test('a pending model allowance and request identity survive storage only in their own principal scope',()=>{
+  const f=fixture(),state={...workspace,authentication:{principal:{issuer:'fixture',kind:'owner',id:'owner-a'}}};
+  const modelStart={key:crypto.randomUUID(),body:{candidates:3,limits:{maxRequests:2,maxOutputTokens:4096,timeoutMs:120000,maxInputBytes:32768}}};
+  const saved={...composer,source:'sample',modelStart};f.session.enter(state);f.session.save(saved);
+  const other={...state,authentication:{principal:{...state.authentication.principal,id:'owner-b'}}};
+  assert.equal(f.session.enter(other).composer,null);
+  assert.deepEqual(f.session.enter(state).composer.modelStart,modelStart);
+  assert.equal(f.session.enter({...state,id:'other-workspace'}).composer,null);
+});
+
 test('hosted assignment retry retains its exact selected agent across reload',()=>{
   const f=fixture(),agentClientId='1'.repeat(32)+'.access',requestId=crypto.randomUUID();
   const state={...workspace,authentication:{principal:{issuer:'https://fixture.cloudflareaccess.com',kind:'owner',id:'owner'},agentClientIds:[agentClientId]}};

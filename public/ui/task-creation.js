@@ -11,20 +11,34 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
   const composerSources = new Map();
   const {renderTaskDrafts,validateDrafts} = createTaskComposer({getContext: () => ({...getContext(), taskStack}), saveSession, updateChrome, showError});
   function blankTask(owner = '') { return {title:'', purpose:'', criteria:'', owner}; }
+  function restoredModelStart(saved) {
+    const request = saved?.modelStart;
+    if (request == null) return null;
+    const limits = request.body?.limits;
+    if (saved.source !== 'sample' || !/^[a-f0-9-]{36}$/.test(request.key ?? '')
+      || Object.keys(request).sort().join(',') !== 'body,key' || Object.keys(request.body ?? {}).sort().join(',') !== 'candidates,limits'
+      || !Number.isSafeInteger(request.body?.candidates) || request.body.candidates < 1
+      || !limits || Object.keys(limits).sort().join(',') !== 'maxInputBytes,maxOutputTokens,maxRequests,timeoutMs'
+      || !['maxRequests','maxOutputTokens','timeoutMs','maxInputBytes'].every(key => Number.isSafeInteger(limits[key]) && limits[key] > 0))
+      throw new Error('The saved model-start request is invalid. Inspect its outcome before starting another model run.');
+    return structuredClone(request);
+  }
+  function pendingRequest() { return Boolean(pendingTaskStart || pendingModelStart); }
   function restore(saved) {
     epoch++;
     codeConfirmed = false; inspectionRequest++; inspectingRepository = false;
     composerSources.clear(); composerSource = null; taskFormInitialized = false;
     taskStarting = false; pendingTaskStart = null; pendingModelStart = null;
     savedComposer = saved; taskStack = [blankTask()];
-    for (const item of saved?.sources ?? []) composerSources.set(item.source, structuredClone(item));
-    if (saved) composerSources.set(saved.source, structuredClone(saved));
+    for (const item of saved?.sources ?? []) { restoredModelStart(item); composerSources.set(item.source, structuredClone(item)); }
+    if (saved) { restoredModelStart(saved); composerSources.set(saved.source, structuredClone(saved)); }
     for (const id of ['project-name-input','repository-path','repository-base']) $('#' + id).value = '';
     delete $('#task-source').dataset.projects;
   }
   function composerSnapshot(source = composerSource ?? $('#task-source').value) {
     return {tasks: structuredClone(taskStack), source, name: $('#project-name-input').value,
-      repo: $('#repository-path').value, base: $('#repository-base').value, codeConfirmed, pending: structuredClone(pendingTaskStart)};
+      repo: $('#repository-path').value, base: $('#repository-base').value, codeConfirmed,
+      pending: structuredClone(pendingTaskStart), modelStart: structuredClone(pendingModelStart)};
   }
   function snapshot() {
     const current = composerSnapshot();
@@ -34,9 +48,9 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
   function activateComposer(source) {
     const {workspace} = getContext();
     if (source === composerSource) { $('#task-source').value = source; return true; }
-    if (pendingTaskStart || taskStarting) {
+    if (pendingRequest() || taskStarting) {
       $('#task-source').value = composerSource;
-      showError('Resolve the current saved task request before starting a draft in another project.');
+      showError('Resolve the current saved request before starting a draft in another project.');
       return false;
     }
     if (composerSource) composerSources.set(composerSource, composerSnapshot());
@@ -47,6 +61,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     taskStack = saved ? structuredClone(saved.tasks) : [{title:'',purpose:'',criteria:'',owner:workspace.projects?.[source.slice(8)]?.owner ?? ''}];
     for (const [id,key] of [['project-name-input','name'],['repository-path','repo'],['repository-base','base']]) $('#' + id).value = saved?.[key] ?? '';
     pendingTaskStart = saved?.pending ?? null;
+    pendingModelStart = restoredModelStart(saved);
     composerSource = source; $('#task-source').value = source;
     configureTaskForm();
     return true;
@@ -65,14 +80,15 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
         if ([...$('#task-source').options].some(option => option.value === savedComposer.source)) $('#task-source').value = savedComposer.source;
         $('#project-name-input').value = savedComposer.name ?? ''; $('#repository-path').value = savedComposer.repo ?? ''; $('#repository-base').value = savedComposer.base ?? '';
         pendingTaskStart = savedComposer.pending ?? null;
+        pendingModelStart = restoredModelStart(savedComposer);
       } else taskStack[0].owner = project?.owner ?? '';
       composerSource = $('#task-source').value;
-      configureTaskForm(); taskFormInitialized = true;
+      configureTaskForm(); taskFormInitialized = true; savedComposer = null;
     }
     // Route changes and restored drafts must agree on the destination project.
     // An unresolved request keeps its original body and ID; show it only there.
     if (!$('#task-launcher').open && project && composerSource?.startsWith('project:')
-      && composerSource !== 'project:' + project.id && !pendingTaskStart && !taskStarting)
+      && composerSource !== 'project:' + project.id && !pendingRequest() && !taskStarting)
       activateComposer('project:' + project.id);
     const source = $('#task-source').value, mode = $('#task-execution').value;
     const sample = source === 'sample';
@@ -93,29 +109,42 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     $('#new-task-summary').textContent = sample ? 'New project · sample starter' : source==='repository' ? codeStep ? 'New project · connect code' : 'New project · first task' : 'Add to the task queue';
     if (source === 'repository' && !codeStep) $('#task-source-note').textContent = $('#project-name-input').value + ' · ' + $('#repository-path').value + ' · Commit ' + $('#repository-base').value + (workspace.provider === 'cloudflare-artifacts' ? '. The project uses this Artifacts repository and selected base commit.' : '. Only this committed code will be copied.');
     $('#create-task').disabled = codeStep || taskStarting || !supported || sample && (busy || activeWork);
-    $('#create-task').textContent = taskStarting ? source === 'repository' ? 'Connecting code…' : 'Saving tasks…' : pendingTaskStart ? 'Retry this task stack' : sample ? 'Create task' : (source === 'repository' ? 'Create project & queue ' : 'Queue ') + taskStack.length + (taskStack.length === 1 ? ' task' : ' tasks');
-    $('#create-task').title = taskStarting ? 'The same request is still in progress.' : !supported ? 'This workspace does not support this project source.' : sample && activeWork ? 'Wait for current sample work to finish.' : 'Save these tasks. Agents can claim queued work when ready.';
+    $('#create-task').textContent = taskStarting ? source === 'repository' ? 'Connecting code…' : sample ? 'Starting agents…' : 'Saving tasks…'
+      : pendingModelStart ? 'Retry same model start' : pendingTaskStart ? 'Retry this task stack'
+      : sample ? mode === 'model' ? 'Start model agents' : 'Start 2 scripted agents'
+      : (source === 'repository' ? 'Create project & queue ' : 'Queue ') + taskStack.length + (taskStack.length === 1 ? ' task' : ' tasks');
+    $('#create-task').title = taskStarting ? 'The same request is still in progress.' : !supported ? 'This workspace does not support this project source.'
+      : sample && activeWork ? 'Wait for current sample work to finish.'
+      : pendingModelStart ? 'Retry the saved model request with its original allowance and request ID.'
+      : sample ? mode === 'model' ? 'Create the sample project and start model agents within the displayed allowance.' : 'Create the sample project and start two scripted agents. No model calls are made.'
+      : 'Save these tasks. Agents can claim queued work when ready.';
     $('#add-task-draft').hidden = sample;
-    $('#add-task-draft').disabled = taskStack.length >= 8 || taskStarting || Boolean(pendingTaskStart);
+    $('#add-task-draft').disabled = taskStack.length >= 8 || taskStarting || pendingRequest();
     const progress = workspace.repositoryWorkflow?.imports?.find(item => item.requestId === pendingTaskStart?.requestId);
     const status = $('#task-creation-status');
-    status.hidden = !taskStarting && !pendingTaskStart;
+    status.hidden = !taskStarting && !pendingRequest();
     $('#release-task-request').hidden = !pendingTaskStart || taskStarting;
-    status.textContent = progress ? progress.phase + (progress.total ? ' · ' + progress.completed + ' / ' + progress.total + ' objects' : '') + ' · ' + Math.max(0, Math.round((Date.now() - progress.startedAt) / 1000)) + 's' : taskStarting ? 'Saving this task stack…' : pendingTaskStart ? 'This request has not been confirmed. Retry uses the same request ID.' : '';
-    for (const control of $('#task-form').querySelectorAll('input, textarea, select')) control.disabled = taskStarting || Boolean(pendingTaskStart);
-    for (const button of $('#task-drafts').querySelectorAll('button')) button.disabled = taskStarting || Boolean(pendingTaskStart);
+    status.textContent = progress ? progress.phase + (progress.total ? ' · ' + progress.completed + ' / ' + progress.total + ' objects' : '') + ' · ' + Math.max(0, Math.round((Date.now() - progress.startedAt) / 1000)) + 's'
+      : taskStarting ? sample ? 'Starting agents with this request…' : 'Saving this task stack…'
+      : pendingModelStart ? 'This model start has not been confirmed. The original allowance is locked. Retry uses the same request ID; refreshing this page does not start another run.'
+      : pendingTaskStart ? 'This request has not been confirmed. Retry uses the same request ID.' : '';
+    for (const control of $('#task-form').querySelectorAll('input, textarea, select')) control.disabled = taskStarting || pendingRequest();
+    for (const button of $('#task-drafts').querySelectorAll('button')) button.disabled = taskStarting || pendingRequest();
+    if (pendingModelStart) updateModelBudget();
     $('#model-availability').textContent = workspace.capabilities?.model ? 'Model: ' + workspace.execution.model + '. Starting model work sends paid requests within this allowance.' : 'Model execution is not configured.';
   }
   function syncProjectOptions() {
     const {workspace} = getContext();
     const select = $('#task-source');
     const projects = Object.values(workspace.projects ?? {});
-    const signature = JSON.stringify([projects.map(project => [project.id, project.name, project.codeConnected]), workspace.capabilities]);
+    const modelRequest = pendingModelStart ?? savedComposer?.modelStart;
+    const signature = JSON.stringify([projects.map(project => [project.id, project.name, project.codeConnected]), workspace.capabilities, modelRequest?.key]);
     if (select.dataset.projects === signature) return;
     const selected = select.value;
     select.replaceChildren(...projects.map(project => el('option', { value: 'project:' + project.id, disabled: project.codeConnected === false }, project.name)),
       el('option', { value: 'repository', disabled: !workspace.capabilities?.repository }, 'New project · connect code'),
-      ...(workspace.capabilities?.demo || workspace.capabilities?.model ? [el('option', { value: 'sample' }, 'New project · checkout starter')] : []));
+      ...(workspace.capabilities?.demo || workspace.capabilities?.model || modelRequest
+        ? [el('option', { value: 'sample', disabled: !workspace.capabilities?.demo && !workspace.capabilities?.model }, modelRequest ? 'Sample project · unconfirmed model start' : 'New project · checkout starter')] : []));
     if ([...select.options].some(option => option.value === selected)) select.value = selected;
     select.dataset.projects = signature;
   }
@@ -130,7 +159,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     $('#repository-source-fields').hidden = !connecting;
     for (const id of ['repository-path', 'repository-base', 'project-name-input']) $('#' + id).required = connecting;
     for (const option of $('#task-execution').options) option.disabled = option.hidden = sample ? option.value === 'external' || option.value === 'model' && !workspace.capabilities?.model : option.value !== 'external';
-    $('#task-execution').value = sample ? workspace.capabilities?.demo ? 'scripted' : 'model' : 'external';
+    $('#task-execution').value = sample ? pendingModelStart || !workspace.capabilities?.demo ? 'model' : 'scripted' : 'external';
     $('#task-source-note').textContent = sample ? 'This starter creates a project with one fixed checkout task. Its candidates use the same work, review and evidence views.' : connecting ? hosted ? 'Connect an existing repository in your configured Artifacts namespace. Agents work in isolated forks; accepted changes merge into this repository. Then queue tasks without waiting for agents.' : 'Connect committed code once. Your project keeps its own Git copy; your source checkout stays untouched. Then queue tasks without waiting for agents.' : 'Tasks are saved in this project’s queue, in this order. An agent claims a task when ready; unstarted tasks pick up the latest merged code.';
     renderTaskDrafts(); updateExecutionForm();
   }
@@ -183,6 +212,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
       let result;
       if (mode === 'model') {
         pendingModelStart ??= {key: crypto.randomUUID(), body: modelInput()};
+        saveSession(); updateChrome();
         result = await api('/api/model-runs', pendingModelStart.body, pendingModelStart.key);
       } else if (source === 'sample') result = await api('/api/tasks', {source: 'sample'});
       else {
@@ -193,13 +223,17 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
       if (!isCurrent()) return;
       requireResult(result, source);
       pendingTaskStart = null; pendingModelStart = null;
+      saveSession();
       await showSavedTasks(result, source, isCurrent);
     } catch (error) {
       if (!isCurrent()) return;
-      if (error.status >= 400 && error.status < 500 && error.status !== 409) pendingTaskStart = null;
+      if (error.status >= 400 && error.status < 500 && error.status !== 409) { pendingTaskStart = null; pendingModelStart = null; }
       showError(error.message); saveSession();
     } finally {
-      if (isCurrent()) { taskStarting = false; updateChrome(); schedulePoll(); }
+      if (isCurrent()) {
+        taskStarting = false; updateChrome(); schedulePoll();
+        if ($('#task-launcher').open && document.activeElement === document.body) $('#create-task').focus({preventScroll:true});
+      }
     }
   }
   $('#repository-next').addEventListener('click', () => {
@@ -246,7 +280,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     finally { if (isCurrent()) { taskStarting = false; render(true); } }
   }
   $('#add-task-draft').addEventListener('click', () => {
-    if (taskStack.length >= 8 || taskStarting || pendingTaskStart) return;
+    if (taskStack.length >= 8 || taskStarting || pendingRequest()) return;
     taskStack.push({ title: '', purpose: '', criteria: '', owner: taskStack.at(-1).owner });
     renderTaskDrafts(); updateChrome(); saveSession();
     $('#task-title-input-' + (taskStack.length - 1)).focus();
@@ -262,7 +296,7 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     if (!activateComposer(source)) return;
     updateChrome(); saveSession();
   });
-  $('#task-execution').addEventListener('change', () => { updateExecutionForm(); updateChrome(); });
+  $('#task-execution').addEventListener('change', () => { if (pendingModelStart) $('#task-execution').value = 'model'; updateExecutionForm(); updateChrome(); });
   function modelInput() {
     return { candidates: Number($("#model-candidates").value), limits: {
       maxRequests: Number($("#model-requests").value), maxOutputTokens: Number($("#model-output").value),
@@ -270,6 +304,11 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
     } };
   }
   function updateModelBudget() {
+    if (pendingModelStart) {
+      const {candidates,limits} = pendingModelStart.body;
+      for (const [name,value] of Object.entries({candidates,requests:limits.maxRequests,output:limits.maxOutputTokens,seconds:limits.timeoutMs/1000,input:limits.maxInputBytes}))
+        $('#model-'+name).value = String(value);
+    }
     const { candidates, limits } = modelInput();
     $("#model-budget").textContent = `Total allowance: at most ${candidates * limits.maxRequests} requests and ${candidates * limits.maxRequests * limits.maxOutputTokens} output tokens. Input is limited to ${limits.maxInputBytes} bytes per request. These are execution limits, not a dollar estimate.`;
   }
@@ -279,5 +318,5 @@ export function createTaskCreation({getContext, currentProject, selectTask, swit
   $('#task-form').addEventListener('submit', createWorkbenchTask);
   $('#release-task-request').addEventListener('click', releaseRequest);
   return {update, restore, snapshot, activate: activateComposer,
-    get starting() { return taskStarting; }, get locked() { return taskStarting || Boolean(pendingTaskStart); }};
+    get starting() { return taskStarting; }, get locked() { return taskStarting || pendingRequest(); }};
 }

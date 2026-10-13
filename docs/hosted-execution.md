@@ -61,6 +61,15 @@ This permits at most two requests and 8,192 output tokens, with 120 seconds per 
 
 Same-key retries reuse the original task, base and allowance. The alarm runs up to four queued jobs concurrently. It marks work running and persists request reservations before inference. Interrupted running jobs are retained as failures rather than repeating inference. A pending commit is retained before push; it does not prove remote success. Internal model agents never receive Git credentials. Their commit/push/merge tokens last 180 seconds and are revoked afterward.
 
+The browser saves an unconfirmed model-start request and its exact allowance in
+the current workspace and identity's tab storage. Its inputs remain locked and
+the action is labeled **Retry same model start**. Reloading restores the request
+without executing it; an explicit retry sends the same ID and body. A definite
+validation refusal unlocks editing. If model execution becomes unavailable, the
+saved request stays visible and disabled rather than turning into queued work.
+Browser storage failures are reported; keep the tab open when its request ID
+cannot be saved.
+
 ## Revised intent and guarded merge
 
 | Endpoint | Body / effect |
