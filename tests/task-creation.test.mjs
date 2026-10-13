@@ -74,6 +74,13 @@ test('a definite model validation refusal allows a changed allowance with a new 
   f.calls[1].resolve(result());await retry;
 });
 
+for(const status of [403,422,429])test(`a later retry refusal ${status} cannot erase an earlier uncertain model outcome`,async()=>{
+  const f=modelFixture(),first=f.submit(),original=f.calls[0];original.reject(Object.assign(new Error('Start not confirmed'),{uncertain:true}));await first;
+  const retry=f.submit();f.calls[1].reject(Object.assign(new Error('Retry refused'),{status}));await retry;
+  assert.equal(f.controller.locked,true,'A refused retry does not prove the earlier attempt never started.');
+  assert.equal(f.controller.snapshot().modelStart.key,original.key);assert.deepEqual(f.controller.snapshot().modelStart.body,original.body);
+});
+
 test('an unreadable model success keeps the request locked instead of granting a fresh start',async()=>{
   const f=modelFixture(),pending=f.submit(),original=f.calls[0];original.resolve({});await pending;
   assert.equal(f.controller.locked,true);assert.equal(f.controller.snapshot().modelStart.key,original.key);assert.equal(f.selected.length,0);

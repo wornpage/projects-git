@@ -65,7 +65,9 @@ The browser saves an unconfirmed model-start request and its exact allowance in
 the current workspace and identity's tab storage. Its inputs remain locked and
 the action is labeled **Retry same model start**. Reloading restores the request
 without executing it; an explicit retry sends the same ID and body. A definite
-validation refusal unlocks editing. If model execution becomes unavailable, the
+refusal of the first attempt unlocks editing. A later retry refusal keeps an
+earlier uncertain request, because it does not establish that request's outcome.
+If model execution becomes unavailable, the
 saved request stays visible and disabled rather than turning into queued work.
 Browser storage failures are reported; keep the tab open when its request ID
 cannot be saved.
