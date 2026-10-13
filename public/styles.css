@@ -486,6 +486,7 @@ main {
 .task-next-step { padding: 16px; background: var(--worn-bg-secondary); border-radius: var(--worn-radius); }
 .task-next-step p { margin: 10px 0 18px; }
 .task-next-step p:last-child { margin-bottom: 0; }
+.task-next-step-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .focused-task-body > .context-disclosure { margin: 0; }
 .focused-task .panel-header { align-items: start; gap: 12px; flex-wrap: wrap; }
 .focused-task .panel-header h2 { overflow-wrap: anywhere; }
