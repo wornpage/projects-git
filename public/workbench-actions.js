@@ -62,7 +62,8 @@ export function createWorkbenchActions({getContext, captureSession, applySnapsho
     const isCurrent = captureSession(), submitted = structuredClone(body);
     const fingerprint = await hash(JSON.stringify(submitted));
     if (!isCurrent()) throw new Error('The workspace changed before this operation could be sent. Review the current workspace.');
-    if (operationRequests.get(path)?.fingerprint !== fingerprint)
+    const retrying = operationRequests.get(path)?.fingerprint === fingerprint;
+    if (!retrying)
       operationRequests.set(path, {fingerprint, requestId:crypto.randomUUID()});
     const request = operationRequests.get(path);
     saveSession();
@@ -73,7 +74,8 @@ export function createWorkbenchActions({getContext, captureSession, applySnapsho
       const result = await api(path, submitted, request.requestId);
       clearRequest(); return result;
     } catch (error) {
-      if (error.status && error.status < 500 && !['OPERATION_IN_PROGRESS','TASK_OPERATION_PENDING','STATE_CONFLICT'].includes(error.code)) clearRequest();
+      if (retrying) error.uncertain = true;
+      else if (error.status && error.status < 500 && !['OPERATION_IN_PROGRESS','TASK_OPERATION_PENDING','STATE_CONFLICT'].includes(error.code)) clearRequest();
       throw error;
     }
   }

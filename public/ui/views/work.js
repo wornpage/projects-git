@@ -5,7 +5,7 @@ import {taskLifecycle} from '../task-lifecycle.js';
 export function createWorkView({
   getContext,
   parts, disclosure, currentTask, currentRun, taskRuns, repositoryAgents, taskSettings, externalHandoff,
-  switchView, openContinuation, checksFailed, independentlyVerified, openInspector, collections, openAgentConnection
+  switchView, openContinuation, checksFailed, independentlyVerified, openInspector, collections, openAgentConnection, hasPendingAssignment
 }) {
   const {emptyState, taskHeader, timeline, commitValue, runStatus} = parts;
   function agentCard(run, index, brief, result) {
@@ -94,6 +94,7 @@ export function createWorkView({
       : agentsUnavailable ? 'Your task is saved. This isolated trial has no connected agents or model key, so no agent work has started.'
       : 'No agent has been assigned. Start with one checkout for this task.';
     const assignment = repositoryAgents(task);
+    const assignmentAction = assignment && hasPendingAssignment(task.id) ? 'Resolve pending assignment' : 'Prepare another candidate';
     return el('div', {}, taskHeader(task),
       !demo && !agentsUnavailable && taskQueued(workspace,task) && (!workspace.authentication || workspace.authentication.permissions.manage)
         ? el('button',{type:'button',id:'agent-instructions-'+task.id,class:'button button-primary button-small',onclick:event=>openAgentConnection(task.projectId,event.currentTarget)},'Get agent instructions') : null,
@@ -104,7 +105,7 @@ export function createWorkView({
       rows.navigation,
       el('div',{class:'work-task-actions'},
         el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Task progress',taskProgress(task,runs))},'Task progress'),
-        runs.length && assignment && !agentsUnavailable ? el('button',{type:'button',class:'button button-small',onclick:()=>openInspector('Prepare another candidate',assignment)},'Prepare another candidate') : null,
+        runs.length && assignment && !agentsUnavailable ? el('button',{id:'prepare-candidate-'+task.id,type:'button',class:'button button-small',onclick:()=>openInspector(assignmentAction,assignment)},assignmentAction) : null,
         demo ? null : taskSettings(task),
         el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Task activity',timeline(workspace.events.filter(event=>event.taskId===task.id),10))},'View task activity')));
   }

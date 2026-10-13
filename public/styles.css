@@ -3490,6 +3490,7 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
 .collection-filters select { flex:0 1 170px; min-width:120px; }
 .collection-page-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-block:16px 10px; }
 .collection-page-controls p { flex:1 1 220px; margin:0; font-size:13px; color:var(--worn-text-secondary); font-variant-numeric:tabular-nums; }
+.collection-page-controls [role="status"]:focus-visible,.project-pagination [role="status"]:focus-visible { outline:3px solid var(--worn-focus); outline-offset:3px; }
 .project-nav-group { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; }
 .project-nav-group > .main-nav { grid-column:1 / -1; }
 .project-pin { font-size:11px; padding:6px; min-height:30px; border:0; border-radius:4px; background:transparent; color:var(--worn-text-secondary); }

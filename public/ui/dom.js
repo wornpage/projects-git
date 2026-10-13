@@ -54,12 +54,14 @@ export function panel(title, body, extra = null) {
 export function captureFocus(content) {
   const active = document.activeElement;
   if (!content.contains(active) || !active.id) return null;
-  return { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+  return { id: active.id, start: active.selectionStart, end: active.selectionEnd, fallbackId: active.dataset?.focusFallback };
 }
 export function restoreFocus(saved) {
   if (!saved) return;
-  const element = document.getElementById(saved.id);
-  if (!element) return;
+  const original = document.getElementById(saved.id);
+  // A replaced control can name its nearby destination if it is gone or disabled.
+  const element = original && !original.disabled ? original : saved.fallbackId ? document.getElementById(saved.fallbackId) : null;
+  if (!element || element.disabled) return;
   element.focus({ preventScroll: true });
-  if (typeof element.setSelectionRange === "function" && saved.start !== null) element.setSelectionRange(saved.start, saved.end);
+  if (element === original && typeof element.setSelectionRange === "function" && typeof saved.start === 'number') element.setSelectionRange(saved.start, saved.end);
 }

@@ -11,7 +11,7 @@ function fixture(saved = null) {
   const context={workspace:{id:'workspace-a', provider:'local-git', tasks:[], runs:[], projects:{one:{id:'one',name:'First',owner:'Owner'},two:{id:'two',name:'Second',owner:'Other'}}, capabilities:{repository:true,dependencies:true}}, view:'overview',busy:false,projectId:'one'};
   $('#task-source').value='project:one';
   $('#task-execution').append(...['external','scripted','model'].map(value=>el('option',{value},value)));
-  $('#task-form').querySelectorAll=()=>[...dom.nodes].filter(([key])=>key.startsWith('#task-')&&key.endsWith('-input')||['#task-source','#task-execution'].includes(key)).map(([,value])=>value);
+  $('#task-form').querySelectorAll=()=>[...dom.nodes].filter(([key])=>key.startsWith('#task-')&&key.endsWith('-input')||/^#model-(candidates|requests|output|seconds|input)$/.test(key)||['#task-source','#task-execution'].includes(key)).map(([,value])=>value);
   let controller;
   const refresh=async()=>{if(context.refresh)await context.refresh();};
   const update=()=>controller.update();
@@ -30,6 +30,87 @@ function fixture(saved = null) {
     submit:()=>$('#task-form').dispatch('submit'), release:()=>$('#release-task-request').dispatch('click')};
 }
 const result=(projectId='one')=>{const taskId=crypto.randomUUID();return {projectId,taskId,taskIds:[taskId]};};
+
+function modelFixture(saved=null) {
+  const f=fixture();f.context.workspace.capabilities.model=true;f.context.workspace.execution={model:'controlled transport'};
+  for(const [name,value] of Object.entries({candidates:3,requests:2,output:4096,seconds:120,input:32768}))f.$('#model-'+name).value=String(value);
+  f.controller.restore(saved);f.controller.update();f.$('#task-launcher').showModal();f.controller.activate('sample');f.controller.update();
+  return f;
+}
+
+test('sample actions distinguish starting agents from queueing ordinary work',()=>{
+  const f=modelFixture();assert.equal(f.$('#create-task').textContent,'Start model agents');
+  assert.match(f.$('#create-task').title,/start model agents within the displayed allowance/);
+  f.context.workspace.capabilities.demo=true;
+  f.controller.activate('project:one');f.controller.activate('sample');f.controller.update();
+  assert.equal(f.$('#create-task').textContent,'Start 2 scripted agents');assert.match(f.$('#create-task').title,/No model calls/);
+  f.controller.activate('project:one');f.controller.update();assert.equal(f.$('#create-task').textContent,'Queue 1 task');assert.equal(f.calls.length,0);
+});
+
+for(const status of [undefined,409,503])test(`unconfirmed model start ${status??'transport error'} preserves the visible allowance and exact retry across reload`,async()=>{
+  let f=modelFixture();const pending=f.submit(),original=f.calls[0];
+  assert.equal(f.savedSnapshots.at(-1).modelStart.key,original.key,'Save identity before dispatching the request.');
+  original.reject(Object.assign(new Error('Start not confirmed'),{status,uncertain:true}));await pending;
+  assert.equal(f.controller.locked,true);assert.equal(f.$('#model-candidates').disabled,true);
+  assert.equal(f.$('#task-execution').disabled,true);assert.match(f.$('#create-task').textContent,/Retry same model start/);
+  assert.match(f.$('#task-creation-status').textContent,/original allowance is locked/);
+  assert.equal(f.controller.activate('project:two'),false,'An unresolved model start cannot be replaced by another destination.');
+  f.$('#model-candidates').value='1';await f.$('#model-form').dispatch('input');
+  assert.equal(f.$('#model-candidates').value,'3','Even a stale input event restores the displayed pending allowance.');
+  f.$('#task-execution').value='scripted';await f.$('#task-execution').dispatch('change');assert.equal(f.$('#task-execution').value,'model');
+  const saved=JSON.parse(JSON.stringify(f.controller.snapshot()));f=modelFixture(saved);
+  assert.equal(f.calls.length,0,'Reload never executes the saved request.');assert.equal(f.controller.locked,true);
+  assert.equal(f.$('#model-candidates').value,'3');assert.match(f.$('#model-budget').textContent,/6 requests and 24576 output tokens/);
+  const retry=f.submit();assert.deepEqual(f.calls[0].body,original.body);assert.equal(f.calls[0].key,original.key);
+  f.calls[0].resolve(result());await retry;
+  assert.equal(f.controller.locked,false);assert.equal(f.controller.snapshot().modelStart,null);
+});
+
+test('a definite model validation refusal allows a changed allowance with a new request identity',async()=>{
+  const f=modelFixture(),pending=f.submit(),original=f.calls[0];original.reject(Object.assign(new Error('Invalid allowance'),{status:422}));await pending;
+  assert.equal(f.controller.locked,false);assert.equal(f.$('#model-candidates').disabled,false);
+  f.$('#model-candidates').value='1';await f.$('#model-form').dispatch('input');
+  const retry=f.submit();assert.notEqual(f.calls[1].key,original.key);assert.equal(f.calls[1].body.candidates,1);
+  f.calls[1].resolve(result());await retry;
+});
+
+for(const status of [403,422,429])test(`a later retry refusal ${status} cannot erase an earlier uncertain model outcome`,async()=>{
+  const f=modelFixture(),first=f.submit(),original=f.calls[0];original.reject(Object.assign(new Error('Start not confirmed'),{uncertain:true}));await first;
+  const retry=f.submit();f.calls[1].reject(Object.assign(new Error('Retry refused'),{status}));await retry;
+  assert.equal(f.controller.locked,true,'A refused retry does not prove the earlier attempt never started.');
+  assert.equal(f.controller.snapshot().modelStart.key,original.key);assert.deepEqual(f.controller.snapshot().modelStart.body,original.body);
+});
+
+test('an unreadable model success keeps the request locked instead of granting a fresh start',async()=>{
+  const f=modelFixture(),pending=f.submit(),original=f.calls[0];original.resolve({});await pending;
+  assert.equal(f.controller.locked,true);assert.equal(f.controller.snapshot().modelStart.key,original.key);assert.equal(f.selected.length,0);
+});
+
+test('restoring an unresolved model start after capability removal cannot become a project task request',async()=>{
+  const f=modelFixture(),pending=f.submit(),original=f.calls[0];original.reject(Object.assign(new Error('Start not confirmed'),{uncertain:true}));await pending;
+  const saved=JSON.parse(JSON.stringify(f.controller.snapshot()));
+  f.context.workspace.capabilities.model=false;f.controller.restore(saved);f.controller.update();
+  assert.equal(f.$('#task-source').value,'sample');assert.equal(f.$('#task-execution').value,'model');
+  assert.equal(f.controller.locked,true);assert.equal(f.$('#create-task').disabled,true);
+  assert.equal(f.controller.snapshot().modelStart.key,original.key);await f.submit();assert.equal(f.calls.length,1);
+  f.context.workspace.capabilities.model=true;f.controller.update();
+  const retry=f.submit();assert.equal(f.calls[1].path,'/api/model-runs');assert.equal(f.calls[1].key,original.key);
+  f.calls[1].resolve(result());await retry;
+});
+
+for(const failed of [false,true])test(`late model ${failed?'failure':'success'} cannot clear a new workspace request`,async()=>{
+  const f=modelFixture(),old=f.submit(),original=f.calls[0];
+  f.context.workspace.id='workspace-b';f.controller.restore(null);f.controller.update();f.controller.activate('sample');f.controller.update();
+  const current=f.submit(),currentKey=f.calls[1].key;
+  if(failed)original.reject(new Error('Old request failed'));else original.resolve(result());await old;
+  assert.equal(f.controller.starting,true);assert.equal(f.controller.snapshot().modelStart.key,currentKey);assert.deepEqual(f.errors,[]);
+  f.calls[1].resolve(result());await current;assert.equal(f.controller.locked,false);
+});
+
+test('malformed saved model requests fail explicitly without issuing a replacement',()=>{
+  const f=modelFixture(),saved=f.controller.snapshot();saved.modelStart={key:crypto.randomUUID(),body:{candidates:1,limits:{}}};
+  assert.throws(()=>f.controller.restore(saved),/saved model-start request is invalid/);assert.equal(f.calls.length,0);
+});
 
 for(const chosen of [null,2,4])test(`model allowance submits ${chosen ?? 'the one-candidate default'} with its explicit total budget`,async()=>{
   const f=fixture();
@@ -125,6 +206,39 @@ for(const status of [422,409,503])test(`task rejection ${status} ${status===422?
   f.calls[0].reject(Object.assign(new Error('Request refused'),{status}));await pending;
   assert.equal(f.controller.locked,status!==422);assert.equal(f.calls.length,1);
   assert.deepEqual(f.errors,['Request refused']);
+});
+
+for(const status of [403,422,429])test(`later task retry refusal ${status} cannot discard an earlier uncertain task stack`,async()=>{
+  const f=fixture();await f.fill();const first=f.submit(),original=f.calls[0];
+  original.reject(Object.assign(new Error('Lost task response'),{uncertain:true}));await first;
+  const retry=f.submit();assert.equal(f.calls[1].key,original.key);
+  f.calls[1].reject(Object.assign(new Error('Retry refused'),{status}));await retry;
+  assert.equal(f.controller.locked,true);assert.equal(f.controller.snapshot().pending.requestId,original.key);
+  assert.deepEqual(f.controller.snapshot().pending,original.body);
+  const release=f.release();assert.ok(f.calls[2].path.includes(original.key));
+  const saved=result();f.calls[2].resolve({result:saved});await release;
+  assert.deepEqual(f.selected,[saved.taskId]);assert.equal(f.controller.locked,false);
+  assert.equal(f.calls.filter(call=>call.path==='/api/tasks').length,2,'Recovery reads the saved outcome without creating another stack.');
+});
+
+for(const reloaded of [false,true])test(`an off-page pending task request ${reloaded?'restores':'stays'} bound to its original project`,async()=>{
+  const f=fixture();await f.fill('Original project draft');const first=f.submit(),original=f.calls[0],project=f.context.workspace.projects.one;
+  original.reject(Object.assign(new Error('Unconfirmed response'),{uncertain:true}));await first;
+  const saved=JSON.parse(JSON.stringify(f.controller.snapshot()));
+  f.context.workspace.projects={two:f.context.workspace.projects.two};f.context.projectId='two';
+  f.context.workspace.page={scope:'loaded-projects',totalProjects:2};
+  if(reloaded)f.controller.restore(saved);f.controller.update();
+  assert.equal(f.$('#task-source').value,'project:one');
+  assert.equal(f.$('#task-source').options.find(option=>option.value==='project:one').disabled,true);
+  assert.equal(f.$('#create-task').disabled,true);assert.equal(f.$('#open-saved-project').hidden,false);
+  assert.match(f.$('#task-creation-status').textContent,/Open the original project/);
+  await f.submit();assert.equal(f.calls.length,1,'An unavailable project cannot be substituted with the loaded project.');
+  await f.$('#open-saved-project').dispatch('click');assert.equal(f.context.projectId,'one');assert.equal(f.calls.length,1);
+  f.context.workspace.projects={one:project};f.controller.update();
+  assert.equal(f.$('#open-saved-project').hidden,true);assert.equal(f.$('#create-task').disabled,false);
+  assert.equal(f.$('#task-title-input').value,'Original project draft');
+  const retry=f.submit();assert.equal(f.calls[1].key,original.key);assert.deepEqual(f.calls[1].body,original.body);
+  f.calls[1].resolve(result());await retry;assert.equal(f.controller.locked,false);
 });
 
 test('malformed success and unconfirmed release cannot silently discard an unresolved task request',async()=>{

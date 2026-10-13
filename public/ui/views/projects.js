@@ -28,12 +28,12 @@ export function createProjectsView({getContext, disclosure, getProjectSelection,
   return () => {
     const {workspace,busy}=getContext(),projects=Object.values(workspace.projects??{}),page=workspace.page;
     const pagination = () => page ? el('nav',{class:'project-pagination','aria-label':'Project pages'},
-      el('p',{role:'status'},page.totalProjects ? `Showing ${page.offset+1}–${page.offset+projects.length} of ${page.totalProjects} projects` : '0 projects'),
+      el('p',{id:'projects-page-status',role:'status',tabindex:'-1'},page.totalProjects ? `Showing ${page.offset+1}–${page.offset+projects.length} of ${page.totalProjects} projects` : '0 projects'),
       el('div',{class:'button-row'},
         page.previousOffset!==null||page.nextOffset!==null ? [
-        el('button',{class:'button button-small',disabled:busy||page.previousOffset===null,onclick:()=>changeProjectPage(page.previousOffset)},'Previous projects'),
-        el('button',{class:'button button-small',disabled:busy||page.nextOffset===null,onclick:()=>changeProjectPage(page.nextOffset)},'Next projects')] : null,
-        el('button',{class:'button button-small',disabled:busy,onclick:()=>changeProjectPage(0,true)},'Refresh projects'))) : null;
+        el('button',{id:'projects-previous','data-focus-fallback':'projects-page-status',class:'button button-small',disabled:busy||page.previousOffset===null,onclick:()=>changeProjectPage(page.previousOffset)},'Previous projects'),
+        el('button',{id:'projects-next','data-focus-fallback':'projects-page-status',class:'button button-small',disabled:busy||page.nextOffset===null,onclick:()=>changeProjectPage(page.nextOffset)},'Next projects')] : null,
+        el('button',{id:'projects-refresh','data-focus-fallback':'projects-page-status',class:'button button-small',disabled:busy,onclick:()=>changeProjectPage(0,true)},'Refresh projects'))) : null;
     return el('div',{class:'projects-home'},
       workspace.personalWorkspace && !projects.length ? panel('Your isolated workspace', el('div',{class:'panel-body'},
         el('p',{},'Your projects, tasks and repositories are separate from other visitors and the working workspace. Start with a fresh checkout project, then edit its task queue, requirements and project policy.'),

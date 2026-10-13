@@ -10,6 +10,7 @@ export function installFakeDOM() {
     addEventListener(event, fn) { (this.listeners[event] ??= []).push(fn); }
     async dispatch(event, data = {}) { for (const fn of this.listeners[event] ?? []) await fn({preventDefault(){this.defaultPrevented=true;},target:this,...data}); }
     focus() { document.activeElement = this; }
+    contains(node) { return node === this || this.children.some(child => child.contains?.(node)); }
     select() {}
     showModal() { this.open = true; }
     close() { this.open = false; for (const fn of this.listeners.close ?? []) fn({}); }

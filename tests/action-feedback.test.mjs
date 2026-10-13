@@ -126,6 +126,27 @@ test('operation retry preserves its submitted body and ID until confirmed',async
   f.calls[1].resolve({verificationPending:true});await retry;assert.equal(f.operationRequests.size,0);
 });
 
+for(const status of [403,422,429])test(`later operation retry refusal ${status} retains the earlier uncertain request`,async()=>{
+  const f=fixture(),path='/api/runs/run/verify',body={headCommit:'a',taskRevision:1};
+  const first=f.actions.runOperation(path,body);await f.waitForCall(0);
+  const failed=assert.rejects(first);f.calls[0].reject(Object.assign(new Error('Lost response'),{status:503}));await failed;
+  const original=f.operationRequests.get(path),retry=f.actions.runOperation(path,body);await f.waitForCall(1);
+  const refused=assert.rejects(retry,error=>error.uncertain===true);
+  f.calls[1].reject(Object.assign(new Error('Retry refused'),{status}));await refused;
+  assert.equal(f.operationRequests.get(path),original);
+  const recovered=f.actions.runOperation(path,body);await f.waitForCall(2);
+  assert.equal(f.calls[2].key,original.requestId);assert.deepEqual(f.calls[2].body,body);
+  f.calls[2].resolve({verificationPending:true});await recovered;assert.equal(f.operationRequests.size,0);
+});
+
+test('a definite first operation refusal releases its request for corrected input',async()=>{
+  const f=fixture(),path='/api/runs/run/verify',first=f.actions.runOperation(path,{headCommit:'a'});await f.waitForCall(0);
+  const refused=assert.rejects(first);f.calls[0].reject(Object.assign(new Error('Invalid input'),{status:422}));await refused;
+  assert.equal(f.operationRequests.size,0);
+  const next=f.actions.runOperation(path,{headCommit:'b'});await f.waitForCall(1);assert.notEqual(f.calls[1].key,f.calls[0].key);
+  f.calls[1].resolve({verificationPending:true});await next;
+});
+
 test('workspace changes during fingerprinting prevent sending an operation',async()=>{
   const fingerprint=deferred(),f=fixture({hash:()=>fingerprint.promise});
   const operation=f.actions.runOperation('/api/runs/run/verify',{headCommit:'a'});
