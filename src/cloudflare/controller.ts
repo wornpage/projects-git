@@ -21,6 +21,7 @@ import { automaticApprovalEligible, approveRunByPolicy } from '../core/workflow.
 import { setAutomaticMergePolicy } from '../core/project-work.mjs';
 import { automaticMergePolicyCurrent, independentReviewStatus } from '../../public/review-boundary.js';
 import {parseWorkspacePage} from '../../public/workspace-page.js';
+import {discoveryParameter, listRepositories, inspectRepository} from './repository-discovery.ts';
 
 const sampleTask = { title: 'Make checkout totals trustworthy', owner: 'Cloudflare coordinator', purpose: 'Calculate exact integer-cent totals and reject invalid inputs and unsafe totals.',
   criteria: ['Use safe integer cents.', 'Reject invalid quantities and prices.', 'Preserve valid inputs and reject unsafe totals.'] };
@@ -231,6 +232,20 @@ export class HostedController {
     if (!this.store.identity().authentication) throw new ApiError(409, 'OWNER_ADOPTION_REQUIRED', 'Explicitly adopt the retained workspace before changing it.');
   }
 
+  async repositoryCatalog(search: string) {
+    this.requireOwner();
+    const cursor=discoveryParameter(search,'cursor');
+    const result=await listRepositories(this.artifacts,cursor,()=>this.requireOwner());
+    return {workspaceId:this.store.identity().id,...result};
+  }
+
+  async repositoryHead(search: string) {
+    this.requireOwner();
+    const name=repositoryName(discoveryParameter(search,'name'));
+    const result=await inspectRepository(this.artifacts,name,()=>this.requireOwner());
+    return {workspaceId:this.store.identity().id,...result};
+  }
+
   private async refreshAutomaticAuthority(): Promise<void> {
     if (!this.runtime?.currentPolicy) throw new ApiError(503, 'CURRENT_POLICY_UNAVAILABLE', 'Automatic integration requires current private authority.');
     // Replace only this operation's policy, never a shared or durable last-request
@@ -317,7 +332,7 @@ export class HostedController {
         occupied: executionOccupancy(snapshot),
         queued: state.runs.filter(run => run.status === 'assigned' && run.agent === 'model').length,
         verification: { limit: 2, occupied: verificationOccupancy(snapshot), waiting: Object.values(snapshot.jobs ?? {}).filter(job => job.status === 'running' && job.phase === 'waiting-check').length } },
-      capabilities: { repository: canManage, demo: false, model: canManage && Boolean(this.runtime?.provider && this.runtime.repository), merge: canManage && Boolean(this.runtime), verify: canManage && Boolean(this.runtime), repositoryChecks: canManage && Boolean(this.runtime?.repositoryChecks), baseUpdate: canManage && Boolean(this.runtime), revise: canManage, handoff: true, coordination: true, dependencies: true, providerVerified: false },
+      capabilities: { repository: canManage, repositoryCatalog: canManage, demo: false, model: canManage && Boolean(this.runtime?.provider && this.runtime.repository), merge: canManage && Boolean(this.runtime), verify: canManage && Boolean(this.runtime), repositoryChecks: canManage && Boolean(this.runtime?.repositoryChecks), baseUpdate: canManage && Boolean(this.runtime), revise: canManage, handoff: true, coordination: true, dependencies: true, providerVerified: false },
       mergeStateByRun,
       reviewInferences: canManage ? Object.values(snapshot.operations).filter(op=>op.kind==='review-inference').map(op=>({
         runId:op.itemId,attemptId:op.attemptId,reviewerId:op.reviewerId,model:op.model,contextId:op.contextId,

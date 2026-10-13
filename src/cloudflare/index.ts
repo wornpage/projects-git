@@ -271,6 +271,8 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     assertAuthority(authority, this.env.WORKSPACE_ID);
     authorizeRoute(call.principal, call.method, call.path);
     controller = this.controller(authority);
+      if(call.method==='GET'&&call.path==='/api/repositories') return reply(await controller.repositoryCatalog(call.search ?? ''));
+      if(call.method==='GET'&&call.path==='/api/repositories/head') return reply(await controller.repositoryHead(call.search ?? ''));
       if(call.method==='GET'&&call.path==='/api/projects/catalog') {
         let query;try {query=parseProjectCatalog(call.search);}catch(error){throw new ApiError(400,'INVALID_PROJECT_CATALOG',(error as Error).message);}
         return reply(controller.projectCatalog(query));

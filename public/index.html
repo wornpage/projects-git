@@ -66,9 +66,16 @@
               <fieldset id="repository-source-fields" class="field-grid">
                 <legend>1. Connect committed code</legend>
                 <div><label for="project-name-input">Project name</label><input id="project-name-input" placeholder="For example: Customer portal" maxlength="100" required></div>
-                <div><label for="repository-path">Local repository path</label><input id="repository-path" placeholder="C:/code/my-project" maxlength="1000" required></div>
-                <div><label for="repository-base">Base commit · full Git ID</label><input id="repository-base" placeholder="Paste git rev-parse HEAD" pattern="[a-f0-9]{40}([a-f0-9]{24})?" required></div>
-                <div><button id="inspect-repository" class="button" type="button" hidden>Read current commit</button><p id="repository-inspection-status" class="small" role="status"></p></div>
+                <div id="repository-manual-fields"><label for="repository-path">Local repository path</label><input id="repository-path" placeholder="C:/code/my-project" maxlength="1000" required></div>
+                <div id="artifact-picker-field" hidden>
+                  <label for="artifact-repository-select">Artifacts repository</label><select id="artifact-repository-select" aria-describedby="artifact-catalog-status" disabled><option value="">Choose an Artifacts repository</option></select>
+                  <p id="artifact-catalog-status" class="small" role="status"></p>
+                  <div class="artifact-picker-actions"><button id="artifact-previous" class="button button-small" type="button" aria-label="Previous repositories" disabled>Previous</button><button id="artifact-next" class="button button-small" type="button" aria-label="Next repositories" disabled>Next</button><button id="artifact-refresh" class="button button-small" type="button">Refresh list</button></div>
+                  <p id="artifact-empty" class="small" hidden>No repositories yet. Create or import a repository in this workspace’s Artifacts namespace first.</p>
+                  <p id="artifact-picker-error" class="checks-failed small" role="alert" hidden></p>
+                </div>
+                <div id="repository-base-field"><label for="repository-base">Base commit · full Git ID</label><input id="repository-base" placeholder="Paste git rev-parse HEAD" pattern="[a-f0-9]{40}([a-f0-9]{24})?" required><div id="artifact-base-controls" hidden><p id="artifact-base-status" class="small" role="status"></p><button id="artifact-refresh-base" class="button button-small" type="button" disabled>Refresh current base</button></div></div>
+                <div id="repository-inspection-controls"><button id="inspect-repository" class="button" type="button" hidden>Read current commit</button><p id="repository-inspection-status" class="small" role="status"></p></div>
               </fieldset>
               <p id="task-source-note" class="definition-note"></p>
               <button id="repository-next" class="button button-primary" type="button" hidden>Use this commit · continue to task</button>

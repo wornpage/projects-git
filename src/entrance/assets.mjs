@@ -21,6 +21,7 @@ export const DEMO_ASSETS = Object.freeze([
   "syntax.css",
   "task-dependencies.js",
   "task-lifecycle.js",
+  "ui/artifact-picker.js",
   "ui/collection.js",
   "ui/compact-navigation.js",
   "ui/continuation-dialog.js",

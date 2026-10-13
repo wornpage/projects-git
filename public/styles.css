@@ -2658,6 +2658,12 @@ worn-button {
   display: grid;
   gap: 8px;
 }
+#repository-source-fields > div { align-content: start; }
+#repository-source-fields[data-mode="hosted"] #repository-base-field { grid-column: 1 / -1; }
+.artifact-picker-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+#artifact-picker-field p, #artifact-base-controls p { margin: 0 0 8px; }
+#artifact-base-controls { min-width: 0; }
+#artifact-base-status { overflow-wrap: anywhere; }
 .repository-identity {
   font: 13px/1.6 var(--worn-font-mono);
   overflow-wrap: anywhere;

@@ -13,6 +13,9 @@ resources and identity configuration.
 | Run the complete source check | `pwsh -NoProfile -File scripts/ci.ps1` | PowerShell 7, Git and Docker's Linux engine running |
 | Configure a private hosted workspace | Follow [operator setup](qualification-setup.md) | Your own Cloudflare account, Access owner configuration and bounded agent/reviewer credentials |
 
+Already have a hosted workspace? [Choose an Artifacts repository and load its
+base commit](hosted-project-setup.md) directly in **New project**.
+
 ## Install
 
 From the repository or extracted archive root:

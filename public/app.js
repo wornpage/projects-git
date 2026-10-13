@@ -19,6 +19,7 @@ import {createContinuationDialog} from './ui/continuation-dialog.js';
 import {createRequirementsForm} from './ui/requirements-form.js';
 import {createBrowserSession} from './browser-session.js';
 import {createTaskCreation} from './ui/task-creation.js';
+import {createArtifactPicker} from './ui/artifact-picker.js';
 import {createReviewForm} from './ui/review-form.js';
 import {createPublicationView} from './ui/publication.js';
 import {createProjectControls, automaticMergeControls} from './ui/project-controls.js';
@@ -97,6 +98,7 @@ const browserSession = createBrowserSession({drafts, disclosures, assignmentRequ
 const taskCreation = createTaskCreation({getContext, currentProject,
   selectTask: taskId => { selectedTask = taskId; selectedRun = null; }, switchView, api, refresh,
   render, updateChrome, schedulePoll, saveSession, clearError, showError, announce});
+const artifactPicker=createArtifactPicker({getContext,api,isLocked:()=>taskCreation.locked||actions.busy,saveSession});
 const parts = createWorkbenchParts({getContext, disclosure, currentRun, taskRuns, collections,
   switchView, showError, announce, independentlyVerified, checksFailed, openInspector});
 const {loadIndexedSearch, rebuildSearch} = createRetainedSearch({getContext, retainedSearches, currentProject, api, render, announce, showError});
@@ -275,6 +277,7 @@ function updateChrome() {
   $("#review-count").textContent = pendingTasks;
   $("#review-count").setAttribute('aria-label', `${pendingTasks} project tasks needing review or merge`);
   taskCreation.update();
+  artifactPicker.update();
   $('#new-project').hidden = Boolean(workspace.authentication && !workspace.authentication.permissions.manage);
   $('#task-launcher').hidden = Boolean(workspace.authentication && !workspace.authentication.permissions.manage);
   updateConnectionStatus();

@@ -36,6 +36,17 @@ test('Worker refuses invalid sessions and agent owner-actions before DO access o
   assert.deepEqual(f.calls,[]);assert.deepEqual(f.assets,[]);
 });
 
+test('repository discovery is owner-only before the Durable Object is reached',async()=>{
+  const f=fixture();f.env.ACCESS_REVIEWER_CLIENT_IDS=JSON.stringify([REVIEWER_CLIENT]);
+  for(const path of ['/api/repositories','/api/repositories/head?name=starter']){
+    for(const token of [undefined,await jwt('agent'),await jwt('agent',{common_name:REVIEWER_CLIENT})])
+      assert.ok([401,403].includes((await handler(await request(path,token),f.env)).status));
+    assert.equal(f.calls.length,0);
+  }
+  const result=await handler(await request('/api/repositories/head?name=starter',await jwt()),f.env);assert.equal(result.status,200);
+  assert.equal(f.calls[1].call.principal.kind,'owner');assert.equal(f.calls[1].call.search,'?name=starter');
+});
+
 test('Worker binds the verified principal, excludes body impersonation, and protects static assets',async()=>{
   const f=fixture(),token=await jwt();
   assert.equal((await handler(await request('/api/workspace',token),f.env)).status,200);
