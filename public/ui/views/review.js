@@ -334,11 +334,13 @@ export function createReviewView({
       baseUpdatePanel(task,run),
       publicationPanel(task,run),
       el('nav',{class:'review-jumps','aria-label':'Review sections'},links),
-      el('p',{class:'review-next'},candidateOutcome(workspace,run).next),
+      el('div',{class:'review-next'},
+        el('p',{},candidateOutcome(workspace,run).next),
+        demo ? null : el('button',{id:'continue-agent-'+run.id,type:'button',class:'button button-small',onclick:()=>openContinuation(run.id)},'Continue in your agent ↗')),
       grid,
       disclosure('review-context-'+task.id+'-'+run.id,'Task brief, candidate details and agent summary',
         hasPrerequisites ? null : taskHeader(task),
-        candidateNav(task,demo ? null : el('button',{id:'continue-agent-'+run.id,class:'button button-small',onclick:()=>openContinuation(run.id)},'Continue in your agent ↗')),
+        candidateNav(task),
         run.summary?el('p',{class:'review-agent-summary'},run.summary):null));
   }
   return reviewView;

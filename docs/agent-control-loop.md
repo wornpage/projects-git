@@ -5,7 +5,7 @@ chat directs the agents; none of the controls below launch a model.
 
 ## Continue a selected candidate
 
-In Agent work or Review, choose **Continue in your agent**. Inspect the context
+In Candidates or beside the next step in Review, choose **Continue in your agent**. Inspect the context
 before copying it into your conversation. It names the selected full commit,
 current requirement revision, reviewer note, and failed or stale checks. Private
 checkout locations, diffs, command output and provider responses are excluded.
@@ -13,8 +13,9 @@ Source strings are quoted as untrusted JSON. The local prompt supplies actual
 project/task IDs in the existing CLI read commands. Hosted prompts use the same
 CLI's [private connection mode](hosted-agent-client.md).
 
-Copying does not authorize a repair, check, new assignment, acceptance or merge.
-The agent must read current state and agree the next step with you. Changed
+Copying grants no new authority. The agent reads current state and continues
+work already authorized in the coding conversation, asking only when scope is
+unclear or the next action exceeds that authorization. Changed
 command-check requirements require a new approved definition; a stale definition
 is not presented as a usable recheck command. The retained candidate remains
 available when another isolated assignment is agreed.

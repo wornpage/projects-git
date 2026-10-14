@@ -2985,12 +2985,18 @@ worn-button {
   color: var(--worn-text-secondary);
 }
 .review-next {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
   margin: 0 0 16px;
   padding: 12px 14px;
   border-left: 3px solid var(--worn-selected-border);
   background: var(--worn-bg-secondary);
   font-size: 14px;
 }
+.review-next p { flex: 1 1 30ch; margin: 0; }
+.review-next .button { flex: 0 0 auto; max-width: 100%; white-space: normal; }
 .context-disclosure[id^="candidate-summary-"] {
   margin: 0 0 16px;
 }

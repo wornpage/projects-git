@@ -60,6 +60,33 @@ function ownerReviewFixture(){
   return f;
 }
 
+test('candidate continuation is reachable without expanding context and targets the selected run',async()=>{
+  const f=fixture();f.ports.openContinuation=runId=>f.calls.push(['continue',runId]);
+  const view=createReviewView(f.ports),page=view(),button=page.querySelector('#continue-agent-'+f.run.id);
+  assert.ok(button);assert.equal(button.disabled,false);
+  for(let parent=button.parentElement;parent;parent=parent.parentElement)assert.notEqual(parent.tagName,'DETAILS');
+  const details=page.querySelector('#review-context-'+f.task.id+'-'+f.run.id);
+  assert.equal(details.open,false);assert.equal(details.querySelector('#continue-agent-'+f.run.id),null);
+  const before=structuredClone(f.workspace);await button.dispatch('click');
+  assert.deepEqual(f.calls,[['continue',f.run.id]]);assert.deepEqual(f.workspace,before);
+  f.context.demo=true;assert.equal(view().querySelector('#continue-agent-'+f.run.id),null);
+});
+
+test('closed tasks retain candidates and pending recovery without offering another assignment',async()=>{
+  const f=fixture();let pending=false;
+  f.ports.repositoryAgents=()=>el('div',{},'Assignment or recovery controls');
+  f.ports.hasPendingAssignment=()=>pending;
+  f.ports.openInspector=(title)=>f.calls.push(['inspector',title]);
+  const view=createWorkView(f.ports),button=page=>page.querySelector('#prepare-candidate-'+f.task.id);
+  assert.equal(button(view()).textContent,'Prepare another candidate');
+  f.task.acceptedRunId=f.run.id;assert.equal(button(view()),null);
+  f.task.mergedCommit=f.run.headCommit;f.run.status='merged';
+  const page=view();assert.equal(button(page),null);
+  assert.ok(page.textContent.includes(f.run.label));assert.ok(page.textContent.includes('Inspect candidate'));
+  pending=true;const recovery=button(view());assert.equal(recovery.textContent,'Resolve pending assignment');
+  await recovery.dispatch('click');assert.deepEqual(f.calls,[['inspector','Resolve pending assignment']]);
+});
+
 test('task handoff is reachable before any candidates exist and retains capability gating',async()=>{
   const f=fixture();f.workspace.runs=[];f.workspace.capabilities.handoff=true;
   f.ports.downloadHandoff=task=>f.calls.push(['handoff',task.id]);
@@ -380,15 +407,14 @@ test('shared candidate navigation uses the current view and selection when activ
   assert.deepEqual(f.calls,[['work',f.task.id,null]]);
 });
 
-test('one task change preserves its identity and continuation without a redundant selection button',async()=>{
-  const f=fixture();let continued=0;
-  const action=el('button',{onclick:()=>continued++},'Continue in your agent');
-  const nav=f.ports.parts.candidateNav(f.task,action);
+test('one task change preserves its identity and return to the candidate collection',async()=>{
+  const f=fixture();
+  const nav=f.ports.parts.candidateNav(f.task);
   assert.equal(nav.attrs['aria-label'],'Selected candidate');
   assert.match(nav.textContent,/CANDIDATE 1 OF 1/);
   assert.match(nav.textContent,/Selected candidate/);
-  assert.equal(nav.querySelector('button'),action);
-  await action.dispatch('click');assert.equal(continued,1);assert.equal(f.calls.length,0);
+  const back=nav.querySelector('button');assert.match(back.textContent,/Back to all 1 candidates/);
+  await back.dispatch('click');assert.deepEqual(f.calls,[['work',f.task.id,null]]);
 });
 
 test('zero and single-result work stays task-first while retained failures remain in multiple-result totals',async()=>{

@@ -82,8 +82,13 @@ flowchart LR
     Task[Queue task and requirements] --> Claim[Claim isolated work]
     Claim --> Commit[Submit candidate commit]
     Commit --> Verify[Independent verification]
-    Verify --> Accept[Human acceptance]
-    Accept --> Merge[Explicit integration]
+    Verify --> Review[Independent review in hosted mode]
+    Review --> Mode{Integration mode}
+    Mode --> Policy[Owner-enabled automatic policy]
+    Mode --> Accept[Manual owner acceptance]
+    Policy --> Merge[Guarded integration]
+    Accept --> Merge
+    Merge --> Task
 ```
 
 | Step | Where to follow it | Boundary to notice |
@@ -92,6 +97,7 @@ flowchart LR
 | Claim | `scripts/repository-work.mjs`; claim handlers in `src/local/server.mjs` and `src/cloudflare/controller.ts`; `assignRun` in `src/core/workflow.mjs` | Admission, capacity and integrated prerequisites gate isolated code access |
 | Commit | Submit handlers in those controllers; `completeRun` in `src/core/workflow.mjs` | Code is retained at a specific Git commit; submission is not verification |
 | Verify | `verificationSetup` / `revisionEvidence` in `public/ui/views/review.js`; `src/local/repository-checks.mjs` or hosted check handling; `verifyRun` in `src/core/workflow.mjs` | Evidence binds to the candidate head and requirement revision |
+| Policy | [Automatic integration](automatic-merge.md); `automaticApprovalEligible` / `approveRunByPolicy` in `src/core/workflow.mjs` and `src/cloudflare/controller.ts` | Off by default; an enabled owner policy handles eligible candidates after current checks and independent review. Alternatives and exceptions require an owner decision. Local attribution remains manual |
 | Accept | `submitReview` in `public/ui/review-form.js`; `reviewRun` in `src/core/workflow.mjs` | The backend checks current evidence, ownership, requirements and compared heads again |
 | Merge | `submitMerge` in the same UI module; provider merge handling in the controllers; `mergeRun` in `src/core/workflow.mjs` | Acceptance and integration are separate guarded operations |
 

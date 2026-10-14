@@ -50,8 +50,10 @@ export function createProjectsView({getContext, disclosure, getProjectSelection,
             el('li',{},workspace.provider==='cloudflare-artifacts' ? 'Choose an Artifacts repository in New project, then confirm the loaded default branch and base commit.' : 'Enter your local repository path, read its current commit, and confirm the code to use.'),
             el('li',{},'Write the task purpose and acceptance requirements.'),
             el('li',{},'Open Project settings → Connect agent for the assignment instructions. Your coding chat runs the agent.'),
-            el('li',{},'Inspect the submitted change and configure independent checks. In the hosted app, assign a separate reviewer before making your decision.'),
-            el('li',{},'Accept a suitable candidate, then merge it as a separate action. Merging does not deploy.')))),
+            el('li',{},'Configure independent checks for submitted changes. In the hosted app, assign an independent reviewer.'),
+            el('li',{},workspace.provider==='cloudflare-artifacts'
+              ? 'Choose integration policy in Project settings. Optional automatic integration handles eligible candidates after current checks and independent review; alternatives and exceptions need an owner decision. Manual acceptance and merge remain available. Merging does not deploy.'
+              : 'Accept a suitable candidate, then request its guarded merge. The hosted app also supports optional automatic integration. Merging does not deploy.')))),
       pagination(),
       projects.length ? el('div',{},
         !page?el('p',{class:'definition-note'},projects.length+' project'+(projects.length===1?'':'s')+' total'):null,

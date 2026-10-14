@@ -27,9 +27,10 @@
         <li><span class="lifecycle-number" aria-hidden="true">1</span><h3>Agent work</h3><p>Separate candidates start from the same project code.</p></li>
         <li><span class="lifecycle-number" aria-hidden="true">2</span><h3>Checks</h3><p>Observed results belong to one commit and requirements revision.</p></li>
         <li><span class="lifecycle-number" aria-hidden="true">3</span><h3>Independent review</h3><p>A separate reviewer assesses the change and its evidence.</p></li>
-        <li><span class="lifecycle-number" aria-hidden="true">4</span><h3>Owner decision</h3><p>The owner chooses what meets the agreed requirements.</p></li>
-        <li><span class="lifecycle-number" aria-hidden="true">5</span><h3>Merge</h3><p>Guarded integration follows acceptance. Earlier attempts stay visible.</p></li>
+        <li><span class="lifecycle-number" aria-hidden="true">4</span><h3>Integration policy</h3><p>The owner can enable automatic integration for eligible changes or decide manually.</p></li>
+        <li><span class="lifecycle-number" aria-hidden="true">5</span><h3>Keep working</h3><p>Guarded merge advances the project. Agents continue with eligible queued work; earlier attempts stay visible.</p></li>
       </ol>
+      <p>In a working hosted workspace, automatic integration waits for current checks and independent review. Alternatives and exceptions need an owner decision. The fictional example below shows the manual path.</p>
     </section>
     <section class="welcome-project panel" aria-labelledby="example-title">
       <div class="panel-body"><p class="section-kicker">ONE PROJECT · TWO TASKS</p><h2 id="example-title">Checkout service</h2>
@@ -40,7 +41,7 @@
     </section>
     <section class="panel welcome-working" aria-labelledby="working-title"><div class="panel-body">
       <h2 id="working-title">Use a real workspace</h2><p>A working workspace uses Cloudflare Access for its owner, assigned agents and independent reviewers. Configure your own workspace and identity policy; this example grants no workspace access.</p>
-      <details><summary>What an owner does next</summary><ol class="journey-steps"><li>Connect committed project code and queue a useful task with written requirements.</li><li>Give the assigned agent the project's instructions in your coding conversation.</li><li>Inspect the submitted change, run independent checks and assign a separate reviewer.</li><li>Record your decision, then merge the accepted commit separately.</li></ol></details>
+      <details><summary>What an owner does next</summary><ol class="journey-steps"><li>Connect committed project code and queue useful tasks with written requirements.</li><li>Give the assigned agent the project's instructions in your coding conversation.</li><li>Configure independent checks and assign a separate reviewer.</li><li>In Project settings, optionally enable automatic integration for eligible candidates. Otherwise accept and merge manually. Resolve alternatives and exceptions while agents continue other eligible work.</li></ol></details>
       <p class="small muted"><a href="https://github.com/wornpage/projects-git-challenge">MIT source and run instructions</a></p>
     </div></section>
   </main>

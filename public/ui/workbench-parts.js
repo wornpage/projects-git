@@ -90,11 +90,11 @@ export function createWorkbenchParts({
     return el("div", { class: "commit-text" }, el("span", { class: "commit-short", title: commit }, shortSha(commit)), el("button", { class: "copy-button", title: "Copy full commit", "aria-label": `Copy commit ${shortSha(commit)}`, onclick: async () => { try { await navigator.clipboard.writeText(commit); announce("Full commit copied."); } catch { showError("Clipboard is unavailable. The full commit is shown in the evidence view."); } } }, "⧉"));
   }
 
-  function candidateNav(task, action = null) {
+  function candidateNav(task) {
     const run = currentRun(), candidates=taskRuns(task.id);
     if (!run) return null;
     return el('section',{class:'candidate-surface','aria-label':'Selected candidate'},
-      el('div',{class:'candidate-surface-header'},el('span',{class:'section-kicker'},'CANDIDATE '+(candidates.findIndex(item=>item.id===run.id)+1)+' OF '+candidates.length+' · THIS TASK'),action),
+      el('div',{class:'candidate-surface-header'},el('span',{class:'section-kicker'},'CANDIDATE '+(candidates.findIndex(item=>item.id===run.id)+1)+' OF '+candidates.length+' · THIS TASK')),
       el('div',{class:'candidate-identity'},el('strong',{},run.label),runStatus(run)),
       el('button',{class:'text-link',onclick:()=>switchView('work',task.id,null)},'Back to all '+candidates.length+' candidates'));
   }

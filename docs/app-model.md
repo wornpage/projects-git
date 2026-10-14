@@ -1,14 +1,18 @@
 # How Projects Git works
 
-Updated October 11, 2026 (America/New_York). This describes the local project workflow.
-Live Cloudflare qualification remains separate.
+Updated October 14, 2026 (America/New_York). This describes the local and hosted
+project workflow. Live Cloudflare qualification remains separate.
 
 ## One project, a queue of work
 
 A project owns code and its task queue. A task describes one outcome, owner and
 requirements. Agents claim tasks and produce candidates. Independent checks,
-acceptance and merge are distinct transitions. Multiple candidates can be
-alternatives for one task; different tasks share project main.
+acceptance and merge are distinct transitions. The hosted owner can enable
+[automatic integration](automatic-merge.md) for eligible candidates after current
+checks and independent review. It removes per-candidate manual approval for that
+path; alternatives and exceptions still need an owner decision. The local app
+uses manual acceptance and merge. Multiple candidates can be alternatives for
+one task; different tasks share project main.
 
 ```mermaid
 flowchart LR
@@ -16,8 +20,12 @@ flowchart LR
   Queue --> Claim[Agent claims task]
   Claim --> Candidate[Isolated changes and commit]
   Candidate --> Checks[Independent checks]
-  Checks --> Review[Human review]
-  Review --> Merge[Explicit merge to project main]
+  Checks --> Review[Independent review in hosted mode]
+  Review --> Policy{Integration mode}
+  Policy --> Auto[Owner-enabled automatic policy]
+  Policy --> Manual[Owner decision]
+  Auto --> Merge[Guarded merge to project main]
+  Manual --> Merge
   Merge --> Queue
   Candidate --> Update[Base update or conflict resolution]
   Update --> Checks
@@ -38,8 +46,10 @@ requirements, report progress and return links to review.
 The conversation's host controls agent execution. Queueing work does not start a
 model, and disabling admission does not interrupt an already-running agent. The
 workspace retains requirements, isolated candidates, checks and decisions; it
-does not duplicate the chat transcript. Acceptance and merge remain distinct UI
-actions. See the [agent workflow](agent-workflow.md) for the complete local loop.
+does not duplicate the chat transcript. The owner sets the integration policy;
+agents can continue eligible work while another task waits on a decision.
+Acceptance and merge keep separate records in both modes. See the
+[agent workflow](agent-workflow.md) for the complete local loop.
 
 The CLI connects to the local loopback controller with `--url`, or to the hosted
 app with a [private Access connection file](hosted-agent-client.md). Hosted mode
@@ -55,8 +65,8 @@ and model execution.
 | Projects | Browse the project directory; use Find work for project names outside the loaded page. |
 | Task queue | Filter, sort and page all tasks in the selected project with complete totals. |
 | Task details | Read the task brief, current requirements, revisions, prerequisites and next action; export its full handoff. |
-| Candidates | Browse the task's results and progress; prepare alternatives and obtain agent handoffs. |
-| Candidate | Inspect changes and checks, update an outdated base, compare alternatives, record a decision and merge separately. |
+| Candidates | Browse the task's results and progress; prepare alternatives for open work and obtain agent handoffs. Completed results and pending-request recovery remain available. |
+| Candidate | Inspect changes, checks and the next step; continue in your agent, update an outdated base, compare alternatives and follow the policy or manual decision. |
 | Project history | Browse retained candidates and activity across the selected project. |
 | Candidate record | Read one candidate's reports and decisions; task and whole-workspace exports remain explicit. |
 
