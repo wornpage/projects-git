@@ -6,7 +6,7 @@ import type { ExecutionLimits, ExecutionReceipt, ModelProvider } from '../core/a
 import type { ArtifactGit } from './git-transport.mjs';
 import { buildTaskHandoff } from '../core/handoff.mjs';
 import { buildProjectArchive, readProjectArchive } from '../core/project-archive.mjs';
-import { ApiError, commitId, digest, text } from "./security.ts";
+import { ApiError, commitId, digest, text, validateIdempotencyKey } from "./security.ts";
 import { exactCommit, inspectResult, safeRemote, branchHead, readArtifactSnapshot } from "./artifacts.ts";
 import type { ArtifactSnapshot } from './artifacts.ts';
 import { Buffer } from 'node:buffer';
@@ -45,11 +45,12 @@ interface Operation {
   report?: Evidence;
   idleResult?: { idle: boolean; reason: string; waitingTaskIds: string[] };
   fingerprint: string;
-  kind: "task" | "assign" | "claim" | "model" | "merge" | "checks" | "base-update" | "model-check" | "review-inference" | "restore";
+  kind: "task" | "assign" | "claim" | "model" | "merge" | "checks" | "base-update" | "model-check" | "review-inference" | "restore" | "repository-create";
   reservesExecution?: boolean;
   state: "pending" | "complete" | "failed";
   itemId?: string;
   resourceName?: string;
+  repositoryId?: string;
   marker?: string;
   attemptId?: string;
   executorAttemptId?: string;
@@ -246,6 +247,133 @@ export class HostedController {
     return {workspaceId:this.store.identity().id,...result};
   }
 
+  async createRepository(input: Record<string, unknown>, requestKey: string) {
+    this.requireOwner();
+    validateIdempotencyKey(requestKey);
+    if (this.authority.principal.kind !== 'owner') throw new ApiError(403, 'OWNER_REQUIRED', 'Only the authenticated owner can create a repository.');
+    if (!this.runtime?.git) throw new ApiError(503, 'REPOSITORY_CREATE_UNAVAILABLE', 'Repository creation is unavailable in this workspace.');
+    if (Object.keys(input).some(key => !['name', 'description'].includes(key)))
+      throw new ApiError(400, 'INVALID_REPOSITORY_CREATION', 'Supply a repository name and optional description only.');
+    const name = repositoryName(input.name), description = input.description === undefined || input.description === '' ? '' : text(input.description, 'Description', 500);
+    const key = await this.operationKey(requestKey), fingerprint = await digest(JSON.stringify({name, description}));
+    this.requireOwner();
+    let snapshot = this.store.read();
+    const prior = this.checkOperation(snapshot.operations[key], fingerprint, 'repository-create');
+    const result = async (operation: Operation, replayed: boolean) => {
+      await this.ensureProjectSubscription(operation.projectId!);
+      this.requireOwner();
+      return {workspaceId: this.store.identity().id, projectId: operation.projectId!, name,
+        defaultBranch: 'main', baseCommit: operation.pendingCommit!, replayed};
+    };
+    if (prior?.state === 'complete') return result(prior, true);
+    if (prior?.state === 'failed') throw new ApiError(409, 'REPOSITORY_NAME_TAKEN', 'This name belongs to an existing repository. Choose another name or connect the existing repository.');
+    if (prior && (prior.leaseUntil ?? 0) > Date.now()) throw new ApiError(409, 'OPERATION_IN_PROGRESS', 'Repository creation is still in progress. Retry this same request shortly.');
+    if (Object.values(snapshot.workspace.projects ?? {}).some(project => project.repositoryName === name))
+      throw new ApiError(409, 'REPOSITORY_NAME_TAKEN', 'This repository already has a project. Open that project or choose another name.');
+    if (Object.entries(snapshot.operations).some(([otherKey, op]) => otherKey !== key && op.kind === 'repository-create' && op.resourceName === name && op.state === 'pending'))
+      throw new ApiError(409, 'REPOSITORY_NAME_RESERVED', 'Another saved creation request owns this name. Resume that request or choose another name.');
+    const attemptId = crypto.randomUUID();
+    // Artifacts has no custom metadata field. The description binds uncertain
+    // creation responses to this durable operation, never to a name alone.
+    const marker = prior?.marker ?? `Projects Git creation: ${snapshot.workspace.id}:${key}${description ? '\n\n' + description : ''}`;
+    snapshot.operations[key] = {...prior, kind: 'repository-create', state: 'pending', fingerprint, resourceName: name, marker,
+      projectId: prior?.projectId ?? crypto.randomUUID(), timestamp: prior?.timestamp ?? Math.floor(Date.now() / 1000),
+      attemptId, leaseUntil: Date.now() + 60_000};
+    this.save(snapshot);
+    const current = () => {this.requireOwner(); return this.assertLease(key, attemptId);};
+    const ownsAttempt = () => {
+      const retained = this.store.read(), operation = retained.operations[key];
+      if (operation?.state !== 'pending' || operation.attemptId !== attemptId)
+        throw new ApiError(409, 'STALE_OPERATION', 'A newer retry owns repository creation.');
+      return retained;
+    };
+    try {
+      let handle: ArtifactsRepo | undefined;
+      try {handle = await this.artifacts.get(name);}
+      catch (error) {if (!(error && typeof error === 'object' && 'code' in error && error.code === 'NOT_FOUND')) throw error;}
+      if (!handle) {
+        current();
+        // Never persist or return the initial plaintext token. Owned-repo token
+        // enumeration also recovers it if create() succeeded but its reply was lost.
+        await this.artifacts.create(name, {description: marker, readOnly: false, setDefaultBranch: 'main'});
+        handle = await this.artifacts.get(name);
+      }
+      using repo = handle;
+      const info = await repo.info();
+      snapshot = ownsAttempt();
+      if (info.name !== name || info.description !== marker)
+        throw new ApiError(409, snapshot.operations[key].repositoryId ? 'REPOSITORY_OWNERSHIP_CHANGED' : 'REPOSITORY_NAME_TAKEN', 'This name belongs to a different repository. Existing code is preserved.');
+      if (snapshot.operations[key].repositoryId && snapshot.operations[key].repositoryId !== info.id)
+        throw new ApiError(409, 'REPOSITORY_ID_CHANGED', 'The reserved repository was replaced. Creation is retained for operator review.');
+      // Cleanup is authorized by the retained operation, even if the caller's
+      // session expired during create(). A displaced attempt cannot revoke tokens.
+      await this.revokeRunTokens(repo, ownsAttempt);
+      snapshot = current();
+      snapshot.operations[key].repositoryId = info.id;
+      this.save(snapshot);
+      if (info.defaultBranch !== 'main' || info.readOnly)
+        throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The new repository settings changed. Creation is retained for operator review.');
+      const remote = safeRemote(info.remote);
+      let history: ArtifactsCommitMetadata[];
+      try {history = await repo.log({ref: 'main', limit: 1});}
+      catch (error) {if (!(error && typeof error === 'object' && 'code' in error && error.code === 'NOT_FOUND')) throw error; history = [];}
+      snapshot = current();
+      const expected = snapshot.operations[key].pendingCommit;
+      if (history.length && (!expected || history[0]?.hash !== expected))
+        throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The repository contains a different commit. No code was replaced; creation is retained for operator review.');
+      if (!history.length) {
+        const credential = await repo.createToken('write', 180);
+        try {
+          snapshot = current();
+          const head = await this.runtime.git.seedRepository({remote, token: credential.plaintext, name, description,
+            timestamp: snapshot.operations[key].timestamp!, beforePush: async (head: string) => {
+              const fresh = current(), operation = fresh.operations[key];
+              commitId(head);
+              if (operation.pendingCommit && operation.pendingCommit !== head) throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The saved initial commit changed. No code was replaced.');
+              operation.pendingCommit = head;
+              this.save(fresh);
+            }});
+          if (this.store.operation(key)?.pendingCommit !== head) throw new ApiError(502, 'INVALID_REPOSITORY_SEED', 'The initial commit was not confirmed. Retry the same creation request.');
+        } finally {await repo.revokeToken(credential.id);}
+      }
+      snapshot = current();
+      const head = snapshot.operations[key].pendingCommit!;
+      await exactCommit(repo, head);
+      await branchHead(repo, 'main', head);
+      // Do not attach code until all credentials from creation, including any
+      // uncertain token issuance, have been confirmed inactive.
+      await this.revokeRunTokens(repo, ownsAttempt);
+      const remaining = await repo.listTokens();
+      if (remaining.total !== remaining.tokens.length || remaining.tokens.some(token => token.state === 'active'))
+        throw new ApiError(502, 'REPOSITORY_CREDENTIAL_CLEANUP', 'Repository creation needs credential cleanup. Retry the same request.');
+      snapshot = current();
+      if (Object.values(snapshot.workspace.projects ?? {}).some(project => project.repositoryName === name))
+        throw new ApiError(409, 'REPOSITORY_CONNECTION_CHANGED', 'Another operation connected this repository. Creation is retained for operator review.');
+      const operation = snapshot.operations[key], projectId = operation.projectId!;
+      snapshot.workspace.projects![projectId] = {id: projectId, name, repositoryName: name, mainCommit: head,
+        defaultBranch: 'main', kind: 'artifacts', acceptingWork: true, policyVersion: 1, owner: this.authority.principal.displayName, codeConnected: true};
+      operation.state = 'complete'; operation.leaseUntil = 0; delete operation.errorCode;
+      snapshot.workspace.version++;
+      snapshot.workspace.events.push({id: crypto.randomUUID(), at: new Date().toISOString(), type: 'project.repository-created', projectId, taskId: null, runId: null,
+        message: `${name}: private repository created with an initial README commit and connected to this project.`});
+      this.save(snapshot);
+      return await result(operation, Boolean(prior));
+    } catch (error) {
+      const failed = this.store.read(), operation = failed.operations[key];
+      if (operation?.state === 'pending' && operation.attemptId === attemptId) {
+        // A revoked caller may clean its own issued credentials but cannot save
+        // workflow changes. The retained lease expires for a fresh owner retry.
+        try {this.requireOwner();} catch {throw error;}
+        operation.leaseUntil = 0;
+        operation.errorCode = error instanceof ApiError ? error.code : 'REPOSITORY_CREATION_INTERRUPTED';
+        if (operation.errorCode === 'REPOSITORY_NAME_TAKEN') operation.state = 'failed';
+        this.save(failed);
+      }
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(502, 'REPOSITORY_CREATION_INTERRUPTED', 'Repository creation was not confirmed. Retry the same request to resume it; the repository and any partial result are retained.');
+    }
+  }
+
   private async refreshAutomaticAuthority(): Promise<void> {
     if (!this.runtime?.currentPolicy) throw new ApiError(503, 'CURRENT_POLICY_UNAVAILABLE', 'Automatic integration requires current private authority.');
     // Replace only this operation's policy, never a shared or durable last-request
@@ -332,7 +460,7 @@ export class HostedController {
         occupied: executionOccupancy(snapshot),
         queued: state.runs.filter(run => run.status === 'assigned' && run.agent === 'model').length,
         verification: { limit: 2, occupied: verificationOccupancy(snapshot), waiting: Object.values(snapshot.jobs ?? {}).filter(job => job.status === 'running' && job.phase === 'waiting-check').length } },
-      capabilities: { repository: canManage, repositoryCatalog: canManage, demo: false, model: canManage && Boolean(this.runtime?.provider && this.runtime.repository), merge: canManage && Boolean(this.runtime), verify: canManage && Boolean(this.runtime), repositoryChecks: canManage && Boolean(this.runtime?.repositoryChecks), baseUpdate: canManage && Boolean(this.runtime), revise: canManage, handoff: true, coordination: true, dependencies: true, providerVerified: false },
+      capabilities: { repository: canManage, repositoryCatalog: canManage, repositoryCreate: canManage && Boolean(this.runtime?.git), demo: false, model: canManage && Boolean(this.runtime?.provider && this.runtime.repository), merge: canManage && Boolean(this.runtime), verify: canManage && Boolean(this.runtime), repositoryChecks: canManage && Boolean(this.runtime?.repositoryChecks), baseUpdate: canManage && Boolean(this.runtime), revise: canManage, handoff: true, coordination: true, dependencies: true, providerVerified: false },
       mergeStateByRun,
       reviewInferences: canManage ? Object.values(snapshot.operations).filter(op=>op.kind==='review-inference').map(op=>({
         runId:op.itemId,attemptId:op.attemptId,reviewerId:op.reviewerId,model:op.model,contextId:op.contextId,
@@ -405,6 +533,7 @@ export class HostedController {
     let snapshot = this.store.read();
     const prior = this.checkOperation(snapshot.operations[key], fingerprint, 'restore');
     if (prior?.state === 'complete') {await this.ensureProjectSubscription(prior.projectId!);return {projectId: prior.projectId!, replayed: true, workspace: this.workspace()};}
+    this.requireRepositoryReady(snapshot, repoName);
     if (Object.values(snapshot.workspace.projects ?? {}).some(project => project.repositoryName === repoName))
       throw new ApiError(409, 'PROJECT_EXISTS', 'Restore into an unconnected repository. Existing projects are preserved.');
     using repo = await this.artifacts.get(repoName);
@@ -417,6 +546,7 @@ export class HostedController {
     snapshot = this.store.read();
     const concurrent = this.checkOperation(snapshot.operations[key], fingerprint, 'restore');
     if (concurrent?.state === 'complete') {await this.ensureProjectSubscription(concurrent.projectId!);return {projectId: concurrent.projectId!, replayed: true, workspace: this.workspace()};}
+    this.requireRepositoryReady(snapshot, repoName);
     if (Object.values(snapshot.workspace.projects ?? {}).some(project => project.repositoryName === repoName))
       throw new ApiError(409, 'PROJECT_EXISTS', 'Another operation connected this repository. Existing projects are preserved.');
     const projectId = crypto.randomUUID(), at = new Date().toISOString();
@@ -438,6 +568,11 @@ export class HostedController {
   private checkOperation(operation: Operation | undefined, fingerprint: string, kind: Operation["kind"]): Operation | undefined {
     if (operation && (operation.fingerprint !== fingerprint || operation.kind !== kind)) throw new ApiError(409, "IDEMPOTENCY_CONFLICT", "This idempotency key was already used with different input.");
     return operation;
+  }
+
+  private requireRepositoryReady(snapshot: HostedSnapshot, name: string): void {
+    if (Object.values(snapshot.operations).some(op => op.kind === 'repository-create' && op.resourceName === name && op.state === 'pending'))
+      throw new ApiError(409, 'REPOSITORY_CREATION_PENDING', 'Finish the saved repository creation request before connecting this code.');
   }
 
   private taskResult(operation: Operation, replayed: boolean) {
@@ -479,6 +614,7 @@ export class HostedController {
     let snapshot = this.store.read();
     let project: Project;
     if (repository) {
+      this.requireRepositoryReady(snapshot, repository);
       if (Object.values(snapshot.workspace.projects!).some(item => item.repositoryName === repository)) throw new ApiError(409, 'PROJECT_EXISTS', 'This repository already belongs to a project. Select that project to queue tasks.');
       project = { id: crypto.randomUUID(), name: name!, repositoryName: repository, mainCommit: baseCommit!, kind: 'artifacts', acceptingWork: true, policyVersion: 1, owner: briefs[0].owner };
       core(() => queueProjectTasks(structuredClone(snapshot.workspace), project, briefs));
@@ -497,6 +633,7 @@ export class HostedController {
     if (snapshot.operations[key]?.cancelled) throw new ApiError(410, 'REQUEST_CANCELLED', 'This task request was released. No tasks were saved.');
     const concurrent = this.checkOperation(snapshot.operations[key], fingerprint, "task");
     if (concurrent?.state === "complete") {await this.ensureProjectSubscription(concurrent.projectId!);return this.taskResult(concurrent, true);}
+    if (repository) this.requireRepositoryReady(snapshot, repository);
     if (repository && Object.values(snapshot.workspace.projects!).some(item => item.repositoryName === repository)) throw new ApiError(409, 'PROJECT_EXISTS', 'Another request connected this code. Select its project to queue tasks.');
     project = repository ? project : snapshot.workspace.projects![projectId!];
     const tasks = core(() => queueProjectTasks(snapshot.workspace, project, briefs));

@@ -6,7 +6,7 @@ const unloadedProject = (workspace, id) => partial(workspace) && uuid.test(id) &
 
 function validComposer(value, workspace) {
   const source = value?.source;
-  return (['repository', 'sample'].includes(source) || typeof source === 'string' && source.startsWith('project:')
+  return (['repository', 'new-repository', 'sample'].includes(source) || typeof source === 'string' && source.startsWith('project:')
     && (Object.hasOwn(workspace.projects ?? {}, source.slice(8)) || unloadedProject(workspace, source.slice(8))))
     && Array.isArray(value.tasks) && value.tasks.length > 0 && value.tasks.length <= 8
     && value.tasks.every(task => task && ['title','purpose','criteria','owner'].every(key => text(task[key], 6000))

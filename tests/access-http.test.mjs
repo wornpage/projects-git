@@ -47,6 +47,24 @@ test('repository discovery is owner-only before the Durable Object is reached',a
   assert.equal(f.calls[1].call.principal.kind,'owner');assert.equal(f.calls[1].call.search,'?name=starter');
 });
 
+test('repository creation requires an owner and preserves distinct creation keys through the Worker boundary',async()=>{
+  const f=fixture(),owner=await jwt();f.env.ACCESS_REVIEWER_CLIENT_IDS=JSON.stringify([REVIEWER_CLIENT]);
+  for(const token of [undefined,await jwt('agent'),await jwt('agent',{common_name:REVIEWER_CLIENT})])
+    assert.ok([401,403].includes((await handler(await request('/api/repositories',token,{name:'private-repo'}),f.env)).status));
+  for(const key of [null,'','short','invalid key','x'.repeat(129)]) {
+    const req=await request('/api/repositories',owner,{name:'private-repo'});
+    if(key===null)req.headers.delete('Idempotency-Key');else req.headers.set('Idempotency-Key',key);
+    const response=await handler(req,f.env);assert.equal(response.status,400);assert.equal((await response.json()).code,'IDEMPOTENCY_REQUIRED');
+  }
+  assert.deepEqual(f.calls,[]);
+  for(const [name,key] of [['first-private-repo','create-first-private'],['second-private-repo','create-second-private']])
+    assert.equal((await handler(await request('/api/repositories',owner,{name},{'Idempotency-Key':key}),f.env)).status,200);
+  assert.deepEqual(f.calls.filter(entry=>entry.call).map(({call})=>[call.path,call.body.name,call.key,call.principal.kind]),[
+    ['/api/repositories','first-private-repo','create-first-private','owner'],
+    ['/api/repositories','second-private-repo','create-second-private','owner'],
+  ]);
+});
+
 test('Worker binds the verified principal, excludes body impersonation, and protects static assets',async()=>{
   const f=fixture(),token=await jwt();
   assert.equal((await handler(await request('/api/workspace',token),f.env)).status,200);

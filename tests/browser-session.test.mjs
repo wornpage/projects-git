@@ -12,6 +12,16 @@ function fixture() {
 const workspace = {id:'one', projects:{project: {id:'project'}}, tasks:[{id:'task',projectId:'project'}],runs:[]};
 const composer = {source:'project:project', name:'', repo:'', base:'', tasks:[{title:'Saved', purpose:'Purpose', criteria:'One\nTwo', owner:'Owner'}], pending:null};
 
+test('repository creation input and retry identity survive reload only for their workspace owner',()=>{
+  const f=fixture(),state={...workspace,authentication:{principal:{issuer:'fixture',kind:'owner',id:'owner-a'}}};
+  const repositoryStart={key:crypto.randomUUID(),body:{name:'customer-portal',description:'Saved description'}};
+  const saved={...composer,source:'new-repository',repositoryStart,repositoryDraft:repositoryStart.body};
+  f.session.enter(state);f.session.save(saved);
+  assert.equal(f.session.enter({...state,authentication:{principal:{...state.authentication.principal,id:'owner-b'}}}).composer,null);
+  assert.deepEqual(f.session.enter(state).composer.repositoryStart,repositoryStart);
+  assert.equal(f.session.enter({...state,id:'other-workspace'}).composer,null);
+});
+
 test('partial project pages retain same-workspace drafts, pending assignments and navigation hints',()=>{
   const f=fixture(),a=crypto.randomUUID(),b=crypto.randomUUID(),taskId=crypto.randomUUID(),runId=crypto.randomUUID(),requestId=crypto.randomUUID();
   const first={id:'paged',projects:{[a]:{id:a}},tasks:[{id:taskId,projectId:a}],runs:[{id:runId,taskId}],page:{scope:'loaded-projects',totalProjects:2}};

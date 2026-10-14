@@ -58,6 +58,11 @@ Open the printed address and choose **New project**. Git is required; independen
 checks on ordinary code also require Docker and a selected immutable image.
 See [setup and troubleshooting](docs/setup.md).
 
+In a hosted workspace, **New project → Create repository** creates a private
+Artifacts repository with an initial README commit, then opens its first-task
+form. **Connect code** remains available for existing repositories. See
+[hosted project setup](docs/hosted-project-setup.md) for input and recovery details.
+
 ## Connect your coding agent
 
 Choose **Project settings → Connect agent → Copy agent instructions** and give

@@ -16,7 +16,7 @@ function fixture(saved = null) {
   const refresh=async()=>{if(context.refresh)await context.refresh();};
   const update=()=>controller.update();
   controller=createTaskCreation({getContext:()=>context, currentProject:()=>context.workspace.projects[context.projectId],
-    selectProject:id=>{context.projectId=id;}, selectTask:id=>selected.push(id), switchView:view=>{context.view=view;},
+    selectProject:id=>{context.projectId=id;$('#task-launcher').close();}, selectTask:id=>selected.push(id), switchView:view=>{context.view=view;},
     api:(path,body,key)=>{const request=deferred();calls.push({path,body:structuredClone(body),key,...request});return request.promise;},
     refresh, render:update, updateChrome:update, schedulePoll(){}, saveSession:()=>savedSnapshots.push(controller.snapshot()),
     clearError(){}, showError:message=>errors.push(message), announce:message=>announcements.push(message)});
@@ -30,6 +30,64 @@ function fixture(saved = null) {
     submit:()=>$('#task-form').dispatch('submit'), release:()=>$('#release-task-request').dispatch('click')};
 }
 const result=(projectId='one')=>{const taskId=crypto.randomUUID();return {projectId,taskId,taskIds:[taskId]};};
+
+function repositoryFixture(saved=null) {
+  const f=fixture();f.context.workspace.provider='cloudflare-artifacts';f.context.workspace.capabilities.repositoryCreate=true;
+  f.controller.restore(saved);f.controller.update();f.$('#task-launcher').showModal();f.controller.activate('new-repository');f.controller.update();
+  if(!saved){f.$('#repository-create-name').value='customer-portal';f.$('#repository-create-description').value='A useful project';}
+  f.createRepository=()=>f.$('#create-repository').dispatch('click');
+  return f;
+}
+function repositoryResult(f) {
+  const projectId=crypto.randomUUID();f.context.workspace.projects[projectId]={id:projectId,name:'customer-portal',owner:'Owner',codeConnected:true};
+  return {workspaceId:f.context.workspace.id,projectId,name:'customer-portal',defaultBranch:'main',baseCommit:'a'.repeat(40)};
+}
+
+test('create repository is a separate hosted choice and success opens its first-task composer',async()=>{
+  const f=repositoryFixture();
+  assert.equal(f.$('#repository-create-fields').hidden,false);assert.equal(f.$('#task-details-step').hidden,true);
+  assert.equal(f.$('#repository-source-fields').hidden,true);assert.ok(f.$('#task-source').options.some(option=>option.value==='repository'));
+  const pending=f.createRepository();assert.equal(f.calls[0].path,'/api/repositories');
+  assert.deepEqual(f.calls[0].body,{name:'customer-portal',description:'A useful project'});assert.equal(f.controller.locked,true);
+  const created=repositoryResult(f);f.calls[0].resolve(created);await pending;
+  assert.equal(f.context.projectId,created.projectId);assert.equal(f.$('#task-source').value,'project:'+created.projectId);
+  assert.equal(f.$('#task-details-step').hidden,false);assert.equal(f.$('#task-launcher').open,true);assert.equal(f.controller.locked,false);
+  assert.match(f.$('#task-source-note').textContent,/Private repository created and connected/);
+  assert.equal(f.calls.length,1,'Creating a repository does not queue tasks or start agents');assert.match(f.announcements.at(-1),/Private repository created/);
+});
+
+for(const failure of [{uncertain:true},{status:503},{status:401},{status:409,code:'OPERATION_IN_PROGRESS'}])
+  test(`repository request survives ${JSON.stringify(failure)} and reload with its exact input`,async()=>{
+    const f=repositoryFixture(),pending=f.createRepository(),original=f.calls[0];original.reject(Object.assign(Error('Creation not confirmed'),failure));await pending;
+    const saved=f.controller.snapshot();assert.equal(f.controller.locked,true);assert.equal(saved.repositoryStart.key,original.key);
+    f.controller.restore(saved);f.controller.update();assert.equal(f.$('#task-source').value,'new-repository');
+    f.$('#repository-create-name').value='changed-in-DOM';const retry=f.createRepository();
+    assert.equal(f.calls[1].key,original.key);assert.deepEqual(f.calls[1].body,original.body);
+    f.calls[1].resolve(repositoryResult(f));await retry;assert.equal(f.controller.locked,false);
+  });
+
+test('a definite repository name refusal permits editing while uncertain success stays locked',async()=>{
+  const f=repositoryFixture(),pending=f.createRepository(),oldKey=f.calls[0].key;
+  f.calls[0].reject(Object.assign(Error('Choose another name'),{status:409,code:'REPOSITORY_NAME_TAKEN'}));await pending;
+  assert.equal(f.controller.locked,false);const retry=f.createRepository();assert.notEqual(f.calls[1].key,oldKey);
+  f.calls[1].resolve({});await retry;assert.equal(f.controller.locked,true);assert.equal(f.controller.snapshot().repositoryStart.key,f.calls[1].key);
+});
+
+test('unresolved repository creation survives capability removal without becoming a task request',async()=>{
+  const f=repositoryFixture(),pending=f.createRepository();f.calls[0].reject(Error('Lost response'));await pending;
+  const saved=f.controller.snapshot();f.context.workspace.capabilities.repositoryCreate=false;f.controller.restore(saved);f.controller.update();
+  assert.equal(f.$('#task-source').value,'new-repository');assert.equal(f.$('#create-repository').disabled,true);
+  await f.submit();await f.createRepository();assert.equal(f.calls.length,1);assert.equal(f.controller.locked,true);
+});
+
+for(const failed of [false,true])test(`late repository ${failed?'failure':'success'} cannot affect another workspace`,async()=>{
+  const f=repositoryFixture(),pending=f.createRepository();
+  f.context.workspace.id='other-workspace';f.controller.restore(null);f.controller.update();f.controller.activate('new-repository');f.controller.update();
+  f.$('#repository-create-name').value='other-repo';const current=f.createRepository(),key=f.calls[1].key;
+  if(failed)f.calls[0].reject(Error('Old request failed'));else f.calls[0].resolve({workspaceId:'workspace-a',projectId:crypto.randomUUID(),name:'customer-portal',defaultBranch:'main',baseCommit:'a'.repeat(40)});
+  await pending;assert.equal(f.controller.snapshot().repositoryStart.key,key);assert.deepEqual(f.errors,[]);
+  f.calls[1].reject(Error('Keep this request'));await current;
+});
 
 function modelFixture(saved=null) {
   const f=fixture();f.context.workspace.capabilities.model=true;f.context.workspace.execution={model:'controlled transport'};

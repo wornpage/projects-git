@@ -1492,7 +1492,7 @@ test("empty hosted workspace is valid and exposes unavailable capabilities", () 
   const value = setup().controller.workspace();
   assert.deepEqual(value.tasks, []);
   assert.equal(value.metrics.acceptedCandidates.denominator, 0);
-  assert.deepEqual(value.capabilities, { repository: true, repositoryCatalog: true, demo: false, model: false, merge: false, verify: false, repositoryChecks: false, baseUpdate: false, revise: true, handoff: true, coordination: true, dependencies: true, providerVerified: false });
+  assert.deepEqual(value.capabilities, { repository: true, repositoryCatalog: true, repositoryCreate: false, demo: false, model: false, merge: false, verify: false, repositoryChecks: false, baseUpdate: false, revise: true, handoff: true, coordination: true, dependencies: true, providerVerified: false });
 });
 
 test("task verifies exact pinned commit and replay preserves one task", async () => {

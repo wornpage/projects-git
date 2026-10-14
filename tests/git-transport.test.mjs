@@ -187,6 +187,28 @@ test('MCP checks out real Git objects and reconciles a lost push response withou
   assert.ok(!JSON.stringify(receipt).includes('fork-write-token'));
 });
 
+test('repository seed pushes one deterministic README root commit and refuses a nonempty main',async t=>{
+  const f=await fixture(t);
+  for(const name of ['empty','retry','blocked']) {
+    await f.git(f.root,'init','--bare','--initial-branch=main',name+'.git');
+    await f.git(path.join(f.root,name+'.git'),'config','http.receivepack','true');
+  }
+  const seed={remote:'https://git.example.test/empty.git',token:'seed-write-token',name:'customer-portal',description:'A customer portal.',timestamp:1780000000,beforePush:async()=>{}};
+  let reserved;const head=await f.transport.seedRepository({...seed,beforePush:async value=>{
+    assert.ok(f.received.some(item=>item.path==='/empty.git/info/refs'),'Authority is checked after remote ref discovery');reserved=value;
+  }});
+  assert.equal(head,reserved);assert.equal(await f.git(path.join(f.root,'empty.git'),'rev-parse','main'),head);
+  assert.equal(await f.git(path.join(f.root,'empty.git'),'show','main:README.md'),'# customer-portal\n\nA customer portal.');
+  assert.equal(await f.git(path.join(f.root,'empty.git'),'rev-list','--count','main'),'1');
+  assert.equal(await f.transport.seedRepository({...seed,remote:'https://git.example.test/retry.git'}),head);
+  await assert.rejects(f.transport.seedRepository({...seed,remote:'https://git.example.test/source.git'}));
+  assert.equal(await f.git(path.join(f.root,'source.git'),'rev-parse','main'),f.baseCommit);
+  await assert.rejects(f.transport.seedRepository({...seed,remote:'https://git.example.test/blocked.git',beforePush:async()=>{throw Error('Owner session revoked');}}),/Owner session revoked/);
+  assert.equal(f.received.filter(item=>item.path==='/blocked.git/git-receive-pack').length,0);
+  const requests=f.received.filter(item=>item.path.startsWith('/empty.git/'));
+  assert.ok(requests.every(item=>item.token==='Bearer seed-write-token'));
+});
+
 test('Git transport creates a real artifact context commit and advances only the exact target head', async t => {
   const f = await fixture(t);
   let reserved;

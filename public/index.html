@@ -63,6 +63,13 @@
             <form id="task-form" class="panel-body task-create-form">
               <label for="task-source">Project</label>
               <select id="task-source"><option value="repository">New project · connect code</option><option value="sample">New project · checkout starter</option></select>
+              <fieldset id="repository-create-fields" class="field-grid" hidden disabled>
+                <legend>Create a private repository</legend>
+                <div><label for="repository-create-name">Repository name</label><input id="repository-create-name" placeholder="customer-portal" maxlength="100" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" aria-describedby="repository-create-note"></div>
+                <div><label for="repository-create-description">Description · optional</label><textarea id="repository-create-description" maxlength="500" rows="3"></textarea></div>
+                <p id="repository-create-note" class="small">Creates a private Artifacts repository with a README on main and connects it to a project with the same name.</p>
+              </fieldset>
+              <button id="create-repository" class="button button-primary" type="button" hidden>Create repository</button>
               <fieldset id="repository-source-fields" class="field-grid">
                 <legend>1. Connect committed code</legend>
                 <div><label for="project-name-input">Project name</label><input id="project-name-input" placeholder="For example: Customer portal" maxlength="100" required></div>
@@ -71,7 +78,7 @@
                   <label for="artifact-repository-select">Artifacts repository</label><select id="artifact-repository-select" aria-describedby="artifact-catalog-status" disabled><option value="">Choose an Artifacts repository</option></select>
                   <p id="artifact-catalog-status" class="small" role="status"></p>
                   <div class="artifact-picker-actions"><button id="artifact-previous" class="button button-small" type="button" aria-label="Previous repositories" disabled>Previous</button><button id="artifact-next" class="button button-small" type="button" aria-label="Next repositories" disabled>Next</button><button id="artifact-refresh" class="button button-small" type="button">Refresh list</button></div>
-                  <p id="artifact-empty" class="small" hidden>No repositories yet. Create or import a repository in this workspace’s Artifacts namespace first.</p>
+                  <p id="artifact-empty" class="small" hidden>No repositories yet. Choose New project · Create repository to start one here, or import code into this workspace’s Artifacts namespace.</p>
                   <p id="artifact-picker-error" class="checks-failed small" role="alert" hidden></p>
                 </div>
                 <div id="repository-base-field"><label for="repository-base">Base commit · full Git ID</label><input id="repository-base" placeholder="Paste git rev-parse HEAD" pattern="[a-f0-9]{40}([a-f0-9]{24})?" required><div id="artifact-base-controls" hidden><p id="artifact-base-status" class="small" role="status"></p><button id="artifact-refresh-base" class="button button-small" type="button" disabled>Refresh current base</button></div></div>

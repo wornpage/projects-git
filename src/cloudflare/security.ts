@@ -38,8 +38,11 @@ export function requireSameOrigin(request: Request): void {
 }
 
 export function idempotencyKey(request: Request): string {
-  const key = request.headers.get("Idempotency-Key") ?? "";
-  if (!/^[A-Za-z0-9_.:-]{8,128}$/.test(key)) {
+  return validateIdempotencyKey(request.headers.get("Idempotency-Key"));
+}
+
+export function validateIdempotencyKey(key: unknown): string {
+  if (typeof key !== 'string' || !/^[A-Za-z0-9_.:-]{8,128}$/.test(key)) {
     throw new ApiError(400, "IDEMPOTENCY_REQUIRED", "Send an Idempotency-Key of 8-128 letters, numbers, dots, colons, underscores, or hyphens.");
   }
   return key;

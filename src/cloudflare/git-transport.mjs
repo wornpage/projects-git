@@ -72,6 +72,29 @@ function assertPush(result, branch) {
 export class ArtifactGit {
   constructor({ fetchImpl = fetch } = {}) { this.fetchImpl = fetchImpl; }
 
+  /** A deterministic root commit; the remote branch must still be absent. */
+  async seedRepository({ remote, token, name, description, timestamp, beforePush }) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(name) || typeof description !== 'string' || description.length > 500
+      || !Number.isSafeInteger(timestamp) || timestamp < 1) throw new Error('Invalid repository seed.');
+    const repo = memoryRepo(), branch = 'main';
+    const http = gitHttp([{remote, token}], {fetchImpl: this.fetchImpl});
+    await git.init({...repo, defaultBranch: branch});
+    repo.fs.writeFileSync('/repo/README.md', `# ${name}\n${description ? `\n${description}\n` : ''}`, 'utf8');
+    await git.add({...repo, filepath: 'README.md'});
+    const author = {name: 'Projects Git', email: 'coordinator@projects.invalid', timestamp, timezoneOffset: 0};
+    const headCommit = await git.commit({...repo, message: 'Initialize repository', author, committer: author});
+    const result = await git.push({...repo, http, url: remote, ref: branch, remoteRef: branch, force: false,
+      onPrePush: async ({localRef, remoteRef}) => {
+        if (localRef.oid !== headCommit || remoteRef.oid !== zero) return false;
+        // Recheck the retained attempt and caller after remote ref discovery,
+        // immediately before the Git write can begin.
+        await beforePush(headCommit);
+        return true;
+      }});
+    assertPush(result, branch);
+    return headCommit;
+  }
+
   /** Reapply the entire candidate delta, including multi-commit work, on a new base. */
   async reapply({ remote, token, defaultBranch, branch, candidateRemote, candidateToken, candidateBranch, baseCommit, headCommit, currentBase, timestamp = Math.floor(Date.now() / 1000), beforePush }) {
     if (![baseCommit, headCommit, currentBase].every(oid) || ![defaultBranch, branch, candidateBranch].every(branchName)) throw new Error('Invalid base update target.');
