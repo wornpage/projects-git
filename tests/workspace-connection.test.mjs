@@ -69,6 +69,13 @@ test('old poll responses cannot roll back a newer action result',async()=>{
   f.requests[0].resolve(snapshot('workspace',2));await read;
   assert.equal(f.context.workspace.version,3);assert.equal(f.received[0].data.version,3);
 });
+test('a principal round trip cannot revive an earlier captured session',()=>{
+  const f=fixture(),as=(id,version)=>({...snapshot('workspace',version),authentication:{principal:{kind:'owner',id}}});
+  f.connection.applySnapshot(as('owner-a',1));const first=f.connection.captureSession();
+  f.connection.applySnapshot(as('owner-b',2));assert.equal(first(),false);
+  f.connection.applySnapshot(as('owner-a',3));assert.equal(first(),false);
+  assert.equal(f.connection.captureSession()(),true);
+});
 
 for(const failure of [false,true])test(`reconnect ignores late ${failure?'failure':'success'} from the previous connection`,async()=>{
   const f=fixture();const old=f.connection.refresh(),isCurrent=f.connection.captureSession(),fresh=f.connection.reconnect();

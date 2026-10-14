@@ -17,7 +17,7 @@ export function createWorkspaceConnection({api, getWorkspace, setWorkspace, acti
       throw new Error('The server returned an invalid workspace model.');
     const current = getWorkspace();
     if (current?.id === data.id && current.version > data.version) return false;
-    if (current?.id !== data.id) epoch++;
+    if (current?.id !== data.id || JSON.stringify(current?.authentication?.principal ?? null) !== JSON.stringify(data.authentication?.principal ?? null)) epoch++;
     setWorkspace(data);
     return true;
   }

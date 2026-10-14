@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {execFile} from 'node:child_process';
+import childProcess from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
 import {promisify} from 'node:util';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -76,6 +78,48 @@ test('native notes append without changing code, HEAD or index; duplicate writes
   assert.equal((await showGitNote(f.repo,f.head)).note.records.length,1);
   assert.match(await f.git(f.repo,'log','-1','--show-notes=projects'),/projects-git-context/);
   assert.equal(await f.git(f.repo,'for-each-ref','--format=%(refname)','refs/notes/projects-pending'),'');
+});
+test('symbolic notes refs are rejected without changing the code branch, tree, index or alias',async t=>{
+  const f=await gitFixture(t),tree=await f.git(f.repo,'rev-parse','HEAD^{tree}');
+  await f.git(f.repo,'symbolic-ref',GIT_NOTES_REF,'refs/heads/main');
+  await assert.rejects(writeGitNote(f.repo,serializeGitNote(await packet(f.f))),/symbolic/);
+  await assert.rejects(showGitNote(f.repo,f.head),/symbolic/);
+  assert.equal(await f.git(f.repo,'rev-parse','HEAD'),f.head);
+  assert.equal(await f.git(f.repo,'rev-parse','HEAD^{tree}'),tree);
+  assert.equal(await f.git(f.repo,'status','--porcelain'),'');
+  assert.equal(await f.git(f.repo,'symbolic-ref',GIT_NOTES_REF),'refs/heads/main');
+  assert.equal(await f.git(f.repo,'for-each-ref','--format=%(refname)','refs/notes/projects-pending'),'');
+});
+test('notes reads keep head and content from one immutable snapshot during a concurrent append',async t=>{
+  const f=await gitFixture(t),first=await writeGitNote(f.repo,serializeGitNote(await packet(f.f)));
+  f.f.workspace.version++;const second=await writeGitNote(f.repo,serializeGitNote(await packet(f.f)));
+  await f.git(f.repo,'update-ref',GIT_NOTES_REF,first.notesHead,second.notesHead);
+  const original=childProcess.execFile,originalAsync=promisify(original);let intercepted=false;
+  try{
+    const intercept=(file,args)=>{
+      if(file==='git'&&args.includes('ls-tree')&&!intercepted){
+        intercepted=true;childProcess.execFileSync('git',['-c','core.hooksPath=/dev/null','update-ref',GIT_NOTES_REF,second.notesHead,first.notesHead],{cwd:f.repo,windowsHide:true});
+      }
+    };
+    childProcess.execFile=function(file,args,...rest){intercept(file,args);return original.call(this,file,args,...rest);};
+    childProcess.execFile[promisify.custom]=function(file,args,...rest){intercept(file,args);return originalAsync(file,args,...rest);};
+    syncBuiltinESMExports();
+    const reader=await import('../src/local/git-notes.mjs?pinned-read='+crypto.randomUUID());
+    const shown=await reader.showGitNote(f.repo,f.head);
+    assert.equal(intercepted,true);assert.equal(shown.notesHead,first.notesHead);assert.equal(shown.note.records.length,1);
+    assert.equal(await f.git(f.repo,'rev-parse',GIT_NOTES_REF),second.notesHead);
+  }finally{childProcess.execFile=original;syncBuiltinESMExports();}
+});
+test('immutable notes reads support a native fan-out tree',async t=>{
+  const f=await gitFixture(t);await writeGitNote(f.repo,serializeGitNote(await packet(f.f)));
+  const blob=await f.git(f.repo,'notes','--ref='+GIT_NOTES_REF,'list',f.head),previous=await f.git(f.repo,'rev-parse',GIT_NOTES_REF);
+  const input=async(args,text)=>{const run=exec('git',['-c','core.hooksPath=/dev/null','-c','user.name=Test','-c','user.email=test@example.invalid',...args],{cwd:f.repo,windowsHide:true});run.child.stdin.end(text);return(await run).stdout.trim();};
+  const child=await input(['mktree'],`100644 blob ${blob}\t${f.head.slice(2)}\n`);
+  const tree=await input(['mktree'],`040000 tree ${child}\t${f.head.slice(0,2)}\n`);
+  const head=await input(['commit-tree',tree,'-p',previous], 'Fan-out notes\n');
+  await f.git(f.repo,'update-ref',GIT_NOTES_REF,head,previous);
+  assert.deepEqual((await showGitNote(f.repo,f.head)).note,await packet(f.f));
+  assert.match(await f.git(f.repo,'notes','--ref='+GIT_NOTES_REF,'show',f.head),/projects-git-context/);
 });
 test('ordinary clone omits notes; explicit named-ref push/fetch transports only the managed context',async t=>{
   const f=await gitFixture(t),remote=path.join(f.root,'remote.git');await f.git(f.root,'init','--bare',remote);

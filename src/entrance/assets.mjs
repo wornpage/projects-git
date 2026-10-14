@@ -10,6 +10,7 @@ export const DEMO_ASSETS = Object.freeze([
   "demo/client.js",
   "demo/demo.css",
   "demo/workspace.js",
+  "git-notes.js",
   "project-catalog.js",
   "project-coordination.js",
   "retained-work.js",

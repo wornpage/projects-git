@@ -22,6 +22,9 @@ branch and index remain unchanged. It appends distinct records and treats a repe
 identical record as a no-op. Updates compare the previously read notes head;
 concurrent writes refuse instead of overwriting another writer. No remote access,
 credential grant, model call, check, acceptance or merge is performed by the utility.
+The managed notes ref must be direct; symbolic aliases are refused. Reads bind
+the reported notes head and note body to the same immutable Git tree, even when
+another writer updates the ref concurrently.
 
 ## Synchronize explicitly
 

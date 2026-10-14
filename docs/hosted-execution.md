@@ -2,7 +2,7 @@
 
 ## Scope
 
-Artifacts stores candidate repositories and `.projects/task.json` in model-created commits. Later requirements, reviews and evidence remain in coordinator SQLite. Full model attempt receipts use its `attempts` table. This is not yet a self-contained Git archive of every workflow event.
+Artifacts stores candidate code repositories. Harness context, requirements, reviews and evidence remain in coordinator SQLite; full model attempt receipts use its `attempts` table. New model-created commits no longer add `.projects/task.json`. Historical commits containing that file remain readable. The continuation dialog can export [bounded Git notes](git-notes.md) for explicit attachment and synchronization. Notes do not replace the workspace or its full project exports, and an ordinary clone is not a self-contained archive of workflow history.
 
 ## Operator setup
 

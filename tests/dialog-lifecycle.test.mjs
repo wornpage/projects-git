@@ -17,14 +17,15 @@ function fixture() {
   const run=assignRun(workspace,task.id,{agent:'external',label:'Retained candidate',branch:'newwork/test'});
   startRun(workspace,run.id);completeRun(workspace,run.id,{headCommit:'b'.repeat(40),changedFiles:['clipboard.js'],diff:'',summary:'Test candidate'});
   const ids={first:run.id,second:crypto.randomUUID()};workspace.runs.push({...run,id:ids.second,label:'Other approach'});
-  const context={$,document,workspace,view:'review',selectedTask:task.id,selectedRun:run.id,busy:false,
+  const context={$,document,workspace,view:'review',selectedTask:task.id,selectedRun:run.id,busy:false,session:0,
     api:path=>new Promise((resolve,reject)=>calls.push({path,resolve,reject})),
     showError:text=>notices.push(text),announce:text=>notices.push(text),downloadJson:(data,name)=>downloads.push({data,name}),
     switchView:(view,task,run)=>opened.push({view,task,run}),selectProject(){},openTaskComposer(){},refresh:async()=>{},
   };
   Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard:{writeText:text=>new Promise((resolve,reject)=>copies.push({text,resolve,reject}))}}});
   const dialogs=createDialogManager(document);dialogs.register('project-connection-dialog');
-  const ports={...context,getContext:()=>context,dialogs,projectDiscovery:{find:async query=>projectCatalog(context.workspace,parseProjectCatalog(new URLSearchParams({q:query})))}};
+  const captureSession=()=>{const session=context.session,identity=JSON.stringify(context.workspace.authentication?.principal??null);return()=>session===context.session&&identity===JSON.stringify(context.workspace.authentication?.principal??null);};
+  const ports={...context,getContext:()=>context,dialogs,captureSession,projectDiscovery:{find:async query=>projectCatalog(context.workspace,parseProjectCatalog(new URLSearchParams({q:query})))}};
   Object.assign(context,createNavigation(ports),createContinuationDialog(ports),createRequirementsForm(ports));
   context.showWorkbenchDialog=dialogs.show;
   return {context,$,calls,copies,opened,notices,downloads,document,ids};
@@ -69,6 +70,39 @@ test('an older failed continuation read cannot disturb a newer candidate',async(
   f.calls[1].resolve(f.context.workspace);await second;
   f.calls[0].reject(new Error('Old request failed'));await first;
   assert.deepEqual(f.notices,[]);assert.equal(JSON.parse(f.$('#git-note-preview').value).records[0].context.runId,f.ids.second);
+});
+test('principal changes and same-principal reconnections fence pending note downloads and copies',async()=>{
+  for(const command of ['download-git-note','copy-continuation'])for(const change of ['principal','reconnect']){
+    const f=fixture();f.context.workspace.authentication={principal:{kind:'owner',id:'owner-a'}};
+    await open(f,'first');const old=structuredClone(f.context.workspace),request=f.$('#'+command).dispatch('click');
+    if(change==='principal')f.context.workspace.authentication.principal.id='owner-b';else f.context.session++;
+    f.calls.at(-1).resolve(old);await new Promise(resolve=>setImmediate(resolve));
+    for(const copy of f.copies)copy.resolve();await request;
+    assert.equal(f.downloads.length,0);assert.equal(f.copies.length,0);
+  }
+});
+test('a different principal in a successful response cannot open or download candidate context',async()=>{
+  for(const stage of ['open','download']){
+    const f=fixture();f.context.workspace.authentication={principal:{kind:'owner',id:'owner-a'}};
+    if(stage==='download')await open(f,'first');
+    const request=stage==='open'?f.context.openContinuation(f.ids.first):f.$('#download-git-note').dispatch('click');
+    const foreign=structuredClone(f.context.workspace);foreign.authentication.principal.id='owner-b';
+    f.calls.at(-1).resolve(foreign);await request;assert.equal(f.downloads.length,0);
+    if(stage==='open')assert.equal(f.$('#continuation-dialog').open,false);
+  }
+});
+test('session changes during note hashing fence both initial opening and download completion',async()=>{
+  for(const stage of ['open','download']){
+    const f=fixture();if(stage==='download')await open(f,'first');
+    const original=crypto.subtle.digest;let signal,release,used=false;
+    const entered=new Promise(resolve=>{signal=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+    try{
+      crypto.subtle.digest=function(...args){if(!used){used=true;signal();return gate.then(()=>original.apply(this,args));}return original.apply(this,args);};
+      const request=stage==='open'?f.context.openContinuation(f.ids.first):f.$('#download-git-note').dispatch('click');
+      f.calls.at(-1).resolve(structuredClone(f.context.workspace));await entered;f.context.session++;release();await request;
+      assert.equal(f.downloads.length,0);if(stage==='open')assert.equal(f.$('#continuation-dialog').open,false);
+    }finally{release();crypto.subtle.digest=original;}
+  }
 });
 
 test('closing an in-flight copy allows reopening and an old completion cannot unlock a new copy',async()=>{
