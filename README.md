@@ -5,21 +5,28 @@ Projects holds the queue, isolated candidate branches, checks and review history
 your existing coding host runs the agents. An owner-enabled policy can integrate
 eligible changes automatically after current checks and independent review pass.
 
-## How it works
+## Workflow
 
-- **Keep agents moving.** Queue tasks with requirements and prerequisites. Agents
-  claim isolated work while other assignments continue.
-- **Retain context.** Keep alternative commits, failed attempts and earlier
-  decisions when requirements or the project base change.
-- **Check the exact change.** Checks and independent review bind to the commit
-  and requirements they assessed. Changed inputs make that evidence stale.
-- **Choose integration policy.** Manual acceptance and merge are separate actions.
-  Optional [automatic integration](docs/automatic-merge.md) handles eligible
-  changes under an owner-enabled project policy; failed or stale gates stop it.
+```mermaid
+flowchart LR
+  Queue[Queued tasks] --> Agents[Agents submit isolated candidates]
+  Agents --> Checks[Current checks and review]
+  Checks --> Mode{Integration mode}
+  Mode -->|Owner enabled and eligible| Policy[Automatic approval]
+  Mode -->|Manual or needs a choice| Owner[Owner acceptance]
+  Policy --> Merge[Guarded merge]
+  Owner --> Merge
+  Merge --> Queue
+```
 
-The current hosted model is one authenticated owner with restricted builder and
-reviewer identities. Team administration is planned. The workspace has four
-shared execution slots and a separate limit of two verification attempts.
+Agents can continue eligible work while another candidate waits. Hosted
+[automatic integration](docs/automatic-merge.md) starts off and requires an owner
+policy, current checks and a passing independent review. Alternatives and
+exceptions need an owner choice. Manual acceptance and merge remain separate
+guarded steps; merging does not deploy.
+
+Changed code, requirements or project bases require fresh checks and review.
+Earlier commits, reports and decisions stay available for comparison and recovery.
 
 Browse projects, open their task queues, then move between task briefs and the
 separate candidate collections. **Find work** searches all workspace project
@@ -82,10 +89,17 @@ rules and the browser workbench. Hosted operation requires your own Cloudflare
 resources and identity configuration. Public and preview routes are disabled in
 the supplied configuration; configure Access before exposing a workspace.
 
+## Guides and operator references
+
+The hosted model has one authenticated owner with restricted builder and reviewer
+identities. Team administration is planned. Four execution slots and two
+verification attempts are shared across the workspace.
+
 | Guide | Purpose |
 | --- | --- |
 | [Source map](docs/source-map.md) | Find implementation modules |
 | [App model](docs/app-model.md) | Understand tasks, retained work and counters |
+| [Automatic integration](docs/automatic-merge.md) | Set policy and handle exceptions |
 | [Independent review](docs/independent-review.md) | Review and decision boundaries |
 | [Authenticated ownership](docs/authenticated-workspace.md) | Owner, builder and reviewer permissions |
 | [Cloudflare guide](docs/cloudflare.md) | Hosted architecture and API |
@@ -106,13 +120,7 @@ repository. GitHub Actions is disabled on this challenge repository.
 
 ## Source and license
 
-This repository starts a fresh history from the reviewed `c045d30` source
-snapshot. Publication changes remove private operational records, media and
-deployment identifiers, remove the demo's private qualification display, and
-adapt setup documentation and examples for this standalone repository. The
-workspace authorization, review, integration and policy-propagation logic is
-unchanged. The generated verifier identity is refreshed when its source inputs
-change.
-
 [MIT](LICENSE). This is an independent Cloudflare competition prototype in the
 Projects family. Third-party assets retain their included license notices.
+See [source provenance](docs/source-map.md#source-provenance) for the repository's
+origin.

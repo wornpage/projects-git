@@ -77,19 +77,8 @@ authority for permissions, capacity and durable workspace state. See [MCP setup]
 
 ## Follow one task to merge
 
-```mermaid
-flowchart LR
-    Task[Queue task and requirements] --> Claim[Claim isolated work]
-    Claim --> Commit[Submit candidate commit]
-    Commit --> Verify[Independent verification]
-    Verify --> Review[Independent review in hosted mode]
-    Review --> Mode{Integration mode}
-    Mode --> Policy[Owner-enabled automatic policy]
-    Mode --> Accept[Manual owner acceptance]
-    Policy --> Merge[Guarded integration]
-    Accept --> Merge
-    Merge --> Task
-```
+Use the [workflow map in the README](../README.md#workflow) for the product path.
+This table connects each step to its implementation and enforcement boundary.
 
 | Step | Where to follow it | Boundary to notice |
 | --- | --- | --- |
@@ -118,3 +107,13 @@ acceptance/merge requests. The browser asset test follows every local module
 import through the real server. Real browser checks remain necessary for layout,
 focus, native validation and responsive behavior. These tests do not run models
 or deploy anything.
+
+## Source provenance
+
+This standalone repository began with a fresh history from the reviewed
+`c045d30` source snapshot. Its publication omitted private operational records,
+media and deployment identifiers, removed the demo's private qualification
+display, and adapted setup documentation and examples for this repository.
+At that publication, workspace authorization, review, integration and policy
+propagation were retained from the reviewed snapshot. Later source changes are
+recorded in Git; the verifier identity is refreshed when its source inputs change.

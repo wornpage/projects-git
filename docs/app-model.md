@@ -14,22 +14,9 @@ path; alternatives and exceptions still need an owner decision. The local app
 uses manual acceptance and merge. Multiple candidates can be alternatives for
 one task; different tasks share project main.
 
-```mermaid
-flowchart LR
-  Project[Project and code] --> Queue[Queued tasks]
-  Queue --> Claim[Agent claims task]
-  Claim --> Candidate[Isolated changes and commit]
-  Candidate --> Checks[Independent checks]
-  Checks --> Review[Independent review in hosted mode]
-  Review --> Policy{Integration mode}
-  Policy --> Auto[Owner-enabled automatic policy]
-  Policy --> Manual[Owner decision]
-  Auto --> Merge[Guarded merge to project main]
-  Manual --> Merge
-  Merge --> Queue
-  Candidate --> Update[Base update or conflict resolution]
-  Update --> Checks
-```
+The [workflow map in the README](../README.md#workflow) shows the shared path
+from queued work to guarded integration. The sections below explain its records,
+views and recovery behavior.
 
 Connect code once or use the checkout starter. Its first task has two scripted
 alternatives. Follow-up tasks stay in the same project and use the ordinary queue.
