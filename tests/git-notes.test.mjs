@@ -121,6 +121,65 @@ test('immutable notes reads support a native fan-out tree',async t=>{
   assert.deepEqual((await showGitNote(f.repo,f.head)).note,await packet(f.f));
   assert.match(await f.git(f.repo,'notes','--ref='+GIT_NOTES_REF,'show',f.head),/projects-git-context/);
 });
+async function replaceNotesTree(f,parts){
+  const blob=await f.git(f.repo,'notes','--ref='+GIT_NOTES_REF,'list',f.head),previous=await f.git(f.repo,'rev-parse',GIT_NOTES_REF);
+  const input=async(args,text)=>{const run=exec('git',['-c','core.hooksPath=/dev/null','-c','user.name=Test','-c','user.email=test@example.invalid',...args],{cwd:f.repo,windowsHide:true});run.child.stdin.end(text);return(await run).stdout.trim();};
+  let tree=await input(['mktree'],`100644 blob ${blob}\t${parts.at(-1)}\n`);
+  for(let i=parts.length-2;i>=0;i--)tree=await input(['mktree'],`040000 tree ${tree}\t${parts[i]}\n`);
+  const head=await input(['commit-tree',tree,'-p',previous],'Native notes layout fixture\n');
+  await f.git(f.repo,'update-ref',GIT_NOTES_REF,head,previous);
+  return{head,blob,input};
+}
+
+for(const layout of ['uppercase flat','mixed-case fanout'])test(`native ${layout} notes retain old records after append`,async t=>{
+  const f=await gitFixture(t);
+  // Include an alphabetic directory name, independent of the fixture's hash.
+  if(layout==='mixed-case fanout'){
+    for(let attempt=0;!/[a-f]/.test(f.head.slice(0,2));attempt++){
+      assert.ok(attempt<100,'Could not create an alphabetic native fanout prefix');
+      await f.git(f.repo,'commit','--allow-empty','-m','Fanout prefix '+attempt);f.head=await f.git(f.repo,'rev-parse','HEAD');
+    }
+    f.f=fixture(f.head);
+  }
+  const original=await packet(f.f);await writeGitNote(f.repo,serializeGitNote(original));
+  const mixed=value=>[...value].map((char,i)=>i%2?char:char.toUpperCase()).join('');
+  const parts=layout==='uppercase flat'?[f.head.toUpperCase()]:[f.head.slice(0,2).toUpperCase(),mixed(f.head.slice(2))];
+  const installed=await replaceNotesTree(f,parts);
+  assert.deepEqual(await readGitNote(await f.git(f.repo,'notes','--ref='+GIT_NOTES_REF,'show',f.head)),original);
+  assert.deepEqual((await showGitNote(f.repo,f.head)).note,original);
+  f.f.workspace.version++;const next=await packet(f.f),written=await writeGitNote(f.repo,serializeGitNote(next));
+  assert.equal(written.records,2);assert.notEqual(written.notesHead,installed.head);
+  const native=await readGitNote(await f.git(f.repo,'notes','--ref='+GIT_NOTES_REF,'show',f.head));
+  assert.deepEqual(new Set(native.records.map(record=>record.sha256)),new Set([original.records[0].sha256,next.records[0].sha256]));
+  assert.deepEqual((await showGitNote(f.repo,f.head)).note,native);
+  assert.equal(await f.git(f.repo,'rev-parse','HEAD'),f.head);assert.equal(await f.git(f.repo,'status','--porcelain'),'');
+});
+
+for(const width of [1,4])test(`native non-note ${width}-character directories stay separate during append`,async t=>{
+  const f=await gitFixture(t),original=await packet(f.f);await writeGitNote(f.repo,serializeGitNote(original));
+  const parts=[f.head.slice(0,width),f.head.slice(width)],installed=await replaceNotesTree(f,parts);
+  await assert.rejects(f.git(f.repo,'notes','--ref='+GIT_NOTES_REF,'show',f.head),/no note found/);
+  assert.equal((await showGitNote(f.repo,f.head)).status,'absent');
+  f.f.workspace.version++;const next=await packet(f.f),written=await writeGitNote(f.repo,serializeGitNote(next));
+  assert.equal(written.records,1);
+  const native=await readGitNote(await f.git(f.repo,'notes','--ref='+GIT_NOTES_REF,'show',f.head));
+  assert.deepEqual(native,next);assert.deepEqual((await showGitNote(f.repo,f.head)).note,native);
+  assert.equal(await f.git(f.repo,'rev-parse',GIT_NOTES_REF+':'+parts.join('/')),installed.blob,'Unrelated non-note subtree is preserved');
+  assert.equal(await f.git(f.repo,'rev-parse','HEAD'),f.head);assert.equal(await f.git(f.repo,'status','--porcelain'),'');
+});
+
+test('an oversized notes tree refuses without interpreting a partial scan as absence',async t=>{
+  const f=await gitFixture(t),original=await packet(f.f);await writeGitNote(f.repo,serializeGitNote(original));
+  const installed=await replaceNotesTree(f,[f.head]);
+  const entries=Array.from({length:6500},(_,i)=>`100644 blob ${installed.blob}\t${i.toString(16).padStart(40,'0')}\n`).join('')+`100644 blob ${installed.blob}\t${f.head}\n`;
+  const tree=await installed.input(['mktree'],entries),head=await installed.input(['commit-tree',tree,'-p',installed.head],'Oversized notes tree\n');
+  await f.git(f.repo,'update-ref',GIT_NOTES_REF,head,installed.head);
+  await assert.rejects(showGitNote(f.repo,f.head),/limit/);
+  f.f.workspace.version++;await assert.rejects(writeGitNote(f.repo,serializeGitNote(await packet(f.f))),/limit/);
+  assert.equal(await f.git(f.repo,'rev-parse',GIT_NOTES_REF),head);
+  assert.equal(await f.git(f.repo,'for-each-ref','--format=%(refname)','refs/notes/projects-pending'),'');
+});
+
 test('ordinary clone omits notes; explicit named-ref push/fetch transports only the managed context',async t=>{
   const f=await gitFixture(t),remote=path.join(f.root,'remote.git');await f.git(f.root,'init','--bare',remote);
   await f.git(f.repo,'remote','add','origin',remote);await f.git(f.repo,'push','origin','main');await f.git(remote,'symbolic-ref','HEAD','refs/heads/main');

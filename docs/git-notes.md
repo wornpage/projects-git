@@ -25,6 +25,9 @@ credential grant, model call, check, acceptance or merge is performed by the uti
 The managed notes ref must be direct; symbolic aliases are refused. Reads bind
 the reported notes head and note body to the same immutable Git tree, even when
 another writer updates the ref concurrently.
+Lookup accepts Git's mixed-case hexadecimal names and two-character fanout
+directories. It refuses tree levels over 512 KiB or more than 40 tree reads;
+it never treats a partial scan as proof that an existing note is absent.
 
 ## Synchronize explicitly
 

@@ -40,14 +40,17 @@ async function existingNote(git,head,commit) {
   while(pending.length){
     if(++reads>40)throw new Error('The Git notes tree exceeds the bounded lookup limit.');
     const {tree,remaining}=pending.pop();
-    const names=Array.from({length:remaining.length},(_,index)=>remaining.slice(0,index+1));
-    const listing=(await git(['ls-tree','-z',tree,'--',...names])).text;
+    // Native notes accept mixed-case hexadecimal names, but only two-character
+    // fanout directories. Scan each level completely so absence is conclusive;
+    // a bounded-output refusal must never turn into an overwrite of an old note.
+    const listing=(await git(['ls-tree','-z',tree],{limit:512*1024})).text;
     for(const line of listing.split('\0').filter(Boolean)){
-      const entry=/^([0-7]{6}) (blob|tree) ([a-f0-9]{40})\t([a-f0-9]+)$/.exec(line);
-      if(!entry||!remaining.startsWith(entry[4]))throw new Error('Unsupported Git notes tree entry.');
-      const [,mode,type,object,name]=entry;
+      const entry=/^([0-7]{6}) (blob|tree|commit) ([a-f0-9]{40})\t([\s\S]+)$/.exec(line);
+      if(!entry)throw new Error('Unsupported Git notes tree entry.');
+      const [,mode,type,object,rawName]=entry,name=rawName.toLowerCase();
+      if(!/^[a-f0-9]+$/.test(name)||!remaining.startsWith(name))continue;
       if(type==='blob'&&name===remaining){if(mode!=='100644')throw new Error('Git context must be a regular note blob.');blobs.push(object);}
-      else if(type==='tree'&&name.length<remaining.length)pending.push({tree:object,remaining:remaining.slice(name.length)});
+      else if(type==='tree'&&name.length===2&&remaining.length>2)pending.push({tree:object,remaining:remaining.slice(2)});
     }
   }
   if(!blobs.length)return null;
