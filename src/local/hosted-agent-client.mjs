@@ -96,12 +96,11 @@ export class HostedAgentClient {
         : command === 'status' ? projectStatus(workspace, options.project, url) : taskDetail(workspace, options.task, url);
     }
     if (command === 'receipt') return this.receipt(options.requestId);
-    if (!['claim', 'adopt', 'checkout', 'push', 'start', 'submit', 'fail'].includes(command)) throw new Error('Unsupported hosted builder command.');
+    if (!['claim', 'checkout', 'push', 'start', 'submit', 'fail'].includes(command)) throw new Error('Unsupported hosted builder command.');
     const output = command === 'claim' ? await this.claim(options.project, options.label, options.requestId)
-      : command === 'adopt' ? await this.adopt(options.run, options.assignment, options.requestId)
-      : command === 'checkout' ? await this.checkout(options.run, options.directory, options.requestId)
+      : command === 'checkout' ? await this.checkout(options.run, options.directory, options.requestId, options.assignment)
       : command === 'push' ? await this.push(options.run, options.directory, options.head, options.requestId)
-      : await this.mutate(command, options.run, { headCommit: options.head, summary: options.summary, message: options.message }, options.requestId);
+      : await this.mutate(command, options.run, { headCommit: options.head, summary: options.summary, message: options.message, directory: options.directory }, options.requestId);
     if (output.runId) {
       try {
         const workspace = await this.workspace({run:output.runId});
@@ -237,8 +236,8 @@ export class HostedAgentClient {
   }
 
   /** Import only an existing owner-issued resolution; the builder cannot create one. */
-  async adopt(runId, filename, requestId) {
-    id(runId, 'Run ID'); id(requestId, 'Request ID');
+  async resolutionInput(runId, filename) {
+    id(runId, 'Run ID');
     const input = await readPrivateInput(filename, 4 * 1024 * 1024, '--assignment');
     if (typeof input?.credentials?.token === 'string') this.secrets.add(input.credentials.token);
     const state = await this.workspace({run:runId}), run = this.ownRun(state, runId), task = state.tasks.find(item => item.id === run.taskId);
@@ -249,17 +248,7 @@ export class HostedAgentClient {
       || run.assignedRevision !== task.revision) throw new Error('Resolution file does not match the current unfinished assignment.');
     const credentials = this.validateCredential(run, input.credentials);
     const saved = {scope:this.scope,runId,taskId:run.taskId,projectId:task.projectId,credentials};
-    return this.attempt('adopt', requestId, {runId,assignmentFile:await realpath(filename),assignmentSha256:hash(JSON.stringify(saved))}, async () => {
-      const file = path.join(this.connection.stateDirectory, 'runs', runId + '.json');
-      try { await privateJson(file, saved, true); }
-      catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const retained = await readPrivate(file);
-        if (JSON.stringify({...retained,directory:undefined}) !== JSON.stringify(saved)) throw new Error('This assignment already has a different retained credential. It was not replaced.');
-      }
-      return {runId,taskId:run.taskId,projectId:task.projectId,credentialStatus:'saved-privately',remoteMutation:false,
-        next:'Use checkout with this run ID and a new directory. The source assignment file is still private input; remove it after confirming adoption.'};
-    });
+    return {saved,assignmentFile:await realpath(filename),assignmentSha256:hash(JSON.stringify(saved))};
   }
 
   async mutate(command, runId, input, requestId) {
@@ -268,7 +257,12 @@ export class HostedAgentClient {
     const body = command === 'submit' ? { headCommit: input.headCommit, summary: safeText(input.summary, 2000, 'Summary') }
       : command === 'fail' ? { message: safeText(input.message, 2000, 'Failure reason') } : {};
     if (command === 'submit' && !oid(body.headCommit)) throw new Error('Submission requires the full SHA-1 commit ID.');
-    return this.attempt(command, requestId, { runId, ...body }, async () => {
+    if (input.directory !== undefined && (command !== 'submit' || typeof input.directory !== 'string' || !path.isAbsolute(input.directory))) throw new Error('Submission directory must be an absolute assigned checkout.');
+    const directory = input.directory === undefined ? undefined : path.normalize(input.directory);
+    const digest = directory === undefined ? null : hash(JSON.stringify([this.scope, id(requestId,'Request ID'), 'submit-push']));
+    // A stable child UUID retains the exact Git effect across explicit retries.
+    const pushRequestId = digest && `${digest.slice(0,8)}-${digest.slice(8,12)}-8${digest.slice(13,16)}-a${digest.slice(17,20)}-${digest.slice(20,32)}`;
+    return this.attempt(command, requestId, { runId, ...body, ...(directory === undefined ? {} : {directory,pushRequestId}) }, async () => {
       // Submit has no server idempotency receipt. An explicit retry of a closed
       // run must reconcile its retained outcome instead of sending another POST.
       const terminal = ['awaiting_review', 'accepted', 'rejected', 'merged', 'superseded', 'failed'].includes(before.status);
@@ -280,10 +274,12 @@ export class HostedAgentClient {
         return {runId,taskId:before.taskId,status:before.status,headCommit:before.headCommit??null,reconciled:true,remoteMutation:false,
           observation:'Confirmed from the current authenticated workspace. Earlier unknown attempts remain in receipt history.'};
       }
+      const pushed = directory === undefined ? undefined : await this.push(runId, directory, body.headCommit, pushRequestId);
       const after = this.assertWorkspace(await this.request('/api/runs/' + runId + '/' + command, body, requestId));
       const run = this.ownRun(after, runId);
       if (['submit', 'fail'].includes(command)) await this.retireCredential(runId);
-      return { runId, taskId: run.taskId, status: run.status, headCommit: run.headCommit ?? null };
+      return { runId, taskId: run.taskId, status: run.status, headCommit: run.headCommit ?? null,
+        ...(pushed ? {push:{requestId:pushRequestId,...pushed}} : {}) };
     });
   }
 
@@ -304,11 +300,23 @@ export class HostedAgentClient {
     this.validateCredential(run, saved.credentials); return { run, saved };
   }
 
-  async checkout(runId, directory, requestId) {
+  async checkout(runId, directory, requestId, assignmentFile) {
+    id(requestId,'Request ID');
     if (!path.isAbsolute(directory)) throw new Error('Checkout directory must be absolute and new.');
-    const { saved } = await this.assignment(runId);
+    const imported = assignmentFile === undefined ? null : await this.resolutionInput(runId, assignmentFile);
+    const { saved } = imported ?? await this.assignment(runId);
     const dir = path.join(await realpath(path.dirname(directory)), path.basename(directory));
-    return this.attempt('checkout', requestId, { runId, directory: dir }, async () => {
+    return this.attempt('checkout', requestId, { runId, directory: dir,
+      ...(imported ? {assignmentFile:imported.assignmentFile,assignmentSha256:imported.assignmentSha256} : {}) }, async () => {
+      if (imported) {
+        const file = path.join(this.connection.stateDirectory,'runs',runId+'.json');
+        try { await privateJson(file,saved,true); }
+        catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          const retained = await readPrivate(file);
+          if (JSON.stringify({...retained,directory:undefined}) !== JSON.stringify(saved)) throw new Error('This assignment already has a different retained credential. It was not replaced.');
+        }
+      }
       await mkdir(dir); // Existing or partial work is never reset or removed.
       const { remote, token, baseCommit, branch: ref } = saved.credentials;
       const http = gitHttp([{ remote, token }], { fetchImpl: this.fetchImpl, timeoutMs: 120000, maxBytes: 64 * 1024 * 1024 });
@@ -323,7 +331,8 @@ export class HostedAgentClient {
         // filesystem redirection. Pin the completed checkout, as push does.
         const completedDirectory = await realpath(dir);
         await privateJson(path.join(this.connection.stateDirectory, 'runs', runId + '.json'), { ...saved, directory: completedDirectory });
-        return { runId, directory: completedDirectory, branch: ref, headCommit: head, baseCommit };
+        return { runId, directory: completedDirectory, branch: ref, headCommit: head, baseCommit,
+          ...(imported ? {assignmentImported:true,credentialStatus:'saved-privately'} : {}) };
       } catch (error) { throw new Error('Checkout did not finish; its directory is retained. ' + this.sanitize(error.message)); }
     });
   }

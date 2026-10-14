@@ -88,25 +88,44 @@ After a conflict, the owner can create resolution work for an existing builder.
 Save the owner's issued-once `update-base` response (`mode: "resolve"`) as a private
 JSON file outside every Git checkout. This file contains the temporary Git token;
 do not paste it into chat, command arguments or logs. The builder uses its own
-connection to adopt that existing assignment:
+connection to import that existing assignment during checkout:
 
 ```powershell
 $assignment = Read-Host "Absolute private resolution response JSON file"
 $run = Read-Host "Resolution run UUID from the owner"
-node scripts/repository-work.mjs adopt --connection $connection --run $run --assignment $assignment --request-id ([guid]::NewGuid().ToString())
+$checkout = Read-Host "Absolute path for a new resolution checkout"
+node scripts/repository-work.mjs checkout --connection $connection --run $run --directory $checkout --assignment $assignment --request-id ([guid]::NewGuid().ToString())
+node scripts/repository-work.mjs start --connection $connection --run $run --request-id ([guid]::NewGuid().ToString())
 ```
 
-Adoption reads the live workspace to verify the builder identity, current task
+Checkout reads the live workspace to verify the builder identity, current task
 revision, run, fork, `updates/...` branch, base commit and credential expiry. It
 ignores the file's workspace snapshot. It creates no assignment, sends no remote
 mutation and grants no owner permissions. A different retained credential is
-refused; repeating the same adoption preserves an existing checkout binding.
-Remove the source response file after confirming `credentialStatus: saved-privately`.
+refused. Existing directories are preserved; a partial clone requires a new
+directory and request ID after inspection. Remove the source response file after
+confirmed checkout with `assignmentImported: true`. The earlier separate `adopt`
+command is replaced by this checkout option.
 
-Use the normal `checkout`, `start`, `push` and `submit` commands above with the new
-run ID and a new directory. The original candidate remains retained. Submission
+After coding and committing, push and submit the exact head with one command:
+
+```powershell
+$head = git -C $checkout rev-parse HEAD
+node scripts/repository-work.mjs submit --connection $connection --run $run --directory $checkout --head $head --summary "Resolved both changes" --request-id ([guid]::NewGuid().ToString())
+```
+
+`submit --directory` validates its complete input before any Git effect. It uses
+the existing guarded push path, confirms the exact remote head, then submits.
+The push keeps a deterministic child request UUID and its own attempt receipts;
+the parent receipt names that UUID. An uncertain push or submission stops. On an
+explicit same-key retry, an already-pushed head is observed without another write;
+an already-submitted matching result is reconciled without Git access or another
+POST. Changed inputs still conflict. The separate `push` command remains available
+when an agent intentionally wants to publish a candidate before submitting it.
+
+The original candidate remains retained. Submission
 retires the local credential; the updated candidate still needs fresh checks,
-independent review and owner acceptance. Adoption does not renew expired tokens
+independent review and owner acceptance. Checkout does not renew expired tokens
 or recover an issued-once token that was not saved.
 
 ### Retain and reconcile command outcomes
@@ -147,7 +166,7 @@ node scripts/repository-work.mjs fail --connection $connection --run $run --mess
 ```
 
 The existing `--url` mode still serves the local loopback controller and local owner
-operations. Hosted mode exposes only builder reads, claim, adopt, checkout, start, push,
+operations. Hosted mode exposes only builder reads, claim, checkout, start, push,
 submit, fail and receipt. Local transport fixtures and real local Git objects do
 not establish Cloudflare-hosted acceptance; retain hosted qualification separately.
 ## Project pagination

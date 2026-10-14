@@ -52,28 +52,27 @@ async function resolutionFixture(t){
  return {...f,input,assignmentFile,save};
 }
 
-test('adoption binds a resolution to live authority without mutation and preserves checkout state on retry',async t=>{
+test('resolution checkout retains a bound credential when an existing directory prevents cloning',async t=>{
  const f=await resolutionFixture(t),key=crypto.randomUUID();
- const output=await f.client.adopt(run,f.assignmentFile,key);
- assert.equal(output.credentialStatus,'saved-privately');assert.equal(output.remoteMutation,false);
+ await assert.rejects(f.client.checkout(run,f.root,key,f.assignmentFile),/EEXIST/);
  assert.ok(f.requests.every(r=>r.method==='GET'));
  const filename=path.join(f.connection.stateDirectory,'runs',run+'.json'),saved=JSON.parse(await readFile(filename));
  assert.equal(saved.credentials.token,f.credentials.token);assert.equal(saved.credentials.branch,f.assignment.branch);
  saved.directory=path.join(f.root,'existing-checkout');await writeFile(filename,JSON.stringify(saved));
- await new HostedAgentClient(f.connection,{fetchImpl:f.fetchImpl}).adopt(run,f.assignmentFile,key);
+ await assert.rejects(new HostedAgentClient(f.connection,{fetchImpl:f.fetchImpl}).checkout(run,f.root,key,f.assignmentFile),/EEXIST/);
  assert.deepEqual(JSON.parse(await readFile(filename)),saved);
  const receipt=await f.client.receipt(key);assert.equal(receipt.attempts.length,2);
- for(const secret of [configuration.clientSecret,f.credentials.token])assert.ok(!JSON.stringify([output,receipt]).includes(secret));
+ for(const secret of [configuration.clientSecret,f.credentials.token])assert.ok(!JSON.stringify(receipt).includes(secret));
  f.credentials.token='different-credential';await f.save();
- await assert.rejects(f.client.adopt(run,f.assignmentFile,key),/conflicts/);
- await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()),/different retained credential/);
+ await assert.rejects(f.client.checkout(run,f.root,key,f.assignmentFile),/conflicts/);
+ await assert.rejects(f.client.checkout(run,f.root,crypto.randomUUID(),f.assignmentFile),/different retained credential/);
  assert.deepEqual(JSON.parse(await readFile(filename)),saved);
  await f.client.mutate('start',run,{},crypto.randomUUID());
  await f.client.mutate('submit',run,{headCommit:'e'.repeat(40),summary:'Resolved'},crypto.randomUUID());
  await assert.rejects(readFile(filename),{code:'ENOENT'});
 });
 
-test('adoption refuses foreign, stale, closed or mismatched assignments before saving a credential',async t=>{
+test('resolution checkout refuses foreign, stale, closed or mismatched assignments before saving a credential',async t=>{
  const changes=[
   f=>f.state.id='foreign',f=>f.assignment.agentIdentity={...f.assignment.agentIdentity,id:'foreign.access'},
   f=>f.state.authentication.principal.kind='owner',f=>f.input.mode='reapply',f=>f.input.runId=crypto.randomUUID(),
@@ -85,27 +84,29 @@ test('adoption refuses foreign, stale, closed or mismatched assignments before s
   ...['main','agents/'+'d'.repeat(32),'updates/../main','updates/'+'d'.repeat(32)+'/extra'].map(branch=>f=>{f.assignment.branch=branch;f.credentials.branch=branch;})
  ];
  for(const change of changes){const f=await resolutionFixture(t);change(f);await f.save();
-  await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()));
+  await assert.rejects(f.client.checkout(run,path.join(f.root,'checkout'),crypto.randomUUID(),f.assignmentFile));
   assert.ok(f.requests.every(r=>r.method==='GET'));await assert.rejects(readFile(path.join(f.connection.stateDirectory,'runs',run+'.json')),{code:'ENOENT'});
  }
 });
 
-test('adoption requires a bounded private file outside Git and refuses malformed or absent credentials',async t=>{
+test('resolution checkout requires a bounded private file outside Git',async t=>{
  const f=await resolutionFixture(t);
- await assert.rejects(f.client.adopt(run,'resolution.json',crypto.randomUUID()),/absolute private/);
- await writeFile(f.assignmentFile,Buffer.from([123,0xff,125]));await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()),/UTF-8/);
- await writeFile(f.assignmentFile,' '.repeat(4*1024*1024+1));await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()),/exceeds/);
- await f.save();await mkdir(path.join(f.root,'.git'));await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()),/outside Git/);
+ const checkout=(file)=>f.client.checkout(run,path.join(f.root,'checkout'),crypto.randomUUID(),file);
+ await assert.rejects(checkout('resolution.json'),/absolute private/);
+ await writeFile(f.assignmentFile,Buffer.from([123,0xff,125]));await assert.rejects(checkout(f.assignmentFile),/UTF-8/);
+ await writeFile(f.assignmentFile,' '.repeat(4*1024*1024+1));await assert.rejects(checkout(f.assignmentFile),/exceeds/);
+ await f.save();await mkdir(path.join(f.root,'.git'));await assert.rejects(checkout(f.assignmentFile),/outside Git/);
  assert.equal(f.requests.length,0);
 });
 
-test('real CLI adopts a resolution file without printing its token or posting to the API',async t=>{
+test('real CLI parses the resolution checkout option and rejects mismatched input without exposing secrets',async t=>{
  const f=await resolutionFixture(t),loader=path.join(f.root,'read-only-api-loader.mjs');
+ f.input.mode='reapply';await f.save();
  await writeFile(loader,`const state=${JSON.stringify(f.state)};globalThis.fetch=async(url,options)=>{if(url.origin!==${JSON.stringify(configuration.origin)}||options.method!=='GET')throw Error('Unexpected mutation or origin');return Response.json(state);};`);
- const result=await execute(process.execPath,['--import',pathToFileURL(loader).href,path.resolve('scripts/repository-work.mjs'),'adopt','--connection',f.file,'--run',run,'--assignment',f.assignmentFile,'--request-id',crypto.randomUUID()],{windowsHide:true});
- const data=JSON.parse(result.stdout);assert.equal(data.runId,run);assert.equal(data.credentialStatus,'saved-privately');assert.equal(data.remoteMutation,false);
- for(const secret of [configuration.clientSecret,f.credentials.token])assert.ok(!result.stdout.includes(secret)&&!result.stderr.includes(secret));
- const help=await execute(process.execPath,[path.resolve('scripts/repository-work.mjs'),'adopt','--help']);assert.match(help.stdout,/--assignment/);
+ await assert.rejects(execute(process.execPath,['--import',pathToFileURL(loader).href,path.resolve('scripts/repository-work.mjs'),'checkout','--connection',f.file,'--run',run,'--directory',path.join(f.root,'checkout'),'--assignment',f.assignmentFile,'--request-id',crypto.randomUUID()],{windowsHide:true}),error=>{assert.match(error.stderr,/Resolution file/);for(const secret of [configuration.clientSecret,f.credentials.token])assert.ok(!error.stdout.includes(secret)&&!error.stderr.includes(secret));return true;});
+ const help=await execute(process.execPath,[path.resolve('scripts/repository-work.mjs'),'checkout','--help']);assert.match(help.stdout,/--assignment/);
+ const submitHelp=await execute(process.execPath,[path.resolve('scripts/repository-work.mjs'),'submit','--help']);assert.match(submitHelp.stdout,/--directory/);
+ await assert.rejects(execute(process.execPath,[path.resolve('scripts/repository-work.mjs'),'adopt','--help']),error=>/Unknown command/.test(error.stderr));
 });
 
 test('connection configuration refuses unsafe origins, unknown fields, malformed UTF-8 and repository storage',async t=>{

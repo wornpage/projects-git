@@ -62,10 +62,10 @@ Every name has the `projects_git_` prefix.
 | `project_status` | Read the queue, prerequisites, candidates, counters and capacity |
 | `get_task` | Read requirements, commit details and evidence for a task |
 | `claim` | Reserve eligible work for this builder, or report idle |
-| `checkout` | Clone its assigned fork into a new absolute directory |
+| `checkout` | Clone its assigned fork into a new absolute directory; optional `assignment` imports a private owner-issued resolution file |
 | `start` | Report that this builder has started its assignment |
 | `push` | Push the exact committed head to the assigned fork and branch |
-| `submit` | Submit the pushed commit for independent checks and review |
+| `submit` | Submit an exact commit for independent checks and review; optional `directory` performs the guarded push first and retains its child receipt |
 | `fail` | Retain an assignment's failure and release its execution reservation |
 | `receipt` | Read this connection's retained operation attempts without network I/O |
 
