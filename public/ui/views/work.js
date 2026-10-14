@@ -93,10 +93,11 @@ export function createWorkView({
       : !prerequisites.ready ? 'This task becomes eligible after its prerequisites are integrated. Other eligible work can proceed.'
       : agentsUnavailable ? 'Your task is saved. This isolated trial has no connected agents or model key, so no agent work has started.'
       : 'No agent has been assigned. Start with one checkout for this task.';
-    const pendingAssignment = hasPendingAssignment(task.id);
+    let assignment = repositoryAgents(task);
+    const pendingAssignment = Boolean(assignment && hasPendingAssignment(task.id));
     // An unresolved request must remain recoverable, even after a task closes.
     // Otherwise completed/accepted work cannot create another assignment.
-    const assignment = pendingAssignment || !task.mergedCommit && !task.acceptedRunId ? repositoryAgents(task) : null;
+    if (!pendingAssignment && (task.mergedCommit || task.acceptedRunId)) assignment = null;
     const assignmentAction = pendingAssignment ? 'Resolve pending assignment' : 'Prepare another candidate';
     return el('div', {}, taskHeader(task),
       !demo && !agentsUnavailable && taskQueued(workspace,task) && (!workspace.authentication || workspace.authentication.permissions.manage)
