@@ -58,5 +58,6 @@ export function recordGitCandidate(state: Workspace, taskId: string, input: { id
 export const MAX_ACTIVE_RUNS: number;
 export function setTaskOwner(state: Workspace, taskId: string, input: { owner: string; expectedOwnerVersion: number }): Task;
 export function coordination(state: Workspace, runId: string): { acceptance: { code: string; met: boolean; label: string; message: string }[]; activeRunIds: string[]; blockingRunIds: string[]; overlaps: { runId: string; taskId: string; headCommit: string; label: string; status: string; paths: string[] }[] };
+export function workspaceCoordination(state: Workspace): Record<string, ReturnType<typeof coordination>>;
 
 export function updateTaskBase(state: Workspace, taskId: string, input: { expectedBaseCommit: string; baseCommit: string; sourceRunId: string }): Task;

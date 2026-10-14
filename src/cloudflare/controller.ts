@@ -1,4 +1,4 @@
-import { createWorkspace, reviseTask, setTaskOwner, updateTaskBase, recordGitCandidate, coordination, MAX_ACTIVE_RUNS, assignRun, startRun, completeRun, verifyRun, reviewRun, codeReviewContext, recordCodeReview, recordFindingDecision, assignReviewers, mergeRun, failRun, metrics, WorkflowError } from "../core/workflow.mjs";
+import { createWorkspace, reviseTask, setTaskOwner, updateTaskBase, recordGitCandidate, workspaceCoordination, MAX_ACTIVE_RUNS, assignRun, startRun, completeRun, verifyRun, reviewRun, codeReviewContext, recordCodeReview, recordFindingDecision, assignReviewers, mergeRun, failRun, metrics, WorkflowError } from "../core/workflow.mjs";
 import type { Workspace, Evidence, Review, Task, Project, Run, AuthenticatedIdentity, CodeReviewFinding } from "../core/workflow.mjs";
 import { taskBriefs, projectName, queueProjectTasks, eligibleQueuedTasks, queueIdle, bindQueuedBase, requireProjectAdmission, setProjectPolicy } from '../core/project-work.mjs';
 import { executionLimits, runEditingAgent } from '../core/agent.mjs';
@@ -321,7 +321,7 @@ export class HostedController {
     const recoveryRequiredMergeIntents = Object.values(mergeStateByRun).filter(value => value === 'recovery-required').length;
     return { ...state, reviewerNames: canManage ? state.reviewerNames : undefined,
       reviewRequests,
-      sampleTask, metrics: metrics(state), coordination: Object.fromEntries(state.runs.map(run => [run.id, coordination(presentation, run.id)])),
+      sampleTask, metrics: metrics(state), coordination: workspaceCoordination(presentation),
       authentication: { mode: 'cloudflare-access', principal: this.authority.principal, adoptionRequired: !state.authentication,
         permissions: { manage: this.authority.principal.kind === 'owner', review: this.authority.principal.kind === 'owner', merge: this.authority.principal.kind === 'owner' },
         agentClientIds: this.authority.principal.kind === 'owner' ? this.authority.policy.agentClientIds : [],

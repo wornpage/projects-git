@@ -101,11 +101,58 @@ export function setTaskOwner(state, taskId, { owner, expectedOwnerVersion }) {
   return task;
 }
 
+// Built from one current snapshot and discarded after the read. Never retain an
+// index across workflow mutations or use presentation results as authorization.
+function coordinationIndex(state) {
+  const tasks = new Map(), runs = new Map(), byTask = new Map(), byRepository = new Map(), missingTasks = [];
+  for (const task of state.tasks) if (!tasks.has(task.id)) tasks.set(task.id, task);
+  const append = (map, key, entry) => {
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(entry);
+  };
+  state.runs.forEach((run, position) => {
+    if (!runs.has(run.id)) runs.set(run.id, run);
+    if (run.status === 'superseded') return;
+    const entry = {run, position}, task = tasks.get(run.taskId);
+    append(byTask, run.taskId, entry);
+    if (!task) { missingTasks.push(run); return; }
+    if (task.repositoryKey) {
+      if (!byRepository.has(task.repositoryKey)) byRepository.set(task.repositoryKey, new Map());
+      append(byRepository.get(task.repositoryKey), run.baseCommit, entry);
+    }
+  });
+  return {tasks, runs, byTask, byRepository, missingTasks};
+}
+
+function relatedRuns(index, task, run) {
+  // The existing repository comparison refuses a missing related task. Keep
+  // that refusal even when an orphan's base would otherwise exclude it.
+  if (task.repositoryKey) requireThat(!index.missingTasks.some(other => other.id !== run.id), 'task_not_found', 'Task not found.', 404);
+  const taskRuns = index.byTask.get(task.id) ?? [];
+  const baseRuns = task.repositoryKey ? index.byRepository.get(task.repositoryKey)?.get(run.baseCommit) ?? [] : [];
+  const related = [];
+  let left = 0, right = 0;
+  // Both lists already follow retained order. Merge their union without
+  // duplicating a candidate present in both lists or sorting every result.
+  while (left < taskRuns.length || right < baseRuns.length) {
+    let entry;
+    if (right === baseRuns.length || left < taskRuns.length && taskRuns[left].position < baseRuns[right].position) entry = taskRuns[left++];
+    else {
+      entry = baseRuns[right++];
+      if (left < taskRuns.length && taskRuns[left].position === entry.position) left++;
+    }
+    if (entry.run.id !== run.id) related.push(entry.run);
+  }
+  return related;
+}
+
 /** Same-file overlap is a review signal, not a claim of semantic merge conflict. */
-export function coordination(state, runId) {
-  const run = runFor(state, runId), task = taskFor(state, run.taskId);
-  const related = state.runs.filter(other => other.id !== run.id && other.status !== 'superseded' && (other.taskId === task.id
-    || (task.repositoryKey && taskFor(state, other.taskId).repositoryKey === task.repositoryKey && other.baseCommit === run.baseCommit)));
+function coordinatedRun(state, runId, index) {
+  const run = index.runs.get(runId);
+  requireThat(run, 'run_not_found', 'Agent run not found.', 404);
+  const task = index.tasks.get(run.taskId);
+  requireThat(task, 'task_not_found', 'Task not found.', 404);
+  const related = relatedRuns(index, task, run);
   const overlaps = related.filter(other => other.headCommit && other.status !== 'rejected').map(other => ({ runId: other.id, taskId: other.taskId,
     headCommit: other.headCommit, label: other.label, status: other.status,
     paths: run.changedFiles.filter(file => other.changedFiles.some(path => file === path || file.startsWith(path + '/') || path.startsWith(file + '/'))) })).filter(item => item.paths.length);
@@ -114,12 +161,24 @@ export function coordination(state, runId) {
   // The snapshot and review transition use the same prerequisites. Browser
   // hints never replace the server's current head/revision/owner/comparison checks.
   result.acceptance = acceptanceRequirements(task, run, result);
-  if (state.provider === 'cloudflare-artifacts') result.acceptance.push({ code: 'independent_review_required', met: independentReviewStatus(state, run).passed,
-    label: independentReviewStatus(state, run).label, message: 'Obtain a passing independent code review of this commit, requirements and verification policy before owner acceptance.' });
+  if (state.provider === 'cloudflare-artifacts') {
+    const review = independentReviewStatus(state, run);
+    result.acceptance.push({ code: 'independent_review_required', met: review.passed,
+      label: review.label, message: 'Obtain a passing independent code review of this commit, requirements and verification policy before owner acceptance.' });
+  }
   if (state.projects?.[task.projectId]) result.acceptance.push({ code: 'project_advanced', met: state.projects[task.projectId].mainCommit === task.baseCommit
     && (!state.projects[task.projectId].repositoryObservation || state.projects[task.projectId].repositoryObservation.headCommit === task.baseCommit),
     label: 'Task includes the current project main', message: 'Project main advanced. Update the task base and verify the resulting candidate before acceptance.' });
   return result;
+}
+
+export function coordination(state, runId) {
+  return coordinatedRun(state, runId, coordinationIndex(state));
+}
+
+export function workspaceCoordination(state) {
+  const index = coordinationIndex(state);
+  return Object.fromEntries(state.runs.map(run => [run.id, coordinatedRun(state, run.id, index)]));
 }
 
 function acceptanceRequirements(task, run, related) {

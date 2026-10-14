@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, openSyn
 import { resolve, dirname, extname, basename, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWorkspace, createTask, reviseTask, assignRun, startRun, completeRun, verifyRun,
-  failRun, reviewRun, mergeRun, setTaskOwner, updateTaskBase, recordGitCandidate, coordination, MAX_ACTIVE_RUNS, metrics, WorkflowError, validateCommit } from '../core/workflow.mjs';
+  failRun, reviewRun, mergeRun, setTaskOwner, updateTaskBase, recordGitCandidate, workspaceCoordination, MAX_ACTIVE_RUNS, metrics, WorkflowError, validateCommit } from '../core/workflow.mjs';
 import { GitRunner } from './git-runner.mjs';
 import { chatProvider, executionLimits, runEditingAgent } from '../core/agent.mjs';
 import { DockerChecks } from './sandbox-checks.mjs';
@@ -299,7 +299,7 @@ export function createApplication({ dataDir = resolve(projectRoot, '.local'), pu
     const activeMergeIntents = Object.values(mergeStateByRun).filter(value => value === 'running').length;
     const recoveryRequiredMergeIntents = Object.values(mergeStateByRun).filter(value => value === 'recovery-required').length;
     return ({ ...state, metrics: metrics(state),
-    coordination: Object.fromEntries(state.runs.map(run => [run.id, coordination(state, run.id)])),
+    coordination: workspaceCoordination(state),
     capacity: { limit: MAX_ACTIVE_RUNS, running: state.runs.filter(run => run.status === 'running').length, queued: state.runs.filter(run => run.status === 'assigned').length,
       reserved: state.runs.filter(run => run.status === 'assigned').length, occupied: state.runs.filter(run => ['assigned', 'running'].includes(run.status)).length },
     capabilities: { demo: true, model: Boolean(modelProvider && sandbox), repository: true, inspectRepository: true, merge: true, verify: true, revise: true, handoff: true, coordination: true, dependencies: true, providerVerified: false, publish: Boolean(publication) },
