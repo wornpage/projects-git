@@ -61,14 +61,14 @@ async function fixture(t) {
   return { root, work, git, transport, candidate, merge, baseCommit, received, interceptReceive: hook => { beforeReceive = hook; } };
 }
 
-async function hostedClientFixture(t) {
+async function hostedClientFixture(t, resolution = false) {
   const f = await fixture(t), projectId = crypto.randomUUID(), taskId = crypto.randomUUID(), runId = crypto.randomUUID();
   const scope = { origin: 'https://workspace.example.test', workspaceId: 'hosted-client-fixture', clientId: 'a'.repeat(32) + '.access' };
   const principal = { kind: 'agent', id: scope.clientId, workspaceId: scope.workspaceId };
-  const run = { id: runId, taskId, status: 'assigned', branch: 'agents/' + 'c'.repeat(32), baseCommit: f.baseCommit,
-    repository: 'https://git.example.test/fork.git', agentIdentity: principal };
+  const run = { id: runId, taskId, status: 'assigned', branch: (resolution?'updates/':'agents/') + 'c'.repeat(32), baseCommit: f.baseCommit,
+    origin:'external-agent',assignedRevision:2,...(resolution?{reconcilesRunId:crypto.randomUUID()}:{}),repository: 'https://git.example.test/fork.git', agentIdentity: principal };
   const state = { id: scope.workspaceId, version: 1, authentication: { mode: 'cloudflare-access', principal },
-    projects: { [projectId]: { id: projectId } }, tasks: [{ id: taskId, projectId }], runs: [run] };
+    projects: { [projectId]: { id: projectId } }, tasks: [{ id: taskId, projectId,revision:2,baseCommit:f.baseCommit }], runs: [run] };
   let dropWrite = false;
   const client = new HostedAgentClient({ ...scope, clientSecret: 'service-fixture-secret', stateDirectory: path.join(f.root, 'private-client-state') }, {
     fetchImpl: async (url, options) => {
@@ -84,13 +84,14 @@ async function hostedClientFixture(t) {
       return Response.json(state);
     },
   });
-  await client.claim(projectId, 'Native Git client fixture', crypto.randomUUID());
+  if(resolution){const filename=path.join(f.root,'resolution.json');await writeFile(filename,JSON.stringify({mode:'resolve',runId,taskId,projectId,credentials:{remote:run.repository,token:'fork-write-token',branch:run.branch,baseCommit:f.baseCommit,expiresAt:new Date(Date.now()+900000).toISOString()}}),{mode:0o600});await client.execute('adopt',{run:runId,assignment:filename,requestId:crypto.randomUUID()});}
+  else await client.claim(projectId, 'Native Git client fixture', crypto.randomUUID());
   const directory = path.join(f.root, 'agent-checkout');
   return { ...f, client, directory, runId, run, dropNextWrite: () => { dropWrite = true; } };
 }
 
-test('hosted agent client checks out and pushes only its assigned branch using real Git objects', async t => {
-  const f = await hostedClientFixture(t);
+for(const resolution of [false,true])test('hosted agent client checks out and pushes only its '+(resolution?'adopted resolution':'claimed')+' branch using real Git objects', async t => {
+  const f = await hostedClientFixture(t,resolution);
   const checkout = await f.client.checkout(f.runId, f.directory, crypto.randomUUID());
   assert.equal(checkout.headCommit, f.baseCommit);
   await f.client.mutate('start', f.runId, {}, crypto.randomUUID());
@@ -105,6 +106,7 @@ test('hosted agent client checks out and pushes only its assigned branch using r
   assert.ok(f.received.every(item => item.token === 'Bearer fork-write-token'));
   assert.ok(!(await readFile(path.join(f.directory, '.git', 'config'), 'utf8')).includes('fork-write-token'));
   assert.equal((await f.client.mutate('submit', f.runId, { headCommit: head, summary: 'Native Git fixture' }, crypto.randomUUID())).status, 'awaiting_review');
+  await assert.rejects(readFile(path.join(f.client.connection.stateDirectory,'runs',f.runId+'.json')),{code:'ENOENT'});
 });
 
 test('hosted checkout retains the resolved child directory and rejects a different checkout after restart', async t => {

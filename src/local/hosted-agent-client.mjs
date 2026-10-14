@@ -12,7 +12,7 @@ const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const fields = ['format', 'origin', 'workspaceId', 'clientId', 'clientSecret'];
-const branch = value => typeof value === 'string' && /^agents\/[a-f0-9]{32}$/.test(value);
+const branch = value => typeof value === 'string' && /^(agents|updates)\/[a-f0-9]{32}$/.test(value);
 const id = (value, label) => { if (!uuid(value)) throw new Error(label + ' must be a UUID.'); return value; };
 const safeText = (value, maximum, label) => {
   if (typeof value !== 'string' || !value.trim() || value.length > maximum || /[\0\r\n]/.test(value)) throw new Error(label + ' is missing or invalid.');
@@ -35,10 +35,20 @@ async function readPrivate(file, limit = 1048576) {
   return parseJson(await readBounded(file, limit, 'Private client state'), 'Private client state');
 }
 
+async function readPrivateInput(filename, limit, label) {
+  if (typeof filename !== 'string' || !path.isAbsolute(filename)) throw new Error(label + ' must name an absolute private JSON file.');
+  const parent = await realpath(path.dirname(filename));
+  for (let directory = parent; ; directory = path.dirname(directory)) {
+    try { await lstat(path.join(directory, '.git')); throw new Error('Keep credentials outside Git checkouts.'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (path.dirname(directory) === directory) break;
+  }
+  return readPrivate(filename, limit);
+}
+
 /** Explicit connection files never enroll an identity or change an Access policy. */
 export async function loadHostedConnection(filename) {
-  if (!path.isAbsolute(filename)) throw new Error('--connection must name an absolute private JSON file.');
-  const configuration = await readPrivate(filename, 16384);
+  const configuration = await readPrivateInput(filename, 16384, '--connection');
   if (!configuration || Array.isArray(configuration) || Object.keys(configuration).some(key => !fields.includes(key))
     || fields.some(key => typeof configuration[key] !== 'string') || configuration.format !== 'projects-git-hosted-connection/v1') throw new Error('Invalid hosted connection format; see docs/hosted-agent-client.md.');
   let url;
@@ -48,11 +58,6 @@ export async function loadHostedConnection(filename) {
   if (!/^[a-zA-Z0-9_.-]{1,256}\.access$/.test(configuration.clientId)) throw new Error('Invalid Access service client ID.');
   safeText(configuration.clientSecret, 4096, 'Access service secret');
   const parent = await realpath(path.dirname(filename));
-  for (let directory = parent; ; directory = path.dirname(directory)) {
-    try { await lstat(path.join(directory, '.git')); throw new Error('Keep connection credentials outside Git checkouts.'); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
-    if (path.dirname(directory) === directory) break;
-  }
   return { ...configuration, stateDirectory: path.join(parent, path.basename(filename) + '.state', hash(JSON.stringify([configuration.origin, configuration.workspaceId, configuration.clientId]))) };
 }
 
@@ -91,8 +96,9 @@ export class HostedAgentClient {
         : command === 'status' ? projectStatus(workspace, options.project, url) : taskDetail(workspace, options.task, url);
     }
     if (command === 'receipt') return this.receipt(options.requestId);
-    if (!['claim', 'checkout', 'push', 'start', 'submit', 'fail'].includes(command)) throw new Error('Unsupported hosted builder command.');
+    if (!['claim', 'adopt', 'checkout', 'push', 'start', 'submit', 'fail'].includes(command)) throw new Error('Unsupported hosted builder command.');
     const output = command === 'claim' ? await this.claim(options.project, options.label, options.requestId)
+      : command === 'adopt' ? await this.adopt(options.run, options.assignment, options.requestId)
       : command === 'checkout' ? await this.checkout(options.run, options.directory, options.requestId)
       : command === 'push' ? await this.push(options.run, options.directory, options.head, options.requestId)
       : await this.mutate(command, options.run, { headCommit: options.head, summary: options.summary, message: options.message }, options.requestId);
@@ -205,13 +211,7 @@ export class HostedAgentClient {
       if (result.projectId !== projectId || state.tasks.find(task => task.id === run.taskId)?.projectId !== projectId) throw new Error('Claim returned work outside the requested project.');
       const file = path.join(this.connection.stateDirectory, 'runs', run.id + '.json');
       if (result.credentials) {
-        const credential = result.credentials;
-        this.secrets.add(credential.token);
-        const remote = new URL(credential.remote);
-        if (remote.protocol !== 'https:' || remote.username || remote.password || remote.search || remote.hash || !remote.pathname.endsWith('.git')
-          || credential.remote !== run.repository || credential.branch !== run.branch || credential.baseCommit !== run.baseCommit
-          || !branch(credential.branch) || !oid(credential.baseCommit) || typeof credential.token !== 'string' || !credential.token
-          || !Number.isFinite(Date.parse(credential.expiresAt)) || Date.parse(credential.expiresAt) <= this.now()) throw new Error('Assignment credentials do not match the retained run.');
+        const credential = this.validateCredential(run, result.credentials);
         await privateJson(file, { scope: this.scope, runId: run.id, taskId: run.taskId, projectId, credentials: credential });
       }
       let retained = false;
@@ -220,6 +220,45 @@ export class HostedAgentClient {
       return { runId: run.id, taskId: run.taskId, projectId, replayed: result.replayed === true,
         credentialStatus: retained ? 'saved-privately' : 'unavailable',
         next: retained ? 'Use checkout with this run ID and a new directory. Git credentials are temporary and never printed.' : 'The server returns Git credentials once. Inspect the retained assignment; explicitly close it and agree new work if its credential response was lost.' };
+    });
+  }
+
+  validateCredential(run, credential) {
+    if (typeof credential?.token === 'string') this.secrets.add(credential.token);
+    let remote;
+    try { remote = new URL(credential?.remote); } catch { throw new Error('Assignment credentials do not match the retained run.'); }
+    if (remote.protocol !== 'https:' || remote.username || remote.password || remote.search || remote.hash || !remote.pathname.endsWith('.git')
+      || credential.remote !== run.repository || credential.branch !== run.branch || credential.baseCommit !== run.baseCommit
+      || !branch(credential.branch) || credential.branch.startsWith('updates/') && !uuid(run.reconcilesRunId)
+      || !oid(credential.baseCommit) || typeof credential.token !== 'string' || !credential.token || credential.token.length > 4096 || /[\0\r\n]/.test(credential.token)
+      || typeof credential.expiresAt !== 'string' || !Number.isFinite(Date.parse(credential.expiresAt))) throw new Error('Assignment credentials do not match the retained run.');
+    if (Date.parse(credential.expiresAt) <= this.now()) throw new Error('Assignment Git credential expired. No credential renewal or replacement work was requested.');
+    return Object.fromEntries(['token','expiresAt','remote','branch','baseCommit'].map(key => [key, credential[key]]));
+  }
+
+  /** Import only an existing owner-issued resolution; the builder cannot create one. */
+  async adopt(runId, filename, requestId) {
+    id(runId, 'Run ID'); id(requestId, 'Request ID');
+    const input = await readPrivateInput(filename, 4 * 1024 * 1024, '--assignment');
+    if (typeof input?.credentials?.token === 'string') this.secrets.add(input.credentials.token);
+    const state = await this.workspace({run:runId}), run = this.ownRun(state, runId), task = state.tasks.find(item => item.id === run.taskId);
+    if (input?.mode !== 'resolve' || input.runId !== runId || input.taskId !== run.taskId || input.projectId !== task?.projectId
+      || !Object.hasOwn(state.projects, input.projectId) || run.origin !== 'external-agent' || !uuid(run.reconcilesRunId)
+      || typeof run.branch !== 'string' || !run.branch.startsWith('updates/') || !['assigned','running'].includes(run.status)
+      || run.baseCommit !== task.baseCommit || !Number.isSafeInteger(task.revision) || task.revision < 1
+      || run.assignedRevision !== task.revision) throw new Error('Resolution file does not match the current unfinished assignment.');
+    const credentials = this.validateCredential(run, input.credentials);
+    const saved = {scope:this.scope,runId,taskId:run.taskId,projectId:task.projectId,credentials};
+    return this.attempt('adopt', requestId, {runId,assignmentFile:await realpath(filename),assignmentSha256:hash(JSON.stringify(saved))}, async () => {
+      const file = path.join(this.connection.stateDirectory, 'runs', runId + '.json');
+      try { await privateJson(file, saved, true); }
+      catch (error) {
+        if (error.code !== 'EEXIST') throw error;
+        const retained = await readPrivate(file);
+        if (JSON.stringify({...retained,directory:undefined}) !== JSON.stringify(saved)) throw new Error('This assignment already has a different retained credential. It was not replaced.');
+      }
+      return {runId,taskId:run.taskId,projectId:task.projectId,credentialStatus:'saved-privately',remoteMutation:false,
+        next:'Use checkout with this run ID and a new directory. The source assignment file is still private input; remove it after confirming adoption.'};
     });
   }
 
@@ -262,8 +301,7 @@ export class HostedAgentClient {
     const saved = await readPrivate(path.join(this.connection.stateDirectory, 'runs', runId + '.json'));
     if (JSON.stringify(saved.scope) !== JSON.stringify(this.scope) || saved.runId !== runId || saved.credentials?.remote !== run.repository
       || saved.credentials.branch !== run.branch || saved.credentials.baseCommit !== run.baseCommit) throw new Error('Saved Git credential does not match this assignment.');
-    if (Date.parse(saved.credentials.expiresAt) <= this.now()) throw new Error('Assignment Git credential expired. No credential renewal or replacement work was requested.');
-    this.secrets.add(saved.credentials.token); return { run, saved };
+    this.validateCredential(run, saved.credentials); return { run, saved };
   }
 
   async checkout(runId, directory, requestId) {

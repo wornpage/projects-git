@@ -41,6 +41,73 @@ async function fixture(t){
  return {root,file,connection,client,state,assignment,credentials,requests,fetchImpl,dropNextClaim:()=>drop=true,dropNextSubmit:()=>dropSubmit=true};
 }
 
+async function resolutionFixture(t){
+ const f=await fixture(t);
+ Object.assign(f.assignment,{branch:'updates/'+'d'.repeat(32),reconcilesRunId:crypto.randomUUID(),assignedRevision:2});
+ Object.assign(f.state.tasks[0],{revision:2,baseCommit:f.assignment.baseCommit});
+ f.credentials.branch=f.assignment.branch;
+ const input={mode:'resolve',runId:run,taskId:task,projectId:project,credentials:f.credentials,workspace:{id:'untrusted-file-snapshot'}};
+ const assignmentFile=path.join(f.root,'resolution.json');
+ const save=async()=>writeFile(assignmentFile,JSON.stringify(input),{mode:0o600});await save();
+ return {...f,input,assignmentFile,save};
+}
+
+test('adoption binds a resolution to live authority without mutation and preserves checkout state on retry',async t=>{
+ const f=await resolutionFixture(t),key=crypto.randomUUID();
+ const output=await f.client.adopt(run,f.assignmentFile,key);
+ assert.equal(output.credentialStatus,'saved-privately');assert.equal(output.remoteMutation,false);
+ assert.ok(f.requests.every(r=>r.method==='GET'));
+ const filename=path.join(f.connection.stateDirectory,'runs',run+'.json'),saved=JSON.parse(await readFile(filename));
+ assert.equal(saved.credentials.token,f.credentials.token);assert.equal(saved.credentials.branch,f.assignment.branch);
+ saved.directory=path.join(f.root,'existing-checkout');await writeFile(filename,JSON.stringify(saved));
+ await new HostedAgentClient(f.connection,{fetchImpl:f.fetchImpl}).adopt(run,f.assignmentFile,key);
+ assert.deepEqual(JSON.parse(await readFile(filename)),saved);
+ const receipt=await f.client.receipt(key);assert.equal(receipt.attempts.length,2);
+ for(const secret of [configuration.clientSecret,f.credentials.token])assert.ok(!JSON.stringify([output,receipt]).includes(secret));
+ f.credentials.token='different-credential';await f.save();
+ await assert.rejects(f.client.adopt(run,f.assignmentFile,key),/conflicts/);
+ await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()),/different retained credential/);
+ assert.deepEqual(JSON.parse(await readFile(filename)),saved);
+ await f.client.mutate('start',run,{},crypto.randomUUID());
+ await f.client.mutate('submit',run,{headCommit:'e'.repeat(40),summary:'Resolved'},crypto.randomUUID());
+ await assert.rejects(readFile(filename),{code:'ENOENT'});
+});
+
+test('adoption refuses foreign, stale, closed or mismatched assignments before saving a credential',async t=>{
+ const changes=[
+  f=>f.state.id='foreign',f=>f.assignment.agentIdentity={...f.assignment.agentIdentity,id:'foreign.access'},
+  f=>f.state.authentication.principal.kind='owner',f=>f.input.mode='reapply',f=>f.input.runId=crypto.randomUUID(),
+  f=>f.input.taskId=crypto.randomUUID(),f=>f.input.projectId=crypto.randomUUID(),f=>f.assignment.status='superseded',
+  f=>f.state.tasks[0].revision++,f=>f.state.tasks[0].baseCommit='e'.repeat(40),f=>delete f.assignment.reconcilesRunId,
+  f=>f.credentials.baseCommit='e'.repeat(40),f=>f.credentials.remote='https://unrelated.example/fork.git',
+  f=>f.credentials.branch='updates/'+'e'.repeat(32),f=>f.credentials.expiresAt='not-a-time',
+  f=>f.credentials.expiresAt=new Date(Date.now()-1000).toISOString(),f=>f.input.credentials=null,
+  ...['main','agents/'+'d'.repeat(32),'updates/../main','updates/'+'d'.repeat(32)+'/extra'].map(branch=>f=>{f.assignment.branch=branch;f.credentials.branch=branch;})
+ ];
+ for(const change of changes){const f=await resolutionFixture(t);change(f);await f.save();
+  await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()));
+  assert.ok(f.requests.every(r=>r.method==='GET'));await assert.rejects(readFile(path.join(f.connection.stateDirectory,'runs',run+'.json')),{code:'ENOENT'});
+ }
+});
+
+test('adoption requires a bounded private file outside Git and refuses malformed or absent credentials',async t=>{
+ const f=await resolutionFixture(t);
+ await assert.rejects(f.client.adopt(run,'resolution.json',crypto.randomUUID()),/absolute private/);
+ await writeFile(f.assignmentFile,Buffer.from([123,0xff,125]));await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()),/UTF-8/);
+ await writeFile(f.assignmentFile,' '.repeat(4*1024*1024+1));await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()),/exceeds/);
+ await f.save();await mkdir(path.join(f.root,'.git'));await assert.rejects(f.client.adopt(run,f.assignmentFile,crypto.randomUUID()),/outside Git/);
+ assert.equal(f.requests.length,0);
+});
+
+test('real CLI adopts a resolution file without printing its token or posting to the API',async t=>{
+ const f=await resolutionFixture(t),loader=path.join(f.root,'read-only-api-loader.mjs');
+ await writeFile(loader,`const state=${JSON.stringify(f.state)};globalThis.fetch=async(url,options)=>{if(url.origin!==${JSON.stringify(configuration.origin)}||options.method!=='GET')throw Error('Unexpected mutation or origin');return Response.json(state);};`);
+ const result=await execute(process.execPath,['--import',pathToFileURL(loader).href,path.resolve('scripts/repository-work.mjs'),'adopt','--connection',f.file,'--run',run,'--assignment',f.assignmentFile,'--request-id',crypto.randomUUID()],{windowsHide:true});
+ const data=JSON.parse(result.stdout);assert.equal(data.runId,run);assert.equal(data.credentialStatus,'saved-privately');assert.equal(data.remoteMutation,false);
+ for(const secret of [configuration.clientSecret,f.credentials.token])assert.ok(!result.stdout.includes(secret)&&!result.stderr.includes(secret));
+ const help=await execute(process.execPath,[path.resolve('scripts/repository-work.mjs'),'adopt','--help']);assert.match(help.stdout,/--assignment/);
+});
+
 test('connection configuration refuses unsafe origins, unknown fields, malformed UTF-8 and repository storage',async t=>{
  const f=await fixture(t);
  for(const patch of [{origin:'http://example.test'},{origin:'https://user:secret@example.test'},{origin:'https://example.test/path'},{origin:'https://example.test/'},{unexpected:true},{clientSecret:'x\r\ny'}]){

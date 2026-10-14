@@ -23,6 +23,7 @@ const commands = {
 const hostedCommands = {
   projects: ['connection'], status: ['connection', 'project'], show: ['connection', 'task'],
   claim: ['connection', 'project', 'label', 'request-id'],
+  adopt: ['connection', 'run', 'assignment', 'request-id'],
   start: ['connection', 'run', 'request-id'], submit: ['connection', 'run', 'head', 'summary', 'request-id'],
   fail: ['connection', 'run', 'message', 'request-id'],
   checkout: ['connection', 'run', 'directory', 'request-id'],
@@ -39,6 +40,7 @@ function help(command) {
   if (remote.length) console.log('\nHosted agent mode:\n' + remote.map(name => `node scripts/repository-work.mjs ${name} ${hostedCommands[name].map(key => `--${key} <${key}>`).join(' ')}`).join('\n')
     + '\nSee docs/hosted-agent-client.md. The client cannot change policy, create projects, verify, review, accept or merge.\nPrivate request receipts retain outcomes; receipt only reads them. Never print credentials or commit connection files or private client state.');
   if (!command || command==='projects') console.log('\nHosted projects returns ten projects. Continue with optional --offset <nextOffset> --revision <revision> from its page result; restart after a revision conflict.');
+  if (!command || command==='adopt') console.log('\nHosted adopt reads an absolute private owner-issued resolution response file. It verifies the current agent, run, fork, branch and base before retaining the credential locally. It sends no mutation and does not create or renew an assignment.');
   if (!command || ['connect', 'queue', 'claim', 'assign'].includes(command)) console.log('\n--request-id is an explicit UUID. Reuse it only for the same action, label and input.\nTask stack --brief: {"tasks":[{"title":"Change","purpose":"Result","criteria":["Check"],"owner":"Coordinator"}]}');
   if (!command || command === 'revise') console.log('\nRevision --brief: {"purpose":"Updated result","criteria":["Current criterion"],"reason":"Why it changed"}\n--expected-revision is the current task revision from show. Old reports and decisions remain recorded.');
   if (!command || command === 'admission') console.log('\n--state must be on or off; --expected-version is policyVersion from projects or status.\nOff blocks new assignments and starts. Existing runs continue under their chat host. Queueing, existing submissions and checks remain available.');

@@ -82,6 +82,35 @@ cannot configure checks, change project policy, review, accept or merge.
 
 ## Credentials and recovery
 
+### Continue a resolution assignment
+
+After a conflict, the owner can create resolution work for an existing builder.
+Save the owner's issued-once `update-base` response (`mode: "resolve"`) as a private
+JSON file outside every Git checkout. This file contains the temporary Git token;
+do not paste it into chat, command arguments or logs. The builder uses its own
+connection to adopt that existing assignment:
+
+```powershell
+$assignment = Read-Host "Absolute private resolution response JSON file"
+$run = Read-Host "Resolution run UUID from the owner"
+node scripts/repository-work.mjs adopt --connection $connection --run $run --assignment $assignment --request-id ([guid]::NewGuid().ToString())
+```
+
+Adoption reads the live workspace to verify the builder identity, current task
+revision, run, fork, `updates/...` branch, base commit and credential expiry. It
+ignores the file's workspace snapshot. It creates no assignment, sends no remote
+mutation and grants no owner permissions. A different retained credential is
+refused; repeating the same adoption preserves an existing checkout binding.
+Remove the source response file after confirming `credentialStatus: saved-privately`.
+
+Use the normal `checkout`, `start`, `push` and `submit` commands above with the new
+run ID and a new directory. The original candidate remains retained. Submission
+retires the local credential; the updated candidate still needs fresh checks,
+independent review and owner acceptance. Adoption does not renew expired tokens
+or recover an issued-once token that was not saved.
+
+### Retain and reconcile command outcomes
+
 The server returns a claim's Git credential once, for **15 minutes**. The client
 saves it privately before reporting success. It is never printed or saved in Git
 URLs/configuration. Confirmed submission/failure removes the client's credential
@@ -118,7 +147,7 @@ node scripts/repository-work.mjs fail --connection $connection --run $run --mess
 ```
 
 The existing `--url` mode still serves the local loopback controller and local owner
-operations. Hosted mode exposes only builder reads, claim, checkout, start, push,
+operations. Hosted mode exposes only builder reads, claim, adopt, checkout, start, push,
 submit, fail and receipt. Local transport fixtures and real local Git objects do
 not establish Cloudflare-hosted acceptance; retain hosted qualification separately.
 ## Project pagination
