@@ -142,10 +142,7 @@ export class ArtifactGit {
     if (await git.resolveRef({ ...repo, ref: 'HEAD' }) !== baseCommit) throw new Error('The fork base changed before the candidate commit.');
     await git.branch({ ...repo, ref: branch, checkout: true });
     repo.fs.writeFileSync('/repo/checkout.mjs', files[0].content, 'utf8');
-    repo.fs.mkdirSync('/repo/.projects', { recursive: true });
-    repo.fs.writeFileSync('/repo/.projects/task.json', JSON.stringify(context, null, 2) + '\n', 'utf8');
     await git.add({ ...repo, filepath: 'checkout.mjs' });
-    await git.add({ ...repo, filepath: '.projects/task.json' });
     const headCommit = await git.commit({ ...repo, message: `Implement task ${context.taskId} revision ${context.revision}\n\nRun: ${context.runId}`, author: { name: 'Projects Git agent', email: 'agent@projects.invalid' } });
     await beforePush(headCommit);
     const result = await git.push({ ...repo, http, url: remote, ref: branch, remoteRef: branch, force: false,

@@ -15,6 +15,8 @@
 .command-result { display: grid; gap: 4px; padding: 12px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; overflow-wrap: anywhere; }
 .command-result.selected { background: var(--worn-selected-bg); border-color: var(--worn-selected-border); color: var(--worn-selected-text); }
 #continuation-text { width: 100%; height: 38dvh; min-height: 140px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5; }
+.git-note-details { margin-block-start: 16px; overflow-wrap: anywhere; }
+#git-note-preview { width: 100%; min-height: 180px; height: 28dvh; resize: vertical; font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5; }
 #open-command-palette kbd { font-size: 10px; margin-left: 6px; }
 @media (max-width: 600px) {
   #project-header .shell-project-picker { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; }

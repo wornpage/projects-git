@@ -128,3 +128,11 @@ the complete project count, next offset and revision. Continue with
 `--offset <nextOffset> --revision <revision>` on the same command. A stale revision
 is refused; restart the listing. Project status, task reads and assignment reads
 load the relevant project. Workspace-wide capacity remains separately labeled.
+
+## Portable commit context
+
+The continuation dialog can export a bounded Git context file for an exact commit.
+Use [Git notes](git-notes.md) to attach it locally and explicitly synchronize
+`refs/notes/projects` with an intended private remote. This does not extend the
+hosted client's permissions or automatically push metadata with code. Workspace
+SQLite and project exports remain the authority and complete history.

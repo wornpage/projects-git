@@ -92,7 +92,7 @@ const compactNavigation=createCompactNavigation({document,getWorkspace:()=>works
 }});
 const collections=createCollectionPager({getScope:()=>JSON.stringify([workspace.id,workspace.authentication?.principal??null]),render});
 createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery});
-const {openContinuation} = createContinuationDialog({getContext, api, dialogs, showError});
+const {openContinuation} = createContinuationDialog({getContext, api, dialogs, showError, downloadJson});
 const {openRevision, renderRevisionPreview} = createRequirementsForm({getContext, api, dialogs, refresh, announce});
 const browserSession = createBrowserSession({drafts, disclosures, assignmentRequests, operationRequests, projectSelections, onWarning: showError});
 const taskCreation = createTaskCreation({getContext, currentProject, selectProject,

@@ -1,9 +1,18 @@
 import {$} from './dom.js';
 import {candidateAgentInstructions} from '../agent-instructions.js';
+import {buildGitNote,serializeGitNote} from '../git-notes.js';
+
+function resetPreview(selector,text) {
+  const preview=$(selector);
+  preview.value=text;
+  preview.selectionStart=0;preview.selectionEnd=0;
+  preview.scrollTop=0;preview.scrollLeft=0;
+}
 
 // Owns only the selected preview and copy request; agent execution stays external.
-export function createContinuationDialog({getContext, api, dialogs, showError}) {
+export function createContinuationDialog({getContext, api, dialogs, showError, downloadJson}) {
   let continuationContext = null;
+  let opening = 0;
   dialogs.register('continuation-dialog');
 
   function selectionScope() {
@@ -14,24 +23,26 @@ export function createContinuationDialog({getContext, api, dialogs, showError}) 
     return candidateAgentInstructions({workspace: snapshot, runId, origin: location.origin, cli: snapshot.repositoryWorkflow?.cli});
   }
   async function openContinuation(runId) {
-    const scope = selectionScope(), opener = document.activeElement;
+    const request = ++opening, scope = selectionScope(), opener = document.activeElement;
     try {
       const fresh = await api('/api/workspace');
       const {workspace} = getContext();
-      if (scope !== selectionScope() || fresh.id !== workspace.id) return;
+      if (request !== opening || scope !== selectionScope() || fresh.id !== workspace.id) return;
       const snapshot = fresh.version >= workspace.version ? fresh : workspace;
       const text = instructions(snapshot, runId);
-      continuationContext = {workspaceId: snapshot.id, version: snapshot.version, runId, text, snapshot};
+      let note = null, noteError = '';
+      try { note = await buildGitNote(snapshot,runId); } catch(error) { noteError = error.message; }
+      if (request !== opening || scope !== selectionScope()) return;
+      continuationContext = {workspaceId: snapshot.id, version: snapshot.version, runId, text, snapshot, scope};
       $('#copy-continuation').disabled = false;
-      const preview = $('#continuation-text');
-      preview.value = text;
-      preview.selectionStart = 0;
-      preview.selectionEnd = 0;
+      $('#git-note-details').open = false;
+      $('#download-git-note').disabled = !note;
+      resetPreview('#git-note-preview',note ? serializeGitNote(note) : '');
+      $('#git-note-notice').textContent = noteError;
       $('#continuation-notice').textContent = 'Selected candidate · ' + runId.slice(0, 10) + '. Source text is quoted; refresh current state in your agent before acting.';
       dialogs.show('continuation-dialog', '#copy-continuation', opener);
-      preview.scrollTop = 0;
-      preview.scrollLeft = 0;
-    } catch (error) { showError(error.message); }
+      resetPreview('#continuation-text',text);
+    } catch (error) { if(request === opening && scope === selectionScope())showError(error.message); }
   }
   function currentContinuationText() {
     const {workspace} = getContext();
@@ -41,12 +52,37 @@ export function createContinuationDialog({getContext, api, dialogs, showError}) 
     if (text !== continuationContext.text) throw new Error('The candidate context changed. Close and reopen it before copying.');
     return text;
   }
-  const stillOpen = captured => $('#continuation-dialog').open && continuationContext === captured;
+  const stillOpen = captured => $('#continuation-dialog').open && continuationContext === captured && selectionScope() === captured.scope;
   $('#close-continuation').addEventListener('click', () => $('#continuation-dialog').close());
+  $('#git-note-details').addEventListener('toggle',()=>{
+    if($('#git-note-details').open)resetPreview('#git-note-preview',$('#git-note-preview').value);
+  });
   $('#continuation-dialog').addEventListener('close', () => {
+    opening++;
     continuationContext = null;
     $('#continuation-text').value = '';
     $('#copy-continuation').disabled = false;
+    $('#git-note-preview').value = '';
+    $('#download-git-note').disabled = true;
+  });
+  $('#download-git-note').addEventListener('click',async()=>{
+    const captured=continuationContext;
+    if(!captured||$('#download-git-note').disabled)return;
+    $('#download-git-note').disabled=true;
+    try{
+      const fresh=await api('/api/workspace');
+      if(!stillOpen(captured))return;
+      if(fresh.id!==captured.workspaceId||instructions(fresh,captured.runId)!==captured.text)
+        throw new Error('The candidate context changed. Close and reopen it before downloading.');
+      currentContinuationText();
+      const note=await buildGitNote(fresh,captured.runId);
+      if(!stillOpen(captured))return;
+      currentContinuationText();
+      resetPreview('#git-note-preview',serializeGitNote(note));
+      downloadJson(note,`projects-git-note-${captured.runId}-${note.commit.slice(0,12)}.json`);
+      $('#git-note-notice').textContent='Git context downloaded. Keep it private and review the destination before syncing the notes ref.';
+    }catch(error){if(stillOpen(captured))$('#git-note-notice').textContent=error.message;}
+    finally{if(continuationContext===captured)$('#download-git-note').disabled=false;}
   });
   $('#copy-continuation').addEventListener('click', async () => {
     const captured = continuationContext;

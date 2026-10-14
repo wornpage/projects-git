@@ -1,5 +1,5 @@
 export interface GitCredential { remote: string; token: string }
-export interface ArtifactContext { taskId: string; runId: string; revision: number; purpose: string; criteria: string[]; baseCommit: string }
+export interface ArtifactContext { taskId: string; runId: string; revision: number }
 export class ArtifactGit {
   constructor(options?: { fetchImpl?: typeof fetch });
   seedRepository(input: GitCredential & { name: string; description: string; timestamp: number; beforePush: (head: string) => Promise<void> }): Promise<string>;

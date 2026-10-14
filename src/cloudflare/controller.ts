@@ -1457,7 +1457,7 @@ export class HostedController {
         this.assertJob(runId, attemptId);
         headCommit = await runtime.git.commitCandidate({ remote: safeRemote(info.remote), token: credential.plaintext, defaultBranch: info.defaultBranch, branch: run.branch,
           baseCommit: run.baseCommit, files: result.files,
-          context: { taskId: run.taskId, runId, revision: job.task.revision ?? 1, purpose: job.task.purpose, criteria: job.task.criteria, baseCommit: run.baseCommit },
+          context: { taskId: run.taskId, runId, revision: job.task.revision ?? 1 },
           beforePush: async head => {
             const next = this.assertJob(runId, attemptId);
             if (next.workspace.runs.find(item => item.id === runId)?.status !== 'running') throw new Error('Run changed before push.');

@@ -55,7 +55,7 @@ async function fixture(t) {
   const transport = new ArtifactGit({ fetchImpl: (url, options) => fetch(`http://127.0.0.1:${port}${url.pathname}${url.search}`, options) });
   const candidate = { remote: 'https://git.example.test/fork.git', token: 'fork-write-token', defaultBranch: 'main', branch: 'agents/one', baseCommit,
     files: [{ path: 'checkout.mjs', content: 'export const checkoutTotal = items => 42;\n' }],
-    context: { taskId: 'task', runId: 'run', revision: 2, purpose: 'Current intent', criteria: ['Exact contract'], baseCommit }, beforePush: async () => {} };
+    context: { taskId: 'task', runId: 'run', revision: 2 }, beforePush: async () => {} };
   const merge = headCommit => ({ remote: 'https://git.example.test/source.git', token: 'target-write-token', defaultBranch: 'main',
     candidateRemote: candidate.remote, candidateToken: 'candidate-read-token', candidateBranch: candidate.branch, baseCommit, headCommit, beforePush: async () => {} });
   return { root, work, git, transport, candidate, merge, baseCommit, received, interceptReceive: hook => { beforeReceive = hook; } };
@@ -209,15 +209,14 @@ test('repository seed pushes one deterministic README root commit and refuses a 
   assert.ok(requests.every(item=>item.token==='Bearer seed-write-token'));
 });
 
-test('Git transport creates a real artifact context commit and advances only the exact target head', async t => {
+test('Git transport keeps harness context outside the code tree and advances only the exact target head', async t => {
   const f = await fixture(t);
   let reserved;
   const head = await f.transport.commitCandidate({ ...f.candidate, beforePush: async value => { reserved = value; } });
   assert.equal(reserved, head);
   assert.equal(await f.git(path.join(f.root, 'fork.git'), 'rev-parse', 'agents/one'), head);
-  const context = JSON.parse(await f.git(path.join(f.root, 'fork.git'), 'show', `${head}:.projects/task.json`));
-  assert.equal(context.revision, 2);
-  assert.equal(context.baseCommit, f.baseCommit);
+  assert.equal(await f.git(path.join(f.root,'fork.git'),'diff','--name-only',f.baseCommit,head),'checkout.mjs');
+  assert.equal(await f.git(path.join(f.root,'fork.git'),'ls-tree','-r','--name-only',head,'.projects'),'');
   assert.equal(await f.git(path.join(f.root, 'source.git'), 'rev-parse', 'main'), f.baseCommit);
   assert.equal(await f.transport.merge(f.merge(head)), head);
   assert.equal(await f.git(path.join(f.root, 'source.git'), 'rev-parse', 'main'), head);

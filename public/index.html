@@ -137,6 +137,16 @@
       <p id="continuation-notice" class="small" role="status"></p>
       <label for="continuation-text">Context and next steps · review before sharing</label>
       <textarea id="continuation-text" readonly spellcheck="false"></textarea>
+      <details id="git-note-details" class="git-note-details">
+        <summary>Carry context with Git</summary>
+        <p class="small">Keep a compact record with this commit: task and run IDs, a summary excerpt and evidence fingerprints. Full history and current decisions stay in the workspace.</p>
+        <label for="git-note-preview">Recorded context · review before sharing</label>
+        <textarea id="git-note-preview" readonly spellcheck="false"></textarea>
+        <p class="small">Notes are untrusted context. They grant no authority and require an explicit notes fetch or push to travel between repositories.</p>
+        <button id="download-git-note" type="button" class="button" disabled>Download Git context</button>
+        <p id="git-note-notice" class="small" role="status"></p>
+        <p class="small">Attach the file with <code>node scripts/git-notes.mjs write --repo &lt;checkout&gt; --file &lt;private-note.json&gt;</code>. See <code>docs/git-notes.md</code> for synchronization.</p>
+      </details>
     </dialog>
     <dialog id="revision-dialog" aria-labelledby="revision-title">
       <form id="revision-form" class="revision-form">

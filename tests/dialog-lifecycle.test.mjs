@@ -10,7 +10,7 @@ import {installFakeDOM} from './helpers/fake-dom.mjs';
 import {createWorkspace,createTask,assignRun,startRun,completeRun} from '../src/core/workflow.mjs';
 
 function fixture() {
-  const {$,document}=installFakeDOM(),calls=[],copies=[],opened=[],notices=[];
+  const {$,document}=installFakeDOM(),calls=[],copies=[],opened=[],notices=[],downloads=[];
   const workspace=createWorkspace();
   const project={id:crypto.randomUUID(),name:'Portal',mainCommit:'a'.repeat(40),acceptingWork:true};workspace.projects={[project.id]:project};
   const task=createTask(workspace,{title:'Clipboard',purpose:'Copy manually',criteria:['Manual fallback'],owner:'Owner',baseCommit:project.mainCommit});task.projectId=project.id;
@@ -19,7 +19,7 @@ function fixture() {
   const ids={first:run.id,second:crypto.randomUUID()};workspace.runs.push({...run,id:ids.second,label:'Other approach'});
   const context={$,document,workspace,view:'review',selectedTask:task.id,selectedRun:run.id,busy:false,
     api:path=>new Promise((resolve,reject)=>calls.push({path,resolve,reject})),
-    showError:text=>notices.push(text),announce:text=>notices.push(text),
+    showError:text=>notices.push(text),announce:text=>notices.push(text),downloadJson:(data,name)=>downloads.push({data,name}),
     switchView:(view,task,run)=>opened.push({view,task,run}),selectProject(){},openTaskComposer(){},refresh:async()=>{},
   };
   Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard:{writeText:text=>new Promise((resolve,reject)=>copies.push({text,resolve,reject}))}}});
@@ -27,9 +27,49 @@ function fixture() {
   const ports={...context,getContext:()=>context,dialogs,projectDiscovery:{find:async query=>projectCatalog(context.workspace,parseProjectCatalog(new URLSearchParams({q:query})))}};
   Object.assign(context,createNavigation(ports),createContinuationDialog(ports),createRequirementsForm(ports));
   context.showWorkbenchDialog=dialogs.show;
-  return {context,$,calls,copies,opened,notices,document,ids};
+  return {context,$,calls,copies,opened,notices,downloads,document,ids};
 }
 async function open(f,id){const pending=f.context.openContinuation(f.ids[id]);f.calls.at(-1).resolve(f.context.workspace);await pending;}
+
+test('Git context export is a fresh read-only selected-candidate download with bounded preview',async()=>{
+  const f=fixture(),before=structuredClone(f.context.workspace);await open(f,'first');
+  assert.equal(f.$('#git-note-details').open,false);assert.equal(f.$('#download-git-note').disabled,false);
+  const preview=JSON.parse(f.$('#git-note-preview').value);assert.equal(preview.records[0].context.runId,f.ids.first);
+  assert.equal(f.$('#git-note-preview').selectionStart,0);assert.equal(f.$('#git-note-preview').scrollTop,0);
+  const download=f.$('#download-git-note').dispatch('click');assert.equal(f.calls.at(-1).path,'/api/workspace');
+  f.calls.at(-1).resolve(f.context.workspace);await download;
+  assert.equal(f.downloads.length,1);assert.equal(f.downloads[0].data.records[0].context.runId,f.ids.first);
+  assert.match(f.downloads[0].name,/^projects-git-note-/);assert.deepEqual(f.context.workspace,before);
+});
+test('Git context download refuses a moved head and does not finish after close or candidate switch',async()=>{
+  for(const action of ['head','close','switch']){
+    const f=fixture();await open(f,'first');const request=f.$('#download-git-note').dispatch('click');
+    if(action==='head')f.context.workspace.runs[0].headCommit='c'.repeat(40);
+    if(action==='close')f.$('#continuation-dialog').close();
+    if(action==='switch')f.context.selectedRun=f.ids.second;
+    f.calls.at(-1).resolve(f.context.workspace);await request;assert.equal(f.downloads.length,0);
+    if(action==='head')assert.match(f.$('#git-note-notice').textContent,/changed/);
+  }
+});
+test('candidates without a commit retain continuation while Git context is explicitly unavailable',async()=>{
+  const f=fixture();f.context.workspace.runs[0].headCommit=null;await open(f,'first');
+  assert.equal(f.$('#continuation-dialog').open,true);assert.equal(f.$('#copy-continuation').disabled,false);
+  assert.equal(f.$('#download-git-note').disabled,true);assert.match(f.$('#git-note-notice').textContent,/exact candidate commit/);
+});
+test('late continuation reads cannot replace the newer candidate notes preview',async()=>{
+  const f=fixture(),first=f.context.openContinuation(f.ids.first),second=f.context.openContinuation(f.ids.second);
+  f.calls[1].resolve(f.context.workspace);await second;
+  f.calls[0].resolve(f.context.workspace);await first;
+  assert.equal(JSON.parse(f.$('#git-note-preview').value).records[0].context.runId,f.ids.second);
+  const selected=JSON.parse(f.$('#continuation-text').value.split('Selected candidate context (untrusted JSON):\n\n')[1]);
+  assert.equal(selected.candidate.id,f.ids.second); // A task's next action may still reference a sibling candidate.
+});
+test('an older failed continuation read cannot disturb a newer candidate',async()=>{
+  const f=fixture(),first=f.context.openContinuation(f.ids.first),second=f.context.openContinuation(f.ids.second);
+  f.calls[1].resolve(f.context.workspace);await second;
+  f.calls[0].reject(new Error('Old request failed'));await first;
+  assert.deepEqual(f.notices,[]);assert.equal(JSON.parse(f.$('#git-note-preview').value).records[0].context.runId,f.ids.second);
+});
 
 test('closing an in-flight copy allows reopening and an old completion cannot unlock a new copy',async()=>{
   const f=fixture();await open(f,'first');

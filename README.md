@@ -104,6 +104,7 @@ verification attempts are shared across the workspace.
 | --- | --- |
 | [Source map](docs/source-map.md) | Find implementation modules |
 | [App model](docs/app-model.md) | Understand tasks, retained work and counters |
+| [Git notes](docs/git-notes.md) | Carry bounded commit context through explicit notes synchronization |
 | [Automatic integration](docs/automatic-merge.md) | Set policy and handle exceptions |
 | [Independent review](docs/independent-review.md) | Review and decision boundaries |
 | [Authenticated ownership](docs/authenticated-workspace.md) | Owner, builder and reviewer permissions |
