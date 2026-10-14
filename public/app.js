@@ -483,17 +483,25 @@ function repositoryAgents(task) {
   const hosted = workspace.provider === 'cloudflare-artifacts';
   const paused = workspace.projects?.[task.projectId]?.acceptingWork === false;
   const dependency = dependencyState(workspace, task);
-  const disabled = actions.busy || paused || !dependency.ready || task.acceptedRunId || task.mergedCommit || workspace.repositoryWorkflow?.busyTaskIds.includes(task.id);
-  if (workspace.personalWorkspace && !workspace.personalWorkspace.agentConnections) return panel('Agent connections', el('div', {class:'panel-body'}, el('p',{},'This isolated trial has no connected agents or model key. You can edit the queue, requirements and project policy; creating tasks does not start an agent.')));
   const pending = assignmentRequests.get(task.id);
+  // A saved request may recover an already completed assignment after closure.
+  // The same-input replay still passes current server authority and task guards.
+  const disabled = actions.busy || !pending && (paused || !dependency.ready || task.acceptedRunId || task.mergedCommit || workspace.repositoryWorkflow?.busyTaskIds.includes(task.id));
+  if (workspace.personalWorkspace && !workspace.personalWorkspace.agentConnections) return panel('Agent connections', el('div', {class:'panel-body'}, el('p',{},'This isolated trial has no connected agents or model key. You can edit the queue, requirements and project policy; creating tasks does not start an agent.')));
   const feedbackKey=actionKey('assignment',task);
   const client = workspace.authentication ? el('select', {id:'agent-client',required:true,disabled:Boolean(pending)}, el('option',{value:''},'Choose an Access agent client'), workspace.authentication.agentClientIds.map(id=>el('option',{value:id,selected:pending?.agentClientId===id},id))) : null;
   const name = el('input', { id: 'agent-label', maxlength: '160', required: true, readonly: Boolean(pending), value: pending?.label ?? '', placeholder: 'For example: Codex · validation approach' });
   return panel('Agent assignments', el('div', { class: 'panel-body' },
-    !dependency.ready ? el('p', { class: 'capability-note' }, dependency.invalid ?? 'Wait for prerequisite integration before preparing agent code access.') : null,
-    el('p', { class: 'small' }, hosted ? 'Prepare an isolated Artifacts fork. Your agent clones it, reports its start, and submits a Git commit. Fork access is issued once and expires after 15 minutes.' : 'Prepare one isolated checkout for this task. Give it to your coding agent, which reports its start and submits a Git commit using the handoff commands.'),
+    !pending && !dependency.ready ? el('p', { class: 'capability-note' }, dependency.invalid ?? 'Wait for prerequisite integration before preparing agent code access.') : null,
+    el('p', { class: 'small' }, pending
+      ? task.acceptedRunId || task.mergedCommit ? 'Recover the earlier assignment result with its saved details. Closed tasks can return an existing result; they cannot prepare new work.' : 'Retry the saved assignment with its original details. Current permissions and project state still apply.'
+      : hosted ? 'Prepare an isolated Artifacts fork. Your agent clones it, reports its start, and submits a Git commit. Fork access is issued once and expires after 15 minutes.' : 'Prepare one isolated checkout for this task. Give it to your coding agent, which reports its start and submits a Git commit using the handoff commands.'),
+    pending && hosted ? el('p', {class:'small muted'},'Recovering a completed assignment does not reissue its Git credentials.') : null,
     el('form', { class: 'assignment-form', onsubmit: async event => {
-      event.preventDefault(); if (disabled) return;
+      event.preventDefault(); if (disabled || actions.busy) return;
+      if (pending && assignmentRequests.get(task.id) !== pending) {
+        showError('The saved assignment request changed. Reopen assignment recovery.'); return;
+      }
       const isCurrent = connection.captureSession(), retrying = assignmentRequests.has(task.id);
       const form = event.currentTarget, inspector = form.closest('dialog');
       const request = assignmentRequests.get(task.id) ?? { label: name.value.trim(), ...(client ? {agentClientId: client.value} : {}), requestId: crypto.randomUUID() };
@@ -512,8 +520,8 @@ function repositoryAgents(task) {
           else if (isCurrent() && assignmentRequests.get(task.id) === request && error.status >= 400 && error.status < 500 && !['assignment_preparing', 'repository_busy', 'ASSIGNMENT_PREPARING', 'OPERATION_IN_PROGRESS'].includes(error.code)) { assignmentRequests.delete(task.id); saveSession(); }
           throw error;
         }
-      }, hosted ? 'Agent fork prepared. Give its handoff to your agent.' : 'Agent checkout prepared. No model was started.',
-        {key:feedbackKey,pending:hosted ? 'Preparing isolated code access. Your coding agent starts work after receiving the handoff.' : 'Preparing an isolated checkout. This does not start a model.'});
+      }, pending ? 'Saved assignment result recovered. Inspect its retained candidate.' : hosted ? 'Agent fork prepared. Give its handoff to your agent.' : 'Agent checkout prepared. No model was started.',
+        {key:feedbackKey,pending:pending ? 'Reconciling the saved assignment request with its original details. Completed assignments return their existing result.' : hosted ? 'Preparing isolated code access. Your coding agent starts work after receiving the handoff.' : 'Preparing an isolated checkout. This does not start a model.'});
       if (result) {
         if (result.credentials) forkCredentials.set(result.runId, result.credentials);
         assignmentRequests.delete(task.id); saveSession(); selectedRun = result.runId; await refresh(true);
@@ -523,7 +531,7 @@ function repositoryAgents(task) {
         }
       }
     } }, el('label', { for: 'agent-label' }, 'Agent or approach name'), name, client ? el('label', {for:'agent-client'}, 'Access agent client') : null, client,
-      el('button', { id:'assign-'+task.id, type: 'submit', class: 'button button-primary', disabled, title: !dependency.ready ? dependency.invalid ?? 'Wait for prerequisite integration before preparing this checkout.' : paused ? 'New agent work is paused. Enable it in the project home.' : disabled ? 'Assignments close when a candidate is chosen, or while an operation is in progress.' : 'Prepare isolated code access without starting a model.' }, actionFeedback.get(feedbackKey)?.phase==='pending' ? 'Preparing code access…' : pending ? 'Retry same assignment' : hosted ? 'Prepare agent fork' : 'Prepare checkout')),
+      el('button', { id:'assign-'+task.id, type: 'submit', class: 'button button-primary', disabled, title: actions.busy ? 'Wait for the current action.' : pending ? 'Recover the saved assignment using the same details. Current server permissions still apply.' : !dependency.ready ? dependency.invalid ?? 'Wait for prerequisite integration before preparing this checkout.' : paused ? 'New agent work is paused. Enable it in the project home.' : disabled ? 'Assignments close when a candidate is chosen, or while an operation is in progress.' : 'Prepare isolated code access without starting a model.' }, actionFeedback.get(feedbackKey)?.phase==='pending' ? 'Preparing code access…' : pending ? 'Recover saved assignment' : hosted ? 'Prepare agent fork' : 'Prepare checkout')),
     actionNotice(feedbackKey)));
 }
 function externalHandoff(run) {

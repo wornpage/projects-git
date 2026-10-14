@@ -982,6 +982,29 @@ test('old assignment receipts beyond 500 remain principal-bound and never issue 
   assert.equal(Object.keys(c.store.read().operations).length,702);assert.equal(c.forks(),1);
 });
 
+for(const closed of ['accepted','merged'])test(`a ${closed} task replays only its existing assignment outcome under current authority`,async()=>{
+  const c=setup(),key='closed-assignment-'+closed;
+  const {task,assignment,fork}=await assigned(c,key);
+  // Synthetic closed states isolate receipt lookup from the already-tested
+  // acceptance/merge workflow. No real provider or policy grant is involved.
+  const snapshot=c.store.read(),storedTask=snapshot.workspace.tasks.find(item=>item.id===task.taskId),run=snapshot.workspace.runs.find(item=>item.id===assignment.runId);
+  storedTask.status=closed;storedTask.acceptedRunId=run.id;
+  if(closed==='merged')storedTask.mergedCommit=HEAD;
+  run.status=closed;run.headCommit=HEAD;snapshot.workspace.version++;
+  const revision=snapshot.revision;snapshot.revision++;c.store.write(snapshot,revision);
+  const before=c.store.read(),tokenCreates=fork.tokenCreates;
+  const input={agent:'agent-a',agentClientId:AGENT_CLIENT,label:'Agent A'};
+  const replay=await c.controller.assign(task.taskId,input,key);
+  assert.equal(replay.runId,assignment.runId);assert.equal(replay.replayed,true);
+  assert.equal(replay.credentials,null);assert.equal(replay.credentialStatus,'already-issued');
+  assert.deepEqual(c.store.read(),before);assert.equal(fork.tokenCreates,tokenCreates);assert.equal(c.forks(),1);
+  await assert.rejects(c.controller.assign(task.taskId,input,key+'-unknown'),{code:'TASK_CLOSED'});
+  await assert.rejects(c.controller.assign(task.taskId,{...input,label:'Changed details'},key),{code:'IDEMPOTENCY_CONFLICT'});
+  const authority=testAuthority();authority.policy.agentClientIds=[];
+  await assert.rejects(new HostedController(c.store,c.artifacts,authority).assign(task.taskId,input,key),{code:'AGENT_IDENTITY_REQUIRED'});
+  assert.deepEqual(c.store.read(),before);assert.equal(fork.tokenCreates,tokenCreates);assert.equal(c.forks(),1);
+});
+
 async function commandContext() {
   const c = executable();
   const blob = createHash('sha1').update('blob 6\0after\n').digest('hex');
