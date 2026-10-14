@@ -23,9 +23,14 @@ export function createContinuationDialog({getContext, api, dialogs, showError}) 
       const text = instructions(snapshot, runId);
       continuationContext = {workspaceId: snapshot.id, version: snapshot.version, runId, text, snapshot};
       $('#copy-continuation').disabled = false;
-      $('#continuation-text').value = text;
+      const preview = $('#continuation-text');
+      preview.value = text;
+      preview.selectionStart = 0;
+      preview.selectionEnd = 0;
       $('#continuation-notice').textContent = 'Selected candidate · ' + runId.slice(0, 10) + '. Source text is quoted; refresh current state in your agent before acting.';
       dialogs.show('continuation-dialog', '#copy-continuation', opener);
+      preview.scrollTop = 0;
+      preview.scrollLeft = 0;
     } catch (error) { showError(error.message); }
   }
   function currentContinuationText() {
