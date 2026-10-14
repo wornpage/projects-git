@@ -303,9 +303,18 @@ function render(force = false) {
   restoreFocus(focus);
 }
 
+function focusViewStart() {
+  const heading = $("#page-title");
+  heading.tabIndex = -1;
+  heading.focus({ preventScroll: true });
+  ($('#project-header').hidden ? heading : $('#project-header')).scrollIntoView({ block: "start", behavior: "instant" });
+}
 async function switchView(next, taskId = selectedTask, runId = selectedRun, {preservePosition=false,section=null,projectId=null}={}) {
   const reviewSection = next === 'review' && ['candidate-changes','verification','code-review','review-decision'].includes(section) ? section : null;
-  if (next === view && taskId === selectedTask && runId === selectedRun && (!projectId || projectId===selectedProject) && !reviewSection) return;
+  if (next === view && taskId === selectedTask && runId === selectedRun && (!projectId || projectId===selectedProject) && !reviewSection) {
+    if (projectId && !preservePosition) focusViewStart();
+    return;
+  }
   rememberProjectSelection();
   const previousSelection={view,selectedProject,selectedTask,selectedRun};
   const previousPath = workspacePath();
@@ -330,12 +339,7 @@ async function switchView(next, taskId = selectedTask, runId = selectedRun, {pre
   if(target){
     target.focus({preventScroll:true});
     target.scrollIntoView({block:'start',behavior:'instant'});
-  }else if(!preservePosition){
-    const heading = $("#page-title");
-    heading.tabIndex = -1;
-    heading.focus({ preventScroll: true });
-    ($('#project-header').hidden ? heading : $('#project-header')).scrollIntoView({ block: "start", behavior: "instant" });
-  }
+  }else if(!preservePosition) focusViewStart();
   announce(`${viewTitles[next][0]} view opened.`);
 }
 function rememberProjectSelection() {
