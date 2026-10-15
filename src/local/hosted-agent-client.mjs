@@ -98,7 +98,7 @@ export class HostedAgentClient {
     if (command === 'receipt') return this.receipt(options.requestId);
     if (!['claim', 'checkout', 'push', 'start', 'submit', 'fail'].includes(command)) throw new Error('Unsupported hosted builder command.');
     const output = command === 'claim' ? await this.claim(options.project, options.label, options.requestId)
-      : command === 'checkout' ? await this.checkout(options.run, options.directory, options.requestId, options.assignment)
+      : command === 'checkout' ? await this.checkout(options.run, options.directory, options.requestId, options.assignment, options.startRequestId)
       : command === 'push' ? await this.push(options.run, options.directory, options.head, options.requestId)
       : await this.mutate(command, options.run, { headCommit: options.head, summary: options.summary, message: options.message, directory: options.directory }, options.requestId);
     if (output.runId) {
@@ -263,6 +263,9 @@ export class HostedAgentClient {
     // A stable child UUID retains the exact Git effect across explicit retries.
     const pushRequestId = digest && `${digest.slice(0,8)}-${digest.slice(8,12)}-8${digest.slice(13,16)}-a${digest.slice(17,20)}-${digest.slice(20,32)}`;
     return this.attempt(command, requestId, { runId, ...body, ...(directory === undefined ? {} : {directory,pushRequestId}) }, async () => {
+      if (command === 'start' && before.status === 'running') {
+        return {runId,taskId:before.taskId,status:before.status,headCommit:before.headCommit??null,reconciled:true,remoteMutation:false};
+      }
       // Submit has no server idempotency receipt. An explicit retry of a closed
       // run must reconcile its retained outcome instead of sending another POST.
       const terminal = ['awaiting_review', 'accepted', 'rejected', 'merged', 'superseded', 'failed'].includes(before.status);
@@ -300,13 +303,18 @@ export class HostedAgentClient {
     this.validateCredential(run, saved.credentials); return { run, saved };
   }
 
-  async checkout(runId, directory, requestId, assignmentFile) {
+  async checkout(runId, directory, requestId, assignmentFile, startRequestId) {
     id(requestId,'Request ID');
+    if (startRequestId !== undefined) {
+      id(startRequestId,'Start request ID');
+      if (startRequestId === requestId) throw new Error('Checkout and start require distinct request IDs.');
+    }
     if (!path.isAbsolute(directory)) throw new Error('Checkout directory must be absolute and new.');
     const imported = assignmentFile === undefined ? null : await this.resolutionInput(runId, assignmentFile);
     const { saved } = imported ?? await this.assignment(runId);
     const dir = path.join(await realpath(path.dirname(directory)), path.basename(directory));
-    return this.attempt('checkout', requestId, { runId, directory: dir,
+    const checkedOut = await this.attempt('checkout', requestId, { runId, directory: dir,
+      ...(startRequestId === undefined ? {} : {startRequestId}),
       ...(imported ? {assignmentFile:imported.assignmentFile,assignmentSha256:imported.assignmentSha256} : {}) }, async () => {
       if (imported) {
         const file = path.join(this.connection.stateDirectory,'runs',runId+'.json');
@@ -335,6 +343,16 @@ export class HostedAgentClient {
           ...(imported ? {assignmentImported:true,credentialStatus:'saved-privately'} : {}) };
       } catch (error) { throw new Error('Checkout did not finish; its directory is retained. ' + this.sanitize(error.message)); }
     });
+    if (startRequestId === undefined) return checkedOut;
+    // The completed checkout and start keep separate durable receipts. A start
+    // failure must never cause another clone or an automatic mutation retry.
+    try {
+      const started = await this.mutate('start', runId, {}, startRequestId);
+      if (started.status !== 'running') throw new Error('Start did not confirm a running assignment.');
+      return {...checkedOut,start:{requestId:startRequestId,...started}};
+    } catch (error) {
+      throw new Error('Checkout completed; its receipt is ' + checkedOut.receipt + '. Start is unconfirmed. Inspect status and the start receipt, then explicitly use start with request ID ' + startRequestId + '; do not repeat checkout.\n' + this.sanitize(error.message));
+    }
   }
 
   async push(runId, directory, head, requestId) {
