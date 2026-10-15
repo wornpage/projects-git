@@ -3382,6 +3382,7 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
 
 .review-independent { grid-area:independent; min-width:0; }
 .review-base-update, .review-context-download { margin-block-end:20px; }
+.work-agent-instructions { margin-block-end:20px; }
 .work-task-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px 24px; margin-block:20px; }
 .task-lifecycle { margin-block:24px; }
 .lifecycle-heading { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:4px 16px; margin-block-end:12px; }
