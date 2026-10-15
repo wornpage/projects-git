@@ -28,7 +28,7 @@ const hostedCommands = {
   checkout: ['connection', 'run', 'directory', 'request-id'],
   push: ['connection', 'run', 'directory', 'head', 'request-id'], receipt: ['connection', 'request-id'],
 };
-const hostedOptional = {projects:['offset','revision'],checkout:['assignment'],submit:['directory']};
+const hostedOptional = {projects:['offset','revision'],checkout:['assignment','start-request-id'],submit:['directory']};
 let hostedClient;
 
 function help(command) {
@@ -41,6 +41,7 @@ function help(command) {
     + '\nSee docs/hosted-agent-client.md. The client cannot change policy, create projects, verify, review, accept or merge.\nPrivate request receipts retain outcomes; receipt only reads them. Never print credentials or commit connection files or private client state.');
   if (!command || command==='projects') console.log('\nHosted projects returns ten projects. Continue with optional --offset <nextOffset> --revision <revision> from its page result; restart after a revision conflict.');
   if (!command || command==='checkout') console.log('\nHosted checkout accepts optional --assignment <absolute-private-response.json> for owner-issued resolution work. It verifies the live assignment before retaining its credential and cloning; it does not create or renew an assignment.');
+  if (!command || command==='checkout') console.log('\nAdd --start-request-id <distinct-UUID> to explicitly start the assignment after checkout succeeds. Each stage retains its own receipt. If start is unconfirmed, inspect those receipts and use the separate start command with that UUID; do not repeat checkout.');
   if (!command || command==='submit') console.log('\nHosted submit accepts optional --directory <absolute-assigned-checkout> to push and confirm the exact head before submission. The Git step has a retained child request ID. No failed or uncertain operation is automatically retried.');
   if (!command || ['connect', 'queue', 'claim', 'assign'].includes(command)) console.log('\n--request-id is an explicit UUID. Reuse it only for the same action, label and input.\nTask stack --brief: {"tasks":[{"title":"Change","purpose":"Result","criteria":["Check"],"owner":"Coordinator"}]}');
   if (!command || command === 'revise') console.log('\nRevision --brief: {"purpose":"Updated result","criteria":["Current criterion"],"reason":"Why it changed"}\n--expected-revision is the current task revision from show. Old reports and decisions remain recorded.');
@@ -91,7 +92,7 @@ try {
     const {HostedAgentClient,loadHostedConnection} = await import('../src/local/hosted-agent-client.mjs');
     const connection = await loadHostedConnection(options.connection);
     hostedClient = new HostedAgentClient(connection);
-    const output = await hostedClient.execute(command, { ...options, requestId: options['request-id'] });
+    const output = await hostedClient.execute(command, { ...options, requestId: options['request-id'], startRequestId: options['start-request-id'] });
     console.log(hostedClient.serialize(output));
   }
   else {

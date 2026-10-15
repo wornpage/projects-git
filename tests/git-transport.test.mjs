@@ -69,10 +69,11 @@ async function hostedClientFixture(t, resolution = false) {
     origin:'external-agent',assignedRevision:2,...(resolution?{reconcilesRunId:crypto.randomUUID()}:{}),repository: 'https://git.example.test/fork.git', agentIdentity: principal };
   const state = { id: scope.workspaceId, version: 1, authentication: { mode: 'cloudflare-access', principal },
     projects: { [projectId]: { id: projectId } }, tasks: [{ id: taskId, projectId,revision:2,baseCommit:f.baseCommit }], runs: [run] };
-  let dropWrite = false, dropSubmit = false;const apiRequests=[];
+  let dropWrite = false, dropSubmit = false, dropStart = false, refuseStart = false, dropClone = false;const apiRequests=[];
   const client = new HostedAgentClient({ ...scope, clientSecret: 'service-fixture-secret', stateDirectory: path.join(f.root, 'private-client-state') }, {
     fetchImpl: async (url, options) => {
       if (url.origin !== scope.origin) {
+        if (dropClone) { dropClone=false; throw new Error('Lost clone response'); }
         const response = await f.transport.fetchImpl(url, options);
         if (dropWrite && url.pathname === '/fork.git/git-receive-pack') { dropWrite = false; await response.arrayBuffer(); throw new Error('Lost Git response after server commit'); }
         return response;
@@ -80,7 +81,11 @@ async function hostedClientFixture(t, resolution = false) {
       apiRequests.push({path:url.pathname,method:options.method});
       if (url.pathname.endsWith('/claim')) return Response.json({ runId, taskId, projectId, workspace: state, credentials: {
         remote: run.repository, token: 'fork-write-token', branch: run.branch, baseCommit: f.baseCommit, expiresAt: new Date(Date.now() + 900000).toISOString() } });
-      if (url.pathname.endsWith('/start')) run.status = 'running';
+      if (url.pathname.endsWith('/start')) {
+        if (refuseStart) { refuseStart=false; return Response.json({code:'PROJECT_PAUSED'},{status:409}); }
+        run.status = 'running';
+        if (dropStart) { dropStart=false; throw new Error('Lost response after start'); }
+      }
       if (url.pathname.endsWith('/submit')) { run.status = 'awaiting_review'; run.headCommit = JSON.parse(options.body).headCommit;run.summary=JSON.parse(options.body).summary.trim();if(dropSubmit){dropSubmit=false;throw Error('Lost response after submit');} }
       return Response.json(state);
     },
@@ -89,8 +94,37 @@ async function hostedClientFixture(t, resolution = false) {
   if(resolution){await writeFile(assignmentFile,JSON.stringify({mode:'resolve',runId,taskId,projectId,credentials:{remote:run.repository,token:'fork-write-token',branch:run.branch,baseCommit:f.baseCommit,expiresAt:new Date(Date.now()+900000).toISOString()}}),{mode:0o600});}
   else await client.claim(projectId, 'Native Git client fixture', crypto.randomUUID());
   const directory = path.join(f.root, 'agent-checkout');
-  return { ...f, client, directory, runId, run, assignmentFile, apiRequests, dropNextWrite: () => { dropWrite = true; },dropNextSubmit:()=>{dropSubmit=true;} };
+  return { ...f, client, directory, runId, run, assignmentFile, apiRequests, dropNextWrite: () => { dropWrite = true; },dropNextSubmit:()=>{dropSubmit=true;},dropNextStart:()=>{dropStart=true;},refuseNextStart:()=>{refuseStart=true;},dropNextClone:()=>{dropClone=true;} };
 }
+
+for (const fault of ['none','start-response','start-refused']) test('checkout can explicitly start with separate retained receipts through '+fault,async t=>{
+  const f=await hostedClientFixture(t,true),requestId=crypto.randomUUID(),startRequestId=crypto.randomUUID();
+  const args={run:f.runId,directory:f.directory,assignment:f.assignmentFile,requestId,startRequestId};
+  if(fault==='start-response')f.dropNextStart();if(fault==='start-refused')f.refuseNextStart();
+  if(fault==='none'){
+    const result=await f.client.execute('checkout',args);assert.equal(result.start.status,'running');assert.equal(result.start.requestId,startRequestId);assert.equal(result.assignmentImported,true);
+    assert.notEqual(result.receipt,result.start.receipt);
+  }else await assert.rejects(f.client.execute('checkout',args),error=>/Checkout completed/.test(error.message)&&error.message.includes(startRequestId)&&/do not repeat checkout/.test(error.message)&&!error.message.includes('fork-write-token'));
+  const parent=await f.client.receipt(requestId),child=await f.client.receipt(startRequestId);
+  assert.equal(parent.payload.startRequestId,startRequestId);assert.equal(parent.attempts[0].state,'complete');assert.equal(child.command,'start');assert.equal(child.attempts[0].state,fault==='none'?'complete':'outcome-unknown');
+  assert.equal(f.apiRequests.filter(r=>r.path.endsWith('/start')).length,1);
+  assert.equal(await f.git(f.directory,'rev-parse','HEAD'),f.baseCommit);
+  const gitReads=f.received.length;
+  await assert.rejects(f.client.execute('checkout',{...args,startRequestId:crypto.randomUUID()}),/conflicts/);assert.equal(f.received.length,gitReads);
+  const restarted=new HostedAgentClient(f.client.connection,{fetchImpl:f.client.fetchImpl});
+  const recovered=await restarted.execute('start',{run:f.runId,requestId:startRequestId});assert.equal(recovered.status,'running');assert.equal(f.received.length,gitReads);
+  assert.equal(f.apiRequests.filter(r=>r.path.endsWith('/start')).length,fault==='start-refused'?2:1);
+  if(fault!=='start-refused'){assert.equal(recovered.reconciled,true);assert.equal(recovered.remoteMutation,false);}
+  assert.ok(!JSON.stringify([parent,child,recovered]).includes('fork-write-token'));
+});
+
+test('checkout validates the explicit start ID before any effect and never starts a failed clone',async t=>{
+  const f=await hostedClientFixture(t,true),requestId=crypto.randomUUID();
+  for(const startRequestId of ['invalid',requestId])await assert.rejects(f.client.execute('checkout',{run:f.runId,directory:f.directory,assignment:f.assignmentFile,requestId,startRequestId}),/Start request ID|distinct/);
+  assert.equal(f.received.length,0);assert.equal(f.apiRequests.length,0);
+  f.dropNextClone();await assert.rejects(f.client.execute('checkout',{run:f.runId,directory:f.directory,assignment:f.assignmentFile,requestId,startRequestId:crypto.randomUUID()}),/Checkout did not finish/);
+  assert.equal(f.apiRequests.filter(r=>r.path.endsWith('/start')).length,0);assert.equal(f.run.status,'assigned');
+});
 
 for(const resolution of [false,true])test('hosted agent client checks out and pushes only its '+(resolution?'imported resolution':'claimed')+' branch using real Git objects', async t => {
   const f = await hostedClientFixture(t,resolution);
@@ -140,8 +174,8 @@ test('combined submission validates summary, exact head and directory before any
 
 test('MCP uses the same resolution checkout and combined-submit path',async t=>{
  const f=await hostedClientFixture(t,true),mcp=await connectMcp(t,f.client),data=r=>{assert.notEqual(r.isError,true,JSON.stringify(r));return r.structuredContent;};
- assert.equal(data(await mcp.call('checkout',{run:f.runId,directory:f.directory,assignment:f.assignmentFile,requestId:crypto.randomUUID()})).assignmentImported,true);
- data(await mcp.call('start',{run:f.runId,requestId:crypto.randomUUID()}));await writeFile(path.join(f.directory,'mcp-resolution.txt'),'MCP resolution\n');await f.git(f.directory,'add','mcp-resolution.txt');await f.git(f.directory,'commit','-m','Resolve with MCP');const head=await f.git(f.directory,'rev-parse','HEAD');
+ const checkedOut=data(await mcp.call('checkout',{run:f.runId,directory:f.directory,assignment:f.assignmentFile,requestId:crypto.randomUUID(),startRequestId:crypto.randomUUID()}));assert.equal(checkedOut.assignmentImported,true);assert.equal(checkedOut.start.status,'running');
+ await writeFile(path.join(f.directory,'mcp-resolution.txt'),'MCP resolution\n');await f.git(f.directory,'add','mcp-resolution.txt');await f.git(f.directory,'commit','-m','Resolve with MCP');const head=await f.git(f.directory,'rev-parse','HEAD');
  const submitted=data(await mcp.call('submit',{run:f.runId,directory:f.directory,head,summary:'Resolved',requestId:crypto.randomUUID()}));assert.equal(submitted.headCommit,head);assert.equal(submitted.push.gitWrite,true);assert.equal(f.received.filter(r=>r.path.endsWith('/git-receive-pack')).length,1);
 });
 

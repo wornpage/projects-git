@@ -94,18 +94,27 @@ connection to import that existing assignment during checkout:
 $assignment = Read-Host "Absolute private resolution response JSON file"
 $run = Read-Host "Resolution run UUID from the owner"
 $checkout = Read-Host "Absolute path for a new resolution checkout"
-node scripts/repository-work.mjs checkout --connection $connection --run $run --directory $checkout --assignment $assignment --request-id ([guid]::NewGuid().ToString())
-node scripts/repository-work.mjs start --connection $connection --run $run --request-id ([guid]::NewGuid().ToString())
+$startId = [guid]::NewGuid().ToString()
+node scripts/repository-work.mjs checkout --connection $connection --run $run --directory $checkout --assignment $assignment --request-id ([guid]::NewGuid().ToString()) --start-request-id $startId
 ```
 
 Checkout reads the live workspace to verify the builder identity, current task
 revision, run, fork, `updates/...` branch, base commit and credential expiry. It
-ignores the file's workspace snapshot. It creates no assignment, sends no remote
-mutation and grants no owner permissions. A different retained credential is
+ignores the file's workspace snapshot. It creates no assignment and grants no
+owner permissions. A different retained credential is
 refused. Existing directories are preserved; a partial clone requires a new
 directory and request ID after inspection. Remove the source response file after
 confirmed checkout with `assignmentImported: true`. The earlier separate `adopt`
 command is replaced by this checkout option.
+
+The optional `--start-request-id` explicitly starts the assignment only after
+checkout succeeds. It must differ from the checkout UUID. The completed checkout
+receipt names the start UUID; start retains its own receipt. Omit it when you
+want to inspect the checkout before starting. If start is refused or its response
+is lost, the checkout is preserved. Inspect both receipts and current status,
+then explicitly run `start` with the same start UUID if needed; do not repeat
+checkout. A currently running assignment is reconciled without another POST.
+No failed or uncertain mutation is automatically repeated.
 
 After coding and committing, push and submit the exact head with one command:
 
