@@ -28,6 +28,7 @@ const hostedCommands = {
   checkout: ['connection', 'run', 'directory', 'request-id'],
   push: ['connection', 'run', 'directory', 'head', 'request-id'], receipt: ['connection', 'request-id'],
 };
+const hostedOptional = {projects:['offset','revision'],checkout:['assignment'],submit:['directory']};
 let hostedClient;
 
 function help(command) {
@@ -39,6 +40,8 @@ function help(command) {
   if (remote.length) console.log('\nHosted agent mode:\n' + remote.map(name => `node scripts/repository-work.mjs ${name} ${hostedCommands[name].map(key => `--${key} <${key}>`).join(' ')}`).join('\n')
     + '\nSee docs/hosted-agent-client.md. The client cannot change policy, create projects, verify, review, accept or merge.\nPrivate request receipts retain outcomes; receipt only reads them. Never print credentials or commit connection files or private client state.');
   if (!command || command==='projects') console.log('\nHosted projects returns ten projects. Continue with optional --offset <nextOffset> --revision <revision> from its page result; restart after a revision conflict.');
+  if (!command || command==='checkout') console.log('\nHosted checkout accepts optional --assignment <absolute-private-response.json> for owner-issued resolution work. It verifies the live assignment before retaining its credential and cloning; it does not create or renew an assignment.');
+  if (!command || command==='submit') console.log('\nHosted submit accepts optional --directory <absolute-assigned-checkout> to push and confirm the exact head before submission. The Git step has a retained child request ID. No failed or uncertain operation is automatically retried.');
   if (!command || ['connect', 'queue', 'claim', 'assign'].includes(command)) console.log('\n--request-id is an explicit UUID. Reuse it only for the same action, label and input.\nTask stack --brief: {"tasks":[{"title":"Change","purpose":"Result","criteria":["Check"],"owner":"Coordinator"}]}');
   if (!command || command === 'revise') console.log('\nRevision --brief: {"purpose":"Updated result","criteria":["Current criterion"],"reason":"Why it changed"}\n--expected-revision is the current task revision from show. Old reports and decisions remain recorded.');
   if (!command || command === 'admission') console.log('\n--state must be on or off; --expected-version is policyVersion from projects or status.\nOff blocks new assignments and starts. Existing runs continue under their chat host. Queueing, existing submissions and checks remain available.');
@@ -84,7 +87,7 @@ try {
   else if (args.includes('--help')) help(command);
   else if (args.includes('--connection') || !commands[command]) {
     if (!hostedCommands[command]) throw new Error('That command is not available to hosted agents. Use the authenticated owner app for policy, tasks, verification and decisions.');
-    const options = requiredOptions(args, hostedCommands[command],command==='projects'?['offset','revision']:[]);
+    const options = requiredOptions(args, hostedCommands[command],hostedOptional[command]??[]);
     const {HostedAgentClient,loadHostedConnection} = await import('../src/local/hosted-agent-client.mjs');
     const connection = await loadHostedConnection(options.connection);
     hostedClient = new HostedAgentClient(connection);

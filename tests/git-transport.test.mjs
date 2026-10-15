@@ -61,15 +61,15 @@ async function fixture(t) {
   return { root, work, git, transport, candidate, merge, baseCommit, received, interceptReceive: hook => { beforeReceive = hook; } };
 }
 
-async function hostedClientFixture(t) {
+async function hostedClientFixture(t, resolution = false) {
   const f = await fixture(t), projectId = crypto.randomUUID(), taskId = crypto.randomUUID(), runId = crypto.randomUUID();
   const scope = { origin: 'https://workspace.example.test', workspaceId: 'hosted-client-fixture', clientId: 'a'.repeat(32) + '.access' };
   const principal = { kind: 'agent', id: scope.clientId, workspaceId: scope.workspaceId };
-  const run = { id: runId, taskId, status: 'assigned', branch: 'agents/' + 'c'.repeat(32), baseCommit: f.baseCommit,
-    repository: 'https://git.example.test/fork.git', agentIdentity: principal };
+  const run = { id: runId, taskId, status: 'assigned', branch: (resolution?'updates/':'agents/') + 'c'.repeat(32), baseCommit: f.baseCommit,
+    origin:'external-agent',assignedRevision:2,...(resolution?{reconcilesRunId:crypto.randomUUID()}:{}),repository: 'https://git.example.test/fork.git', agentIdentity: principal };
   const state = { id: scope.workspaceId, version: 1, authentication: { mode: 'cloudflare-access', principal },
-    projects: { [projectId]: { id: projectId } }, tasks: [{ id: taskId, projectId }], runs: [run] };
-  let dropWrite = false;
+    projects: { [projectId]: { id: projectId } }, tasks: [{ id: taskId, projectId,revision:2,baseCommit:f.baseCommit }], runs: [run] };
+  let dropWrite = false, dropSubmit = false;const apiRequests=[];
   const client = new HostedAgentClient({ ...scope, clientSecret: 'service-fixture-secret', stateDirectory: path.join(f.root, 'private-client-state') }, {
     fetchImpl: async (url, options) => {
       if (url.origin !== scope.origin) {
@@ -77,22 +77,26 @@ async function hostedClientFixture(t) {
         if (dropWrite && url.pathname === '/fork.git/git-receive-pack') { dropWrite = false; await response.arrayBuffer(); throw new Error('Lost Git response after server commit'); }
         return response;
       }
+      apiRequests.push({path:url.pathname,method:options.method});
       if (url.pathname.endsWith('/claim')) return Response.json({ runId, taskId, projectId, workspace: state, credentials: {
         remote: run.repository, token: 'fork-write-token', branch: run.branch, baseCommit: f.baseCommit, expiresAt: new Date(Date.now() + 900000).toISOString() } });
       if (url.pathname.endsWith('/start')) run.status = 'running';
-      if (url.pathname.endsWith('/submit')) { run.status = 'awaiting_review'; run.headCommit = JSON.parse(options.body).headCommit; }
+      if (url.pathname.endsWith('/submit')) { run.status = 'awaiting_review'; run.headCommit = JSON.parse(options.body).headCommit;run.summary=JSON.parse(options.body).summary.trim();if(dropSubmit){dropSubmit=false;throw Error('Lost response after submit');} }
       return Response.json(state);
     },
   });
-  await client.claim(projectId, 'Native Git client fixture', crypto.randomUUID());
+  const assignmentFile=resolution?path.join(f.root,'resolution.json'):undefined;
+  if(resolution){await writeFile(assignmentFile,JSON.stringify({mode:'resolve',runId,taskId,projectId,credentials:{remote:run.repository,token:'fork-write-token',branch:run.branch,baseCommit:f.baseCommit,expiresAt:new Date(Date.now()+900000).toISOString()}}),{mode:0o600});}
+  else await client.claim(projectId, 'Native Git client fixture', crypto.randomUUID());
   const directory = path.join(f.root, 'agent-checkout');
-  return { ...f, client, directory, runId, run, dropNextWrite: () => { dropWrite = true; } };
+  return { ...f, client, directory, runId, run, assignmentFile, apiRequests, dropNextWrite: () => { dropWrite = true; },dropNextSubmit:()=>{dropSubmit=true;} };
 }
 
-test('hosted agent client checks out and pushes only its assigned branch using real Git objects', async t => {
-  const f = await hostedClientFixture(t);
-  const checkout = await f.client.checkout(f.runId, f.directory, crypto.randomUUID());
+for(const resolution of [false,true])test('hosted agent client checks out and pushes only its '+(resolution?'imported resolution':'claimed')+' branch using real Git objects', async t => {
+  const f = await hostedClientFixture(t,resolution);
+  const checkout = await f.client.execute('checkout',{run:f.runId,directory:f.directory,requestId:crypto.randomUUID(),assignment:f.assignmentFile});
   assert.equal(checkout.headCommit, f.baseCommit);
+  if(resolution){assert.equal(checkout.assignmentImported,true);assert.equal(checkout.credentialStatus,'saved-privately');}
   await f.client.mutate('start', f.runId, {}, crypto.randomUUID());
   await writeFile(path.join(f.directory, 'agent.txt'), 'Scoped client change\n');
   await f.git(f.directory, 'add', 'agent.txt'); await f.git(f.directory, 'commit', '-m', 'Agent client fixture');
@@ -105,6 +109,40 @@ test('hosted agent client checks out and pushes only its assigned branch using r
   assert.ok(f.received.every(item => item.token === 'Bearer fork-write-token'));
   assert.ok(!(await readFile(path.join(f.directory, '.git', 'config'), 'utf8')).includes('fork-write-token'));
   assert.equal((await f.client.mutate('submit', f.runId, { headCommit: head, summary: 'Native Git fixture' }, crypto.randomUUID())).status, 'awaiting_review');
+  await assert.rejects(readFile(path.join(f.client.connection.stateDirectory,'runs',f.runId+'.json')),{code:'ENOENT'});
+});
+
+for(const fault of ['none','push-response','submit-response'])test('submit with directory retains exact Git effects through '+fault,async t=>{
+ const f=await hostedClientFixture(t,true);await f.client.execute('checkout',{run:f.runId,directory:f.directory,assignment:f.assignmentFile,requestId:crypto.randomUUID()});
+ await f.client.mutate('start',f.runId,{},crypto.randomUUID());await writeFile(path.join(f.directory,'resolution.txt'),'Resolved change\n');await f.git(f.directory,'add','resolution.txt');await f.git(f.directory,'commit','-m','Resolve');
+ const head=await f.git(f.directory,'rev-parse','HEAD'),requestId=crypto.randomUUID(),args={run:f.runId,directory:f.directory,head,summary:'Resolved both changes',requestId};
+ if(fault==='push-response')f.dropNextWrite();if(fault==='submit-response')f.dropNextSubmit();
+ if(fault!=='none'){
+  await assert.rejects(f.client.execute('submit',args),/Retained receipt/);
+  const before=f.received.length;await assert.rejects(f.client.execute('submit',{...args,summary:'Changed input'}),/conflicts/);assert.equal(f.received.length,before);
+  assert.equal(f.apiRequests.filter(r=>r.path.endsWith('/submit')).length,fault==='submit-response'?1:0);
+ }
+ const result=await f.client.execute('submit',args);assert.equal(result.status??result.candidate.status,'awaiting_review');assert.equal(result.headCommit,head);
+ const parent=await f.client.receipt(requestId),pushId=parent.payload.pushRequestId;assert.match(pushId,/^[a-f0-9-]{36}$/);assert.notEqual(pushId,requestId);
+ const child=await f.client.receipt(pushId);assert.equal(child.command,'push');assert.equal(f.received.filter(r=>r.path.endsWith('/git-receive-pack')).length,1);assert.equal(f.apiRequests.filter(r=>r.path.endsWith('/submit')).length,1);
+ if(fault!=='none')assert.ok(parent.attempts.some(a=>a.state==='outcome-unknown'));
+ if(fault==='push-response')assert.ok(child.attempts.some(a=>a.state==='outcome-unknown'));
+ const before=f.received.length;assert.equal((await f.client.execute('submit',args)).reconciled,true);assert.equal(f.received.length,before);assert.equal(f.apiRequests.filter(r=>r.path.endsWith('/submit')).length,1);
+ assert.equal(await f.git(path.join(f.root,'fork.git'),'rev-parse',f.run.branch),head);assert.equal(await f.git(path.join(f.root,'fork.git'),'rev-parse','main'),f.baseCommit);
+ await assert.rejects(readFile(path.join(f.client.connection.stateDirectory,'runs',f.runId+'.json')),{code:'ENOENT'});assert.ok(!JSON.stringify([parent,child,result]).includes('fork-write-token'));
+});
+
+test('combined submission validates summary, exact head and directory before any Git or submit effect',async t=>{
+ const f=await hostedClientFixture(t);await f.client.checkout(f.runId,f.directory,crypto.randomUUID());await writeFile(path.join(f.directory,'change.txt'),'Change\n');await f.git(f.directory,'add','change.txt');await f.git(f.directory,'commit','-m','Change');const head=await f.git(f.directory,'rev-parse','HEAD'),before=f.received.length;
+ for(const patch of [{summary:'x'.repeat(2001)},{head:'short'},{directory:'relative'},{directory:path.join(f.root,'wrong-checkout')}])await assert.rejects(f.client.execute('submit',{run:f.runId,directory:f.directory,head,summary:'Change',requestId:crypto.randomUUID(),...patch}));
+ assert.equal(f.received.length,before);assert.equal(f.apiRequests.filter(r=>r.path.endsWith('/submit')).length,0);
+});
+
+test('MCP uses the same resolution checkout and combined-submit path',async t=>{
+ const f=await hostedClientFixture(t,true),mcp=await connectMcp(t,f.client),data=r=>{assert.notEqual(r.isError,true,JSON.stringify(r));return r.structuredContent;};
+ assert.equal(data(await mcp.call('checkout',{run:f.runId,directory:f.directory,assignment:f.assignmentFile,requestId:crypto.randomUUID()})).assignmentImported,true);
+ data(await mcp.call('start',{run:f.runId,requestId:crypto.randomUUID()}));await writeFile(path.join(f.directory,'mcp-resolution.txt'),'MCP resolution\n');await f.git(f.directory,'add','mcp-resolution.txt');await f.git(f.directory,'commit','-m','Resolve with MCP');const head=await f.git(f.directory,'rev-parse','HEAD');
+ const submitted=data(await mcp.call('submit',{run:f.runId,directory:f.directory,head,summary:'Resolved',requestId:crypto.randomUUID()}));assert.equal(submitted.headCommit,head);assert.equal(submitted.push.gitWrite,true);assert.equal(f.received.filter(r=>r.path.endsWith('/git-receive-pack')).length,1);
 });
 
 test('hosted checkout retains the resolved child directory and rejects a different checkout after restart', async t => {

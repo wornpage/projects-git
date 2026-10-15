@@ -82,6 +82,54 @@ cannot configure checks, change project policy, review, accept or merge.
 
 ## Credentials and recovery
 
+### Continue a resolution assignment
+
+After a conflict, the owner can create resolution work for an existing builder.
+Save the owner's issued-once `update-base` response (`mode: "resolve"`) as a private
+JSON file outside every Git checkout. This file contains the temporary Git token;
+do not paste it into chat, command arguments or logs. The builder uses its own
+connection to import that existing assignment during checkout:
+
+```powershell
+$assignment = Read-Host "Absolute private resolution response JSON file"
+$run = Read-Host "Resolution run UUID from the owner"
+$checkout = Read-Host "Absolute path for a new resolution checkout"
+node scripts/repository-work.mjs checkout --connection $connection --run $run --directory $checkout --assignment $assignment --request-id ([guid]::NewGuid().ToString())
+node scripts/repository-work.mjs start --connection $connection --run $run --request-id ([guid]::NewGuid().ToString())
+```
+
+Checkout reads the live workspace to verify the builder identity, current task
+revision, run, fork, `updates/...` branch, base commit and credential expiry. It
+ignores the file's workspace snapshot. It creates no assignment, sends no remote
+mutation and grants no owner permissions. A different retained credential is
+refused. Existing directories are preserved; a partial clone requires a new
+directory and request ID after inspection. Remove the source response file after
+confirmed checkout with `assignmentImported: true`. The earlier separate `adopt`
+command is replaced by this checkout option.
+
+After coding and committing, push and submit the exact head with one command:
+
+```powershell
+$head = git -C $checkout rev-parse HEAD
+node scripts/repository-work.mjs submit --connection $connection --run $run --directory $checkout --head $head --summary "Resolved both changes" --request-id ([guid]::NewGuid().ToString())
+```
+
+`submit --directory` validates its complete input before any Git effect. It uses
+the existing guarded push path, confirms the exact remote head, then submits.
+The push keeps a deterministic child request UUID and its own attempt receipts;
+the parent receipt names that UUID. An uncertain push or submission stops. On an
+explicit same-key retry, an already-pushed head is observed without another write;
+an already-submitted matching result is reconciled without Git access or another
+POST. Changed inputs still conflict. The separate `push` command remains available
+when an agent intentionally wants to publish a candidate before submitting it.
+
+The original candidate remains retained. Submission
+retires the local credential; the updated candidate still needs fresh checks,
+independent review and owner acceptance. Checkout does not renew expired tokens
+or recover an issued-once token that was not saved.
+
+### Retain and reconcile command outcomes
+
 The server returns a claim's Git credential once, for **15 minutes**. The client
 saves it privately before reporting success. It is never printed or saved in Git
 URLs/configuration. Confirmed submission/failure removes the client's credential
