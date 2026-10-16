@@ -146,8 +146,13 @@ export async function inspectSetup({root = sourceRoot, configPath, docker = fals
         const events = artifactEventPolicy(config.vars ?? {});
         requireThat(events.accountId === config.account_id && events.namespace === config.artifacts?.find(item => item.binding === 'ARTIFACTS')?.namespace
           && config.queues?.consumers?.some(item => item.queue === events.queue));
-        if (events.automatic) requireThat(/^[a-f0-9]{32}$/.test(config.vars.ARTIFACTS_EVENTS_QUEUE_ID)
-          && config.services?.some(item => item.binding === 'EVENT_SUBSCRIPTIONS' && item.entrypoint === 'ArtifactSubscriptionService' && typeof item.service === 'string' && item.service.length > 0));
+        if (events.automatic) {
+          const registrations = config.services?.filter(item => item.binding === 'EVENT_SUBSCRIPTIONS');
+          const service = registrations?.[0];
+          requireThat(/^[a-f0-9]{32}$/.test(config.vars.ARTIFACTS_EVENTS_QUEUE_ID) && registrations?.length === 1
+            && service.entrypoint === 'ArtifactSubscriptionService' && typeof service.service === 'string'
+            && /^[a-z0-9][a-z0-9-]{0,62}$/.test(service.service) && service.service !== config.name);
+        }
       }, parsed);
       await check('secrets', () => {
         requireThat(!Object.entries(config.vars ?? {}).some(([key, value]) => /(?:API_KEY|CLIENT_SECRET|PASSWORD|TOKEN)$/.test(key) && value !== ''));
@@ -161,7 +166,8 @@ export async function inspectSetup({root = sourceRoot, configPath, docker = fals
     providerRequests: 0, hostedAcceptance: false, applicationStarted: false, checks,
     notVerified: [...(docker ? [] : ['Docker engine availability']), 'Verification images, full Wrangler schema and binding/migration compatibility',
       'Application startup and workflow behavior', 'Access sessions, edge policies and credential expiry',
-      'Cloudflare resource existence, account entitlement and protected routes', 'Repository operations, independent checks, review and integration']};
+      'Cloudflare resource existence, account entitlement and protected routes', 'Registration-service account, namespace, queue, workspace, owner settings and credentials',
+      'Repository operations, independent checks, review and integration']};
   return {...report, installation: installationReadiness(report)};
 }
 

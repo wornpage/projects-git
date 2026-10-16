@@ -76,8 +76,8 @@ export const SETUP_CHECKS = Object.freeze(Object.fromEntries(Object.entries({
     "stage": "configuration"
   },
   "event-policy": {
-    "label": "Artifacts event configuration matches this installation",
-    "action": "Pin this account, namespace, workspace, queue and exact manual repository subscriptions. Automatic registration additionally needs its isolated service and queue ID. Resource existence and service credentials remain separately unverified.",
+    "label": "Application event policy and registration-service declaration",
+    "action": "Pin the application's account, namespace, workspace, queue and exact manual repository subscriptions. Automatic registration needs its Queue ID and one valid service target distinct from the application. Companion-service settings, resource existence and credentials remain separately unverified.",
     "stage": "configuration"
   },
   "secrets": {

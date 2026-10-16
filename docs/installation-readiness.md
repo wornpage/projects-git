@@ -44,9 +44,13 @@ stage omitted from a local-profile report is shown as not requested, with its
 
 An empty manual subscription list cannot pass event configuration while automatic
 registration is off. The event account/namespace/queue must match the app's
-configuration. Automatic registration additionally needs its service declaration
-and Queue ID. These are offline contract checks, not subscription existence or
-registration-service credential verification.
+configuration. Automatic registration additionally needs a Queue ID and exactly
+one valid `EVENT_SUBSCRIPTIONS` target with the `ArtifactSubscriptionService`
+entrypoint. That target must differ from the application Worker, whose source
+does not export the registration entrypoint. These are application-config
+declaration checks. The companion Worker's actual account, namespace, queue,
+workspace, owner settings and credentials are not inspected or matched by this
+check; their verification remains separate, along with subscription existence.
 
 The CLI emits the same stage projection in its JSON report and text output. The
 current report schema is **2**. Older schema-1 reports remain historical files;

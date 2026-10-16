@@ -153,6 +153,21 @@ test('an automatic registration declaration is still only offline configuration 
   assert.ok(report.installation.stages.slice(2).every(stage => stage.status === 'not_verified'));
 });
 
+test('automatic registration requires one valid service target distinct from the application', async t => {
+  const f = await fixture(t);
+  for (const target of [f.config.name, '', ' ', '../another-worker', 'https://another-worker', 42, 'a'.repeat(64), 'duplicate-binding']) {
+    const config = structuredClone(f.config);
+    Object.assign(config.vars, {ARTIFACTS_EVENTS_AUTOMATIC: 'true', ARTIFACTS_EVENTS_QUEUE_ID: 'c'.repeat(32), ARTIFACTS_EVENTS_SUBSCRIPTIONS: '[]'});
+    const service = config.services.find(item => item.binding === 'EVENT_SUBSCRIPTIONS');
+    if (target === 'duplicate-binding') config.services.push({...service, service: 'another-service'});
+    else service.service = target;
+    const report = await f.hosted(config);
+    assert.equal(byId(report, 'event-policy').status, 'blocked', String(target));
+    assert.equal(report.installation.stages[1].status, 'blocked');
+    assert.equal(report.summary.total, 16);
+  }
+});
+
 test('unparseable and unsupported configs retain every requested check in the denominator', async t => {
   const f = await fixture(t);
   for (const contents of ['{invalid json', JSON.stringify({...f.config, env: {production: {}}}), '[]']) {
