@@ -11,7 +11,7 @@ resources and identity configuration.
 | Explore a completed project | `npm run dev:demo` | Node.js 24.19+, npm and the installed source dependencies |
 | Create local projects and queue work | `npm run dev` | Node.js 24.19+, npm and Git |
 | Run the complete source check | `pwsh -NoProfile -File scripts/ci.ps1` | PowerShell 7, Git and Docker's Linux engine running |
-| Configure a private hosted workspace | Follow [operator setup](qualification-setup.md) | Your own Cloudflare account, Access owner configuration and bounded agent/reviewer credentials |
+| Configure a private hosted workspace | Follow [independent operator setup](independent-setup.md) | Your own Cloudflare account, Access owner configuration and bounded agent/reviewer credentials |
 
 Already have a hosted workspace? [Choose an Artifacts repository and load its
 base commit](hosted-project-setup.md) directly in **New project**.
@@ -22,11 +22,17 @@ From the repository or extracted archive root:
 
 ```sh
 npm ci
+npm run setup:check
 ```
 
 Use the checked-in lockfile and a separate dependency install. The repository
 includes Wrangler as a local development dependency. A global Wrangler or CLI
 installation is not required.
+
+`setup:check` checks offline prerequisites without starting the app or contacting
+a provider. Add `-- --docker` to query the configured Docker Linux engine, or use the
+[independent setup guide](independent-setup.md) for literal hosted configuration
+checks. A pass does not establish startup, verification or hosted acceptance.
 
 ## Explore the read-only example
 

@@ -1,5 +1,9 @@
 # Cloudflare projects and agent queues
 
+Start a new source fork with [independent operator setup](independent-setup.md).
+The separate qualification guide describes test fixtures and their evidence,
+not the ordinary installation path.
+
 For ordinary project checks, base updates and resolution work, read [Hosted repository checks](hosted-repository-checks.md). The model starter and deployment preparation are described in [Hosted execution](hosted-execution.md). The project and external-agent API is below.
 
 ## What is implemented

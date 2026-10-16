@@ -8,6 +8,7 @@
     "node": ">=24.19.0"
   },
   "scripts": {
+    "setup:check": "node scripts/setup-check.mjs",
     "dev": "node src/local/server.mjs",
     "dev:demo": "wrangler dev --local --config wrangler.demo.jsonc --ip 127.0.0.1 --port 8894 --inspector-port 9294",
     "dev:entrance": "wrangler dev --local --config wrangler.entrance-preview.jsonc --ip 127.0.0.1 --port 8908 --inspector-port 9308",
@@ -29,6 +30,7 @@
     "@modelcontextprotocol/client": "2.3.1",
     "@types/node": "^26.6.4",
     "esbuild": "0.28.1",
+    "jsonc-parser": "3.3.1",
     "prismjs": "1.30.0",
     "typescript": "^7.0.2",
     "wrangler": "^4.147.0"
