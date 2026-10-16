@@ -101,7 +101,7 @@ export function createWorkView({
     const assignmentAction = pendingAssignment ? 'Resolve pending assignment' : 'Prepare another candidate';
     return el('div', {}, taskHeader(task),
       !demo && !agentsUnavailable && taskQueued(workspace,task) && (!workspace.authentication || workspace.authentication.permissions.manage)
-        ? el('button',{type:'button',id:'agent-instructions-'+task.id,class:'button button-primary button-small',onclick:event=>openAgentConnection(task.projectId,event.currentTarget)},'Get agent instructions') : null,
+        ? el('button',{type:'button',id:'agent-instructions-'+task.id,class:'button button-primary button-small work-agent-instructions',onclick:event=>openAgentConnection(task.projectId,event.currentTarget)},'Get agent instructions') : null,
       runs.length || agentsUnavailable ? null : assignment,
       runs.length ? rows.controls : null,
       runs.length ? rows.items.length?el('ul', { class: 'run-grid collection-list', 'aria-label':'Candidates for this task' }, rows.items.map(run=>el('li',{},agentCard(run,runs.indexOf(run),brief,results.get(run.id))))) : el('p',{},'No matching candidates. Clear filters to browse every retained result.') : panel(emptyTitle,
