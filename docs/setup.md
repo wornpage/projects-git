@@ -1,17 +1,21 @@
-# Start Projects Git locally
+# Set up Projects Git on Cloudflare
 
-Use a source checkout or a source archive from this repository. The application
-source uses the MIT license. Hosted operation requires your own Cloudflare
-resources and identity configuration.
+Projects Git's primary deployment is a private workspace hosted on Cloudflare.
+Fork the MIT-licensed source, configure your own Cloudflare account and resources,
+and deploy a workspace protected by Cloudflare Access. Your installation uses
+your own repositories, identities and credentials.
+
+Local mode supports development and testing. It provides a separate local Git
+workspace.
 
 ## Choose a starting point
 
-| Goal | Command | Requirements |
+| Goal | Path | Requirements |
 | --- | --- | --- |
-| Explore a completed project | `npm run dev:demo` | Node.js 24.19+, npm and the installed source dependencies |
-| Create local projects and queue work | `npm run dev` | Node.js 24.19+, npm and Git |
+| Deploy your own private workspace (recommended) | Follow [independent Cloudflare setup](independent-setup.md) | Your own Cloudflare account, resources, Access owner configuration and distinct builder/reviewer identities |
+| Develop or inspect the application locally | `npm run dev` | Node.js 24.19+, npm and Git |
 | Run the complete source check | `pwsh -NoProfile -File scripts/ci.ps1` | PowerShell 7, Git and Docker's Linux engine running |
-| Configure a private hosted workspace | Follow [independent operator setup](independent-setup.md) | Your own Cloudflare account, Access owner configuration and bounded agent/reviewer credentials |
+| Explore the optional read-only example | `npm run dev:demo` | Node.js 24.19+, npm and the installed source dependencies |
 
 Already have a hosted workspace? [Choose an Artifacts repository and load its
 base commit](hosted-project-setup.md) directly in **New project**.
@@ -34,24 +38,25 @@ a provider. Add `-- --docker` to query the configured Docker Linux engine, or us
 [independent setup guide](independent-setup.md) for literal hosted configuration
 checks. A pass does not establish startup, verification or hosted acceptance.
 
-## Explore the read-only example
+## Deploy a private Cloudflare workspace
 
-```sh
-npm run dev:demo
-```
+Continue with [independent Cloudflare setup](independent-setup.md). That guide
+covers private operator configuration, your account's resources and identities,
+offline configuration checks, deployment and private workflow verification.
 
-Open `http://127.0.0.1:8894` and choose **Explore a completed project**. Open the
-project's **Task queue** and select a task for its brief. Browse **Candidates**,
-then open a result's **Changes & checks** and **Candidate record**. The example
-contains clearly labeled invented records, including passing and failing
-alternatives and a queued follow-up. Browsing does not run an agent or contact
-the real workspace.
+Keep default and preview endpoints disabled, and establish Access protection
+before activating a hostname. Use your operator configuration explicitly for
+deployment. An offline pass does not establish resource availability, valid
+credentials, protected routes or a successful hosted workflow.
 
-This entry uses local Workerd and static assets. It needs no Cloudflare account,
-sign-in, model key or Docker runtime. The source configuration disables public
-and preview routes. Stop the local process with Ctrl+C when finished.
+Keep model execution and semantic embeddings disabled until you deliberately
+configure their credentials and budgets. The default Access configuration
+refuses workspace access until the owner and permitted identities are configured.
 
 ## Work with a local project
+
+Use this mode for local development and testing. It does not require a Cloudflare
+account.
 
 ```sh
 npm run dev
@@ -59,9 +64,10 @@ npm run dev
 
 Open the loopback address printed by the server, normally
 `http://127.0.0.1:4178`. Choose **New project** and connect a committed repository
-or the trusted checkout starter. Project records and owned Git copies are stored
-in `.local/`. Local attribution is explicitly labeled; it is separate from the
-hosted authenticated ownership model.
+or the trusted checkout starter. Workspace records are stored as JSON files under
+`.local/`, alongside owned Git copies. Local attribution is explicitly labeled;
+it is separate from the hosted authenticated ownership model. The local server
+does not provide the hosted D1 search backend or Cloudflare Access authentication.
 
 Choose **Project settings → Connect agent → Copy agent instructions** and give
 those instructions to your existing coding conversation. The host runs the
@@ -77,6 +83,26 @@ Read [connected repositories](connected-repositories.md) for ordinary code,
 [repository verification](repository-verification.md) for exact-commit checks.
 Independent checks on ordinary code require Docker and an explicitly selected
 immutable runtime image. The trusted starter's scripted proof has its own scope.
+
+## Explore the read-only example
+
+This optional example supports local exploration without setting up a hosted
+workspace:
+
+```sh
+npm run dev:demo
+```
+
+Open `http://127.0.0.1:8894` and choose **Explore a completed project**. Open the
+project's **Task queue** and select a task for its brief. Browse **Candidates**,
+then open a result's **Changes & checks** and **Candidate record**. The example
+contains clearly labeled invented records, including passing and failing
+alternatives and a queued follow-up. Browsing does not run an agent or contact
+the real workspace.
+
+This entry uses local Workerd and static assets. It needs no Cloudflare account,
+sign-in, model key or Docker runtime. The source configuration disables public
+and preview routes. Stop the local process with Ctrl+C when finished.
 
 ## Check the source
 
@@ -120,8 +146,3 @@ Cloudflare Access, Artifacts, container qualification, deployment and submission
   Verify that all servers using this data directory are stopped before deliberately
   removing only the stale `server.lock` file. Preserve every other workspace file
   and restart normally so retained operations can be reconciled.
-
-Hosted configuration is an operator step. Keep model execution and semantic
-embeddings disabled unless their credentials and explicit budgets are supplied.
-The default hosted Access configuration refuses workspace access until the owner
-and permitted agent/reviewer identities are configured.

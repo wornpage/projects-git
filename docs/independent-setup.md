@@ -1,10 +1,17 @@
-# Install your own Projects Git workspace
+# Deploy your own Projects Git workspace on Cloudflare
 
-This is the ordinary operator path for a source fork. It does not require the
-maintainer's machine, private qualification files, Cloudflare account or service
-identities. The source is MIT-licensed; retain its license and third-party notices.
-The application is open source. The hosted adapter uses managed Cloudflare
-services; the local Git adapter is a separate operating mode.
+This is the primary setup path for an independent Projects Git installation:
+fork the source, configure your own Cloudflare account and resources, and deploy
+a private hosted workspace. It does not require the maintainer's machine,
+account, private qualification files or service identities. The source is
+MIT-licensed; retain its license and third-party notices.
+
+Workers runs the application, Artifacts stores Git repositories, and a
+SQLite-backed Durable Object coordinates workflow records. D1 provides the
+derived search index. Cloudflare Access protects the workspace.
+
+The separate local Git server supports development and testing. See
+[local development](setup.md#work-with-a-local-project) for that path.
 
 ## 1. Install the source
 
@@ -34,18 +41,18 @@ npm run --silent setup:check -- --json
 The report identifies its profile, requested probes and passed/blocked/not-checked/total
 counts. It checks direct package metadata, not every transitive file or executable.
 An offline pass establishes prerequisites only; startup and workflow behavior
-remain unverified. See [local setup](setup.md) to start your local Git workspace.
-Local names provide attribution, not hosted authentication or team permissions.
+remain unverified.
 
-## 2. Prepare an independent hosted configuration
+## 2. Prepare your operator configuration
 
 Hosted setup is a separate operator action using your own account and credentials.
 Do not point a fork at the maintainer's namespace, database, identities or queues.
 Keep API tokens, JWTs and service secrets outside the source tree. Do not copy the
 maintainer's ignored `qa/` or private qualification directory.
 
-From a clone, copy the safe source configuration to the ignored operator filename
-at the same directory level. This keeps its source-relative paths correct:
+From a clone, copy the safe source configuration to the ignored operator
+filename at the same directory level. This keeps its source-relative paths
+correct. Use your editor or file manager, or run the following in PowerShell 7:
 
 ```powershell
 if (Test-Path -LiteralPath "wrangler.operator.jsonc") { throw "Preserve the existing operator configuration." }
@@ -57,8 +64,13 @@ existing operator configuration rather than overwriting it. For an external
 configuration file, resolve `main`, assets, container Dockerfile and migration
 paths to your checkout; the checker refuses another checkout's source paths.
 
-Edit the operator copy. The following inventory separates configuration inputs
-from provider operations; supplying a value does not prove its resource exists.
+## 3. Configure your Cloudflare installation
+
+Edit the operator copy using your account's resources and identities. Select or
+create resources as needed to obtain their real identifiers; do not invent IDs
+to satisfy the offline checker. Resource provisioning is a deliberate account
+operation, separate from the checker. Supplying a value does not prove its
+resource exists or is accessible.
 
 | Input | Operator responsibility |
 | --- | --- |
@@ -75,6 +87,8 @@ from provider operations; supplying a value does not prove its resource exists.
 | `EVENT_SUBSCRIPTIONS` service | Configure your subscription-service deployment if retaining this binding. Its source configuration is `wrangler.subscriptions.jsonc`; its account, namespace, queue and workspace must match your app. See [event registration](artifacts-events.md). |
 | Public ingress | Keep `workers_dev` and `preview_urls` false and `assets.run_worker_first` true. Confirm whole-host Access protection before activating a custom hostname. |
 | Optional model execution | Keep the model empty unless you deliberately configure a provider and budget. Store API keys as secrets, not plaintext `vars`. |
+
+## 4. Check configuration offline
 
 The public template intentionally has missing owner/account/resource inputs and
 cannot pass the hosted configuration check unchanged. Its optional automation
@@ -96,22 +110,39 @@ an Access-policy audit or hosted acceptance. Its output omits configuration valu
 and credentials. Inspect the explicit `notVerified` list even when every offline
 check passes.
 
-## 3. Stop at the hosted boundary
+## 5. Provision and deploy deliberately
 
-An offline pass does not authorize deployment or paid activity. Before continuing,
-the operator must deliberately arrange the account, resource provisioning, Access
-policies, migration/deployment steps and a bounded qualification of the private
-workspace. Do not expose default or preview endpoints to work around sign-in.
+After resolving offline blockers, finish resource provisioning, arrange Access
+policies, and follow the migration and deployment instructions for your account.
+Some provisioning may already have been needed in step 3 to obtain resource IDs.
+Keep default and preview endpoints disabled, and establish Access protection
+before activating a hostname. Do not expose endpoints to work around sign-in.
 
 Use [Cloudflare architecture and account preflight](cloudflare.md),
+[deployment preparation](hosted-execution.md),
 [repository checks](hosted-repository-checks.md) and
-[hosted project setup](hosted-project-setup.md) for those boundaries. Account
-reachability, a healthy Worker, a successful source build and a complete private
-workflow are separate results. Use the operator configuration explicitly for any
-later deployment; the source `wrangler.jsonc` remains the safe build template.
+[hosted project setup](hosted-project-setup.md) for the detailed instructions.
+Select your operator configuration explicitly when following app-specific
+Wrangler commands in those guides, including deployment; the source
+`wrangler.jsonc` remains the safe build template. An offline pass does not
+provision resources or establish hosted acceptance. Keep model execution and
+semantic embeddings disabled until their credentials and budgets are deliberately
+configured.
+
+## 6. Verify the private installation
+
+Before calling the installation complete, confirm Access authentication and role
+boundaries, repository access, and the intended workflow through verification,
+independent review and integration. Use a small repository you control and an
+explicit run budget. Account reachability, a healthy Worker, a successful source
+build and a complete private workflow are separate results.
 
 The hosted model currently has one human owner and separately restricted builders
 and reviewers. Multi-user membership is not enabled by this setup work.
+
+Local development uses JSON workspace records and owned Git copies under
+`.local/`. It does not provide the hosted D1 search backend or Cloudflare Access
+authentication. Local names provide attribution, not hosted team permissions.
 
 ## Record an independent installation
 
