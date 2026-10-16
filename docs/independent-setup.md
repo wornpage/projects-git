@@ -90,6 +90,11 @@ resource exists or is accessible.
 
 ## 4. Check configuration offline
 
+The owner app's **Installation** panel can read this checker's JSON output
+without uploading it. It separates local configuration checks from unverified
+resources, deployment and private installation. See
+[installation readiness](installation-readiness.md) for report scope and counts.
+
 The public template intentionally has missing owner/account/resource inputs and
 cannot pass the hosted configuration check unchanged. Its optional automation
 defaults are not a request to enable provider activity.

@@ -3570,3 +3570,19 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
   .sidebar { min-height:48px; }
   body[data-demo="read-only"] #identity-status { display:none; }
 }
+
+/* Workspace installation settings reuse the inspector and existing controls. */
+#open-installation { margin-block-start: 8px; }
+.installation-settings { display: grid; gap: 1rem; min-width: 0; }
+.installation-boundary { padding: .8rem; border: 1px solid currentColor; border-radius: .5rem; }
+.installation-import, .installation-stage { display: grid; gap: .65rem; padding: 1rem; border: 1px solid var(--worn-border); border-radius: .65rem; min-width: 0; }
+.installation-settings > p, .installation-import > *, .installation-stage > * { margin: 0; }
+.installation-settings pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; line-height: 1.5; }
+.installation-import input[type="file"] { width: 100%; min-width: 0; font-size: .85rem; }
+.installation-stage-heading { display: flex; gap: .65rem; justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+.installation-stage-heading h3 { margin: 0; }
+.installation-status { font-size: .8rem; font-weight: 600; }
+.installation-status.status-checked_locally { color: var(--worn-success-text); }
+.installation-status.status-blocked { color: var(--worn-danger-text); }
+.installation-check { padding-block: .7rem; border-bottom: 1px solid var(--worn-border); }
+.installation-check p { margin-block: .3rem 0; }

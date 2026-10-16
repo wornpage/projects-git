@@ -37,6 +37,9 @@ async function fixture(t) {
     ACCESS_AUD: 'b'.repeat(64), ACCESS_OWNER_SUB: 'verified-owner',
     ACCESS_AGENT_CLIENT_IDS: JSON.stringify([builder]), ACCESS_REVIEWER_CLIENT_IDS: JSON.stringify([reviewer])});
   config.services.find(item => item.binding === 'CURRENT_POLICY').service = config.name;
+  Object.assign(config.vars, {ARTIFACTS_EVENTS_ACCOUNT_ID: config.account_id,
+    ARTIFACTS_EVENTS_NAMESPACE: config.artifacts[0].namespace,
+    ARTIFACTS_EVENTS_SUBSCRIPTIONS: JSON.stringify([{id: '1'.repeat(32), repositoryName: 'fixture-repository'}])});
   config.d1_databases[0].database_id = '11111111-2222-3333-4444-555555555555';
   const calls = [], responses = {tracked: 1, ignored: 0, docker: 'linux'};
   const run = async (command, args) => {
@@ -105,7 +108,7 @@ test('an independent literal config passes offline checks without fetching or pr
   const file = await f.put('wrangler.operator.jsonc', contents);
   const report = await f.inspect({configPath: file});
   assert.equal(report.status, 'passed'); assert.equal(report.profile, 'hosted-config');
-  assert.deepEqual(report.summary, {passed: 15, blocked: 0, notChecked: 0, total: 15});
+  assert.deepEqual(report.summary, {passed: 16, blocked: 0, notChecked: 0, total: 16});
   assert.equal(report.providerRequests, 0); assert.equal(report.hostedAcceptance, false);
   assert.equal(await readFile(file, 'utf8'), contents);
   for (const value of [f.config.account_id, f.config.vars.ACCESS_OWNER_SUB, builder, reviewer]) assert.ok(!JSON.stringify(report).includes(value));
@@ -113,9 +116,56 @@ test('an independent literal config passes offline checks without fetching or pr
 
 test('the safe source template is incomplete, rather than claiming an independent hosted install', async t => {
   const f = await fixture(t), report = await f.hosted(template);
-  assert.equal(report.status, 'blocked'); assert.equal(report.summary.total, 15);
+  assert.equal(report.status, 'blocked'); assert.equal(report.summary.total, 16);
   for (const id of ['target', 'access-policy', 'resources']) assert.equal(byId(report, id).status, 'blocked');
   assert.equal(byId(report, 'agent-identities').status, 'not_checked');
+});
+
+test('readiness retains offline results and never promotes hosted stages', async t => {
+  const f = await fixture(t), report = await f.hosted();
+  assert.equal(report.installation.report.summary.total, 16);
+  assert.equal(report.installation.stages[1].status, 'checked_locally');
+  assert.ok(report.installation.stages.slice(2).every(stage => stage.status === 'not_verified'));
+  assert.equal(report.installation.hostedInstallationVerified, false);
+});
+
+test('missing and mismatched event configuration cannot pass installation checks', async t => {
+  const f = await fixture(t);
+  for (const change of [c => {c.vars.ARTIFACTS_EVENTS_SUBSCRIPTIONS = '[]';},
+    c => {c.vars.ARTIFACTS_EVENTS_NAMESPACE = 'another-namespace';},
+    c => {c.vars.ARTIFACTS_EVENTS_ACCOUNT_ID = 'b'.repeat(32);},
+    c => {c.vars.ARTIFACTS_EVENTS_AUTOMATIC = 'true'; c.vars.ARTIFACTS_EVENTS_QUEUE_ID = '';},
+    c => {c.vars.ARTIFACTS_EVENTS_AUTOMATIC = 'true'; c.vars.ARTIFACTS_EVENTS_QUEUE_ID = 'c'.repeat(32); c.services = c.services.filter(s => s.binding !== 'EVENT_SUBSCRIPTIONS');}]) {
+    const config = structuredClone(f.config); change(config);
+    const report = await f.hosted(config);
+    assert.equal(byId(report, 'event-policy').status, 'blocked');
+    assert.equal(report.summary.total, 16);
+    assert.equal(report.installation.stages[1].status, 'blocked');
+  }
+});
+
+test('an automatic registration declaration is still only offline configuration evidence', async t => {
+  const f = await fixture(t), config = structuredClone(f.config);
+  Object.assign(config.vars, {ARTIFACTS_EVENTS_AUTOMATIC: 'true', ARTIFACTS_EVENTS_QUEUE_ID: 'c'.repeat(32), ARTIFACTS_EVENTS_SUBSCRIPTIONS: '[]'});
+  const report = await f.hosted(config);
+  assert.equal(byId(report, 'event-policy').status, 'passed');
+  assert.equal(report.installation.hostedInstallationVerified, false);
+  assert.ok(report.installation.stages.slice(2).every(stage => stage.status === 'not_verified'));
+});
+
+test('automatic registration requires one valid service target distinct from the application', async t => {
+  const f = await fixture(t);
+  for (const target of [f.config.name, '', ' ', '../another-worker', 'https://another-worker', 42, 'a'.repeat(64), 'duplicate-binding']) {
+    const config = structuredClone(f.config);
+    Object.assign(config.vars, {ARTIFACTS_EVENTS_AUTOMATIC: 'true', ARTIFACTS_EVENTS_QUEUE_ID: 'c'.repeat(32), ARTIFACTS_EVENTS_SUBSCRIPTIONS: '[]'});
+    const service = config.services.find(item => item.binding === 'EVENT_SUBSCRIPTIONS');
+    if (target === 'duplicate-binding') config.services.push({...service, service: 'another-service'});
+    else service.service = target;
+    const report = await f.hosted(config);
+    assert.equal(byId(report, 'event-policy').status, 'blocked', String(target));
+    assert.equal(report.installation.stages[1].status, 'blocked');
+    assert.equal(report.summary.total, 16);
+  }
 });
 
 test('unparseable and unsupported configs retain every requested check in the denominator', async t => {
@@ -123,7 +173,7 @@ test('unparseable and unsupported configs retain every requested check in the de
   for (const contents of ['{invalid json', JSON.stringify({...f.config, env: {production: {}}}), '[]']) {
     const report = await f.hosted(contents);
     assert.equal(byId(report, 'config').status, 'blocked');
-    assert.deepEqual(report.summary, {passed: 5, blocked: 1, notChecked: 9, total: 15});
+    assert.deepEqual(report.summary, {passed: 5, blocked: 1, notChecked: 10, total: 16});
   }
 });
 
@@ -171,7 +221,8 @@ test('event queue identifiers cannot be empty, blank, missing or non-string even
     const report = await f.hosted(config);
     assert.equal(report.status, 'blocked');
     assert.equal(byId(report, 'resources').status, 'blocked');
-    assert.deepEqual(report.summary, {passed: 14, blocked: 1, notChecked: 0, total: 15});
+    assert.equal(byId(report, 'event-policy').status, 'blocked');
+    assert.deepEqual(report.summary, {passed: 14, blocked: 2, notChecked: 0, total: 16});
   }
 });
 
@@ -214,5 +265,5 @@ test('CLI options reject ambiguous flags and help remains read-only', () => {
   const tracked = spawnSync(process.execPath, [cli, '--config', 'wrangler.jsonc', '--json'], {cwd: tmpdir(), encoding: 'utf8', windowsHide: true});
   assert.equal(tracked.status, 1, tracked.stderr);
   const report = JSON.parse(tracked.stdout);
-  assert.equal(byId(report, 'private-config').status, 'blocked'); assert.equal(report.summary.total, 15);
+  assert.equal(byId(report, 'private-config').status, 'blocked'); assert.equal(report.summary.total, 16);
 });

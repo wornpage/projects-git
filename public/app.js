@@ -24,6 +24,7 @@ import {createReviewForm} from './ui/review-form.js';
 import {createPublicationView} from './ui/publication.js';
 import {createProjectControls, automaticMergeControls} from './ui/project-controls.js';
 import {createProjectsView} from './ui/views/projects.js';
+import {canInspectInstallation, createInstallationPanel} from './ui/installation.js';
 import "./vendor/wornpage-button-0.2.3/worn-button.js";
 import { independentlyVerified as verifiedAtCurrentHead, connectionLabel, mergeState, workspacePresentationKey, taskOutcome, projectContext, dependencyState, readLocation, locationSearch } from './workbench-state.js';
 import { localAgentInstructions, hostedAgentInstructions } from './agent-instructions.js';
@@ -85,6 +86,11 @@ dialogs.register('project-connection-dialog');
 dialogs.register('inspector-dialog',()=>!actions.busy);
 dialogs.register('task-launcher',()=>!taskCreation.starting);
 $('#close-inspector').addEventListener('click',()=>{if(!actions.busy)$('#inspector-dialog').close();});
+$('#inspector-dialog').addEventListener('close',()=>document.querySelector('#installation-settings')?.remove());
+$('#open-installation').addEventListener('click',()=>{
+  if (!actions.busy && canInspectInstallation(getContext())) openInspector('Installation readiness',
+    createInstallationPanel({getContext, captureSession:connection.captureSession}));
+});
 $('#close-task-composer').addEventListener('click',()=>{if(!taskCreation.starting)$('#task-launcher').close();});
 const projectDiscovery=createProjectDiscovery({getContext,api,captureSession:()=>connection.captureSession(),onChange:()=>updateChrome()});
 const compactNavigation=createCompactNavigation({document,getWorkspace:()=>workspace,openInspector,onRestore:()=>{
@@ -238,6 +244,10 @@ function updateChrome() {
   $('#inspector-content').disabled = actions.busy;
   $('#close-inspector').disabled = actions.busy;
   $('#open-workspace-navigation').disabled = !workspace;
+  $('#open-installation').hidden = !canInspectInstallation(getContext());
+  $('#open-installation').disabled = actions.busy;
+  if (!canInspectInstallation(getContext())) document.querySelector('#installation-settings')?.replaceWith(
+    el('p', {}, 'Installation settings are available to the workspace owner.'));
   $('#inspector-pending').hidden = !actions.busy;
   const [label, title, subtitle] = viewTitles[view];
   const task = workspace ? currentTask() : null,run=workspace ? currentRun() : null,taskView=!['projects','queue','history'].includes(view);
