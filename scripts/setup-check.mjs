@@ -133,7 +133,8 @@ export async function inspectSetup({root = sourceRoot, configPath, docker = fals
         requireThat(config.vectorize?.some(item => item.binding === 'SEARCH_VECTORS' && typeof item.index_name === 'string' && item.index_name.length));
         const search = config.queues?.producers?.find(item => item.binding === 'SEARCH_JOBS');
         requireThat(typeof search?.queue === 'string' && search.queue.length && config.queues.consumers?.some(item => item.queue === search.queue));
-        requireThat(config.queues.consumers?.some(item => item.queue === config.vars?.ARTIFACTS_EVENTS_QUEUE));
+        const events = config.vars?.ARTIFACTS_EVENTS_QUEUE;
+        requireThat(typeof events === 'string' && events.trim().length > 0 && config.queues.consumers?.some(item => item.queue === events));
       }, parsed);
       await check('secrets', 'Known runtime secrets absent from plaintext vars', 'Use the secret mechanism described in the operator guide, never plaintext vars, for API keys and subscription credentials.', () => {
         requireThat(!Object.entries(config.vars ?? {}).some(([key, value]) => /(?:API_KEY|CLIENT_SECRET|PASSWORD|TOKEN)$/.test(key) && value !== ''));

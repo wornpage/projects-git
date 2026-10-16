@@ -162,6 +162,19 @@ test('wrong policy target, open endpoints and missing bindings cannot pass the c
   }
 });
 
+test('event queue identifiers cannot be empty, blank, missing or non-string even when a consumer matches', async t => {
+  const f = await fixture(t);
+  for (const value of ['', ' \t ', undefined, null, 42]) {
+    const config = structuredClone(f.config), previous = config.vars.ARTIFACTS_EVENTS_QUEUE;
+    config.vars.ARTIFACTS_EVENTS_QUEUE = value;
+    config.queues.consumers.find(item => item.queue === previous).queue = value;
+    const report = await f.hosted(config);
+    assert.equal(report.status, 'blocked');
+    assert.equal(byId(report, 'resources').status, 'blocked');
+    assert.deepEqual(report.summary, {passed: 14, blocked: 1, notChecked: 0, total: 15});
+  }
+});
+
 test('the application validator rejects overlapping and owner-reviewer identities; builders and reviewers are required', async t => {
   const f = await fixture(t);
   for (const vars of [
