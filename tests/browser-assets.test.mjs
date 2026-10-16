@@ -52,6 +52,8 @@ test('pinned browser component and external CSS retain release integrity under t
   assert.ok(visited.has('/workspace-connection.js'));assert.ok(visited.has('/workbench-actions.js'));
   for(const view of ['projects','queue','work','review','evidence'])assert.ok(visited.has('/ui/views/'+view+'.js'));
   assert.ok(visited.has('/ui/error-notice.js'));
+  assert.ok(visited.has('/ui/installation.js'));
+  assert.ok(visited.has('/installation-readiness.js'));
   const feedback=await fetch(url+'/action-feedback.css');assert.equal(feedback.status,200);assert.match(feedback.headers.get('content-type'),/text\/css/);
   const syntaxCss=await fetch(url+'/syntax.css');assert.equal(syntaxCss.status,200);assert.match(syntaxCss.headers.get('content-type'),/text\/css/);
   const syntaxWorker=await fetch(url+'/vendor/prism-1.30.0/syntax-worker.js');
