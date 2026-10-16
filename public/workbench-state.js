@@ -257,6 +257,31 @@ export function projectBrief(workspace, projectId) {
     definition: 'Each count uses all project tasks, including merged tasks, as its denominator. Active includes assigned/running agents and pending checks. Waiting means unresolved prerequisites, paused admission or unavailable code. Eligible queued tasks still require capacity. Checks and acceptance remain separate.' };
 }
 
+/** Attention is a navigation projection; existing task selectors own the gates. */
+export function projectAttentionBrief(workspace, projectId) {
+  const brief = projectBrief(workspace, projectId), context = projectContext(workspace, projectId);
+  const entries = context.tasks.filter(task => !task.mergedCommit).map(task => ({task, outcome: taskOutcome(workspace, task)}));
+  const blockedActions = new Set(['Update candidate base', 'Inspect merge recovery', 'Inspect failures', 'Update checks', 'Recheck result', 'Configure checks', 'Run checks']);
+  const reviewActions = new Set(['Review changes', 'Independent review', 'Continue to merge']);
+  const blocked = entries.filter(({task, outcome}) => {
+    const run = context.runs.find(run => run.id === outcome.runId);
+    const assessment = run?.codeReview && !run.verificationPending && outcome.view === 'review'
+      ? independentReviewStatus(workspace, run) : null;
+    return context.project.codeConnected === false || Boolean(dependencyState(workspace, task).invalid)
+      || blockedActions.has(outcome.action) || outcome.label === 'Automatic merge stopped'
+      || ['invalid', 'stale', 'changes-requested'].includes(assessment?.state);
+  });
+  const review = entries.filter(({outcome}) => reviewActions.has(outcome.action) && outcome.label !== 'Policy approved · merge queued');
+  const attention = entries.filter(entry => blocked.includes(entry) || review.includes(entry)
+    || entry.outcome.view === 'review' && !['Follow checks', 'Follow merge'].includes(entry.outcome.action)
+      && entry.outcome.label !== 'Policy approved · merge queued');
+  const next = blocked[0] ?? review.find(entry => entry.task.acceptedRunId) ?? review[0] ?? attention[0];
+  const needsAttention = context.project.codeConnected === false || attention.length > 0;
+  return {...brief, review: review.length, blocked: blocked.length, attention: attention.length, needsAttention,
+    priority: context.project.codeConnected === false || blocked.length ? 0 : review.length ? 1 : needsAttention ? 2 : brief.active ? 3 : 4,
+    next: next ? {taskId: next.task.id, title: next.task.title, ...next.outcome} : brief.next};
+}
+
 /** Search only visible navigation labels; hidden requirements and notes are excluded. */
 export function commandEntries(workspace, query = '') {
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);

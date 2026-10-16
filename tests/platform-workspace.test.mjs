@@ -19,7 +19,7 @@ function fixture() {
   function add(owner,title){const task=createTask(workspace,{title,purpose:'Deliver agreed behavior',criteria:['Observable result'],owner:'Owner',baseCommit:owner.mainCommit});task.projectId=owner.id;task.origin='connected-git';return task;}
   const task=add(project,'Current task'),merged=add(project,'Integrated task');merged.mergedCommit='b'.repeat(40);merged.status='merged';
   add(other,'Other queue');const run=assignRun(workspace,task.id,{agent:'external',label:'Running candidate',branch:'newwork/test'});startRun(workspace,run.id);
-  const calls=[],ports={getContext:()=>({workspace,busy:false,view:'overview',selectedRun:run.id}),getProjectSelection:()=>null,selectProject:id=>calls.push(['project',id]),switchView:(...args)=>calls.push(['view',...args]),openTaskComposer:source=>calls.push(['composer',source]),
+  const calls=[],ports={getContext:()=>({workspace,busy:false,view:'overview',selectedRun:run.id}),selectProject:id=>calls.push(['project',id]),switchView:(...args)=>calls.push(['view',...args]),openTaskComposer:source=>calls.push(['composer',source]),openProjectSearch:()=>calls.push(['find-project']),
     currentProject:()=>project,currentTask:()=>task,currentRun:()=>run,taskRuns:id=>workspace.runs.filter(run=>run.taskId===id),taskNumber:task=>workspace.tasks.indexOf(task)+1,taskLabel:task=>task.title,
     tasksInProject:project=>workspace.tasks.filter(task=>task.projectId===project.id),disclosure:(id,title,...body)=>el('details',{id},el('summary',{},title),...body),
     showError(){},announce(){},independentlyVerified:()=>false,checksFailed:()=>false,openRevision(){}};
@@ -37,10 +37,10 @@ function queuedFixture() {
   return {...f,ready};
 }
 
-test('project-card-next opens ready queued work ahead of a stored-first blocked task without hiding waiting counts',async()=>{
+test('repository next action opens ready queued work ahead of a stored-first blocked task without hiding waiting counts',async()=>{
   const f=queuedFixture(),before=JSON.stringify(f.workspace);
-  const card=nodes(createProjectsView(f.ports)()).find(node=>node.className==='project-card');
-  const next=nodes(card).find(node=>node.className==='project-card-next');
+  const card=nodes(createProjectsView(f.ports)()).find(node=>node.className==='repository-row');
+  const next=nodes(card).find(node=>node.className==='repository-next');
   const link=nodes(next).find(node=>node.tagName==='A');
   assert.equal(readLocation(link.attrs.href).taskId,f.ready.id,'Ready queued work must precede the older blocked task.');
   assert.match(next.textContent,/Ready task/);assert.match(next.textContent,/View queued task/);
@@ -67,7 +67,7 @@ test('all-waiting project queues retain an inspectable next task and admission/c
 });
 
 test('workspace directory uses shared project counts and next actions without writing source state',()=>{
-  const f=fixture(),before=JSON.stringify(f.workspace),view=createProjectsView(f.ports)(),cards=nodes(view).filter(node=>node.className==='project-card');
+  const f=fixture(),before=JSON.stringify(f.workspace),view=createProjectsView(f.ports)(),cards=nodes(view).filter(node=>node.className==='repository-row');
   assert.equal(cards.length,2);const first=cards[0].textContent,brief=projectBrief(f.workspace,f.project.id);
   assert.match(first,/Customer portal/);assert.match(first,/Admission on/);assert.match(first,new RegExp('Active tasks'+brief.active+' / '+brief.total));
   assert.match(first,/Follow agent work/);assert.match(cards[1].textContent,/Admission paused/);

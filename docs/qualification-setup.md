@@ -1,5 +1,8 @@
 # Private hosted qualification setup
 
+For an ordinary source installation, use [independent operator setup](independent-setup.md).
+This guide configures bounded qualification fixtures and their dedicated identities.
+
 The local suite and hosted qualification have separate results. Hosted runs need
 your own Cloudflare account, Access application, service credentials, Artifacts
 and container entitlement, and an explicit run budget. Scripted actors and model

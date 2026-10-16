@@ -1,0 +1,182 @@
+// Read-only prerequisites and literal configuration checks. Never starts the app,
+// invokes Wrangler, authenticates, or contacts a provider.
+import {readFile, realpath, stat} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {dirname, isAbsolute, relative, resolve, sep} from 'node:path';
+import {fileURLToPath} from 'node:url';
+
+const runFile = promisify(execFile);
+const sourceRoot = fileURLToPath(new URL('../', import.meta.url));
+const inside = (root, file) => {
+  const path = relative(root, file);
+  return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..' + sep));
+};
+const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const requireThat = value => { if (!value) throw new Error('Setup prerequisite not met.'); };
+const versionParts = value => value.match(/^(\d+)\.(\d+)\.(\d+)$/)?.slice(1).map(Number);
+
+async function probe(command, args, root) {
+  try {
+    const result = await runFile(command, args, {cwd: root, timeout: 5000, maxBuffer: 16384, windowsHide: true});
+    return {code: 0, stdout: result.stdout};
+  } catch (error) {
+    // Error text and subprocess output can contain local paths or credentials.
+    return {code: typeof error.code === 'number' ? error.code : 1, stdout: ''};
+  }
+}
+
+export async function inspectSetup({root = sourceRoot, configPath, docker = false,
+  nodeVersion = process.versions.node, run = probe} = {}) {
+  root = await realpath(root);
+  const checks = [];
+  const check = async (id, label, action, inspect, prerequisite = true) => {
+    if (!prerequisite) { checks.push({id, label, status: 'not_checked', action: 'Resolve the blocked configuration prerequisite, then repeat this check.'}); return false; }
+    try { const detail = await inspect(); checks.push({id, label, status: 'passed', ...(detail ? {detail} : {})}); return true; }
+    catch { checks.push({id, label, status: 'blocked', action}); return false; }
+  };
+  let manifest, lock;
+  await check('source', 'Source manifest and lockfile', 'Use a complete source checkout or archive with package.json and package-lock.json.', async () => {
+    manifest = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
+    lock = JSON.parse(await readFile(resolve(root, 'package-lock.json'), 'utf8'));
+    requireThat(object(manifest) && object(lock.packages) && manifest.name === lock.packages['']?.name);
+  });
+  await check('node', 'Node.js requirement', 'Install the minimum Node.js version declared in package.json.', () => {
+    const minimum = manifest?.engines?.node?.match(/^>=(\d+\.\d+\.\d+)$/)?.[1];
+    const wanted = minimum && versionParts(minimum), actual = versionParts(nodeVersion);
+    requireThat(wanted && actual);
+    const difference = actual.map((part, index) => part - wanted[index]).find(part => part !== 0) ?? 0;
+    requireThat(difference >= 0);
+    return `Node.js ${nodeVersion}; required >=${minimum}`;
+  });
+  await check('git', 'Git executable', 'Install Git and make it available to this terminal.', async () => {
+    const result = await run('git', ['--version'], root);
+    requireThat(result.code === 0 && /^git version \d+\.\d+/.test(result.stdout));
+  });
+  await check('dependencies', 'Installed direct dependency metadata matches the lockfile', 'Run npm ci in this source checkout, then repeat this check.', async () => {
+    requireThat(manifest && lock);
+    const names = Object.keys({...manifest.dependencies, ...manifest.devDependencies});
+    let matched = 0;
+    for (const name of names) {
+      const installed = JSON.parse(await readFile(resolve(root, 'node_modules', name, 'package.json'), 'utf8'));
+      const locked = lock.packages['node_modules/' + name]?.version;
+      if (typeof locked === 'string' && installed.name === name && installed.version === locked) matched++;
+    }
+    requireThat(matched === names.length);
+    return `${matched}/${names.length} direct packages match; transitive files and executable behavior are not checked`;
+  });
+  if (docker) await check('docker', 'Docker Linux engine responds', 'Start Docker with its Linux engine. This probe does not build or run a container.', async () => {
+    const result = await run('docker', ['info', '--format', '{{.OSType}}'], root);
+    requireThat(result.code === 0 && result.stdout.trim() === 'linux');
+    return 'Engine responds; verification image selection and command checks remain unverified';
+  });
+
+  if (configPath) {
+    const file = resolve(root, configPath);
+    await check('private-config', 'Operator configuration is outside source control', 'Keep the operator config outside the checkout, or use ignored wrangler.operator.jsonc; never commit credentials.', async () => {
+      const actual = await realpath(file);
+      if (!inside(root, actual)) return;
+      const path = relative(root, actual);
+      const tracked = await run('git', ['ls-files', '--error-unmatch', '--', path], root);
+      const ignored = await run('git', ['check-ignore', '-q', '--', path], root);
+      requireThat(tracked.code === 1 && ignored.code === 0);
+    });
+    let config;
+    const parsed = await check('config', 'Literal operator JSON/JSONC configuration', 'Use a JSON/JSONC config of at most 1 MiB without named environments. Install locked dependencies first. TypeScript/TOML configs are not evaluated.', async () => {
+      requireThat(/\.jsonc?$/.test(file) && (await stat(file)).size <= 1024 * 1024);
+      const {parse} = await import('jsonc-parser');
+      const errors = [], value = parse(await readFile(file, 'utf8'), errors, {allowTrailingComma: true});
+      requireThat(errors.length === 0 && object(value));
+      // Only the root configuration is inspected; do not imply named environments were checked.
+      requireThat(!Object.hasOwn(value, 'env'));
+      config = value;
+    });
+    {
+      await check('target', 'Explicit account and Worker', 'Set account_id to your account ID and name to your Worker name; use a flattened config without named environments.', () => {
+        requireThat(/^[a-f0-9]{32}$/.test(config.account_id) && /^[a-z0-9][a-z0-9-]{0,62}$/.test(config.name));
+      }, parsed);
+      await check('source-paths', 'Config targets this checkout', 'Keep a root operator copy of wrangler.jsonc, or resolve its main, assets, Dockerfile and migration paths to this checkout.', async () => {
+        const from = dirname(file);
+        const same = async (value, expected) => {
+          requireThat(typeof value === 'string');
+          requireThat(relative(await realpath(resolve(root, expected)), await realpath(resolve(from, value))) === '');
+        };
+        await same(config.main, 'src/cloudflare/index.ts');
+        await same(config.assets?.directory, 'public');
+        await same(config.containers?.find(item => item.class_name === 'RepositoryCheckContainer')?.images?.verifier?.dockerfile, 'containers/verification/Dockerfile');
+        await same(config.d1_databases?.find(item => item.binding === 'SEARCH_DB')?.migrations_dir, 'migrations/search');
+      }, parsed);
+      await check('private-ingress', 'Default and preview endpoints disabled', 'Set workers_dev and preview_urls to false and assets.run_worker_first to true. Confirm Access protection separately before activating a hostname.', () => {
+        requireThat(config.workers_dev === false && config.preview_urls === false && config.assets?.run_worker_first === true);
+      }, parsed);
+      let policy;
+      const policyValid = await check('access-policy', 'Access policy satisfies the application contract', 'Configure Access issuer, audience, verified owner subject, workspace and disjoint identity lists. See docs/authenticated-workspace.md.', async () => {
+        const {accessPolicy} = await import('../src/cloudflare/access.ts');
+        policy = accessPolicy(config.vars ?? {});
+      }, parsed);
+      await check('agent-identities', 'Builder and independent reviewer configured', 'Configure at least one builder plus a distinct reviewer service or human identity. This check does not verify their credentials, access or expiry.', () => {
+        requireThat(policy?.agentClientIds.length > 0 && (policy.reviewerClientIds.length + policy.reviewerSubjects.length) > 0);
+      }, policyValid);
+      await check('current-policy', 'Current-policy binding targets this Worker', 'Set CURRENT_POLICY to this Worker name and the WorkspacePolicy entrypoint.', () => {
+        const service = config.services?.find(item => item.binding === 'CURRENT_POLICY');
+        requireThat(service?.service === config.name && service.entrypoint === 'WorkspacePolicy');
+      }, parsed);
+      await check('bindings', 'Core execution bindings retained', 'Preserve WORKSPACES/WorkspaceCoordinator, REPOSITORY_CHECKS/RepositoryCheckContainer, LOADER and SEARCH_AI from wrangler.jsonc.', () => {
+        for (const [name, className] of [['WORKSPACES', 'WorkspaceCoordinator'], ['REPOSITORY_CHECKS', 'RepositoryCheckContainer']]) {
+          requireThat(config.durable_objects?.bindings?.some(item => item.name === name && item.class_name === className));
+        }
+        requireThat(config.worker_loaders?.some(item => item.binding === 'LOADER') && config.ai?.binding === 'SEARCH_AI');
+      }, parsed);
+      await check('resources', 'Core resource identifiers supplied', 'Configure your Artifacts namespace, SEARCH_DB database ID, search/event queues and Vectorize index. Their existence is checked only during separately authorized hosted setup.', () => {
+        requireThat(config.artifacts?.some(item => item.binding === 'ARTIFACTS' && typeof item.namespace === 'string' && item.namespace.length));
+        requireThat(config.d1_databases?.some(item => item.binding === 'SEARCH_DB' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(item.database_id)));
+        requireThat(config.vectorize?.some(item => item.binding === 'SEARCH_VECTORS' && typeof item.index_name === 'string' && item.index_name.length));
+        const search = config.queues?.producers?.find(item => item.binding === 'SEARCH_JOBS');
+        requireThat(typeof search?.queue === 'string' && search.queue.length && config.queues.consumers?.some(item => item.queue === search.queue));
+        const events = config.vars?.ARTIFACTS_EVENTS_QUEUE;
+        requireThat(typeof events === 'string' && events.trim().length > 0 && config.queues.consumers?.some(item => item.queue === events));
+      }, parsed);
+      await check('secrets', 'Known runtime secrets absent from plaintext vars', 'Use the secret mechanism described in the operator guide, never plaintext vars, for API keys and subscription credentials.', () => {
+        requireThat(!Object.entries(config.vars ?? {}).some(([key, value]) => /(?:API_KEY|CLIENT_SECRET|PASSWORD|TOKEN)$/.test(key) && value !== ''));
+      }, parsed);
+    }
+  }
+  const passed = checks.filter(check => check.status === 'passed').length;
+  const blocked = checks.filter(check => check.status === 'blocked').length;
+  return {schemaVersion: 1, scope: 'offline-setup-prerequisites', profile: configPath ? 'hosted-config' : 'local', requested: {docker, hostedConfig: Boolean(configPath)},
+    status: passed === checks.length ? 'passed' : 'blocked', summary: {passed, blocked, notChecked: checks.length - passed - blocked, total: checks.length},
+    providerRequests: 0, hostedAcceptance: false, applicationStarted: false, checks,
+    notVerified: [...(docker ? [] : ['Docker engine availability']), 'Verification images, full Wrangler schema and binding/migration compatibility',
+      'Application startup and workflow behavior', 'Access sessions, edge policies and credential expiry',
+      'Cloudflare resource existence, account entitlement and protected routes', 'Repository operations, independent checks, review and integration']};
+}
+
+export function setupArguments(args) {
+  const result = {};
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === '--json' || arg === '--docker' || arg === '--help') {
+      const key = arg.slice(2); if (result[key]) throw new Error('Supply each setup option once.'); result[key] = true;
+    } else if (arg === '--config' && result.configPath === undefined && args[index + 1] && !args[index + 1].startsWith('--')) result.configPath = args[++index];
+    else throw new Error('Use setup-check.mjs [--config file.jsonc] [--docker] [--json] [--help].');
+  }
+  return result;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    const args = setupArguments(process.argv.slice(2));
+    if (args.help) console.log('Usage: npm run setup:check -- [--config file.jsonc] [--docker] [--json]\nRead-only local prerequisites and literal hosted config checks. --docker only queries the configured engine.\nNo app, tests, Wrangler, deployment, provider authentication or model calls are started.\nA pass is not hosted acceptance. See docs/independent-setup.md.');
+    else {
+      const report = await inspectSetup(args);
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else {
+        console.log(`Offline ${report.profile} prerequisites: ${report.summary.passed}/${report.summary.total} passed; ${report.summary.blocked} blocked; ${report.summary.notChecked} not checked.`);
+        for (const check of report.checks) console.log(`${check.status === 'passed' ? 'PASS' : check.status === 'blocked' ? 'BLOCKED' : 'NOT CHECKED'} ${check.label}${check.detail ? ': ' + check.detail : ''}${check.action ? '\n  Next: ' + check.action : ''}`);
+        console.log('Not verified: ' + report.notVerified.join('; ') + '.');
+        console.log('No application or provider operations ran. A pass is not hosted acceptance.');
+      }
+      process.exitCode = report.status === 'passed' ? 0 : 1;
+    }
+  } catch { console.error('Setup check could not finish. Check the source installation and command options; no provider operation was requested.'); process.exitCode = 2; }
+}
