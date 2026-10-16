@@ -63,6 +63,21 @@ Search is a read and does not create a project, start an agent or alter code.
 The catalog uses the same workspace-reader authorization as the workspace API;
 restricted reviewers do not gain project-directory access.
 
+**Projects** opens the connected repository catalog. **Needs attention** comes
+first, with repair and recovery ahead of review or manual integration. Each row
+uses the existing task outcome and its exact task/candidate link. Passing checks
+do not imply independent review, acceptance or merge. Active work and an
+intentional admission pause can remain under **Other repositories**.
+
+The catalog uses the ten complete projects loaded by the workspace page. Its
+name filter, status filters and ordering apply only to that page, with loaded and
+workspace totals shown separately. **Find across workspace** opens the existing
+**Find work** dialog to search every project name. This catalog lists connected
+projects; it does not enumerate unrelated repositories in the Cloudflare account.
+Row counts use all tasks in that project, including integrated tasks. Queue
+counts appear when there is queued work; empty repositories show **0 tasks**.
+The read-only projection does not change permissions, admission or workflow state.
+
 The sidebar contains at most eight recent/pinned project shortcuts, including
 the current project. Up to four projects can be pinned. Browser storage contains
 only their IDs, scoped to workspace and identity; labels and counts are read
@@ -74,6 +89,7 @@ show explicit errors rather than claiming an empty workspace.
 
 | Collection | Visible page | Retained information |
 | --- | --- | --- |
+| Connected repositories | 10 complete projects; page-scoped name/status/order controls | Full task denominators per project, separate workspace project total, and existing global name discovery |
 | Task queue | 25 tasks, with search, status and order controls | All task totals, including integrated work and prerequisites |
 | Candidates | 25 candidates, with search, status and order controls | Every original candidate, current and earlier reports, stale-assignment warnings, shared files and acceptance blockers |
 | Project history | 25 candidates and 25 activity events | Original status, commit, check counts and individual detail links |
@@ -90,7 +106,7 @@ selected project, independent of the visible page. Execution-slot capacity
 remains workspace-wide, including work outside the loaded projects.
 
 Everyday screens lead with results, next actions and short count labels. Routine
-definitions use **About task counts**, **About these records** and **About these
+definitions use **About catalog counts**, **About task counts**, **About these records** and **About these
 reports** disclosures. Check setup puts runtime detail under **How checks run**.
 These use the existing disclosure state and keyboard behavior. Sample labels,
 blocking warnings, current status, report numerators/denominators and workflow

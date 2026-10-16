@@ -91,7 +91,7 @@ const compactNavigation=createCompactNavigation({document,getWorkspace:()=>works
   navigationKey=null;if(workspace)updateProjectNavigation();
 }});
 const collections=createCollectionPager({getScope:()=>JSON.stringify([workspace.id,workspace.authentication?.principal??null]),render});
-createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery});
+const navigation = createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery});
 const {openContinuation} = createContinuationDialog({getContext, api, dialogs, showError, downloadJson, captureSession:connection.captureSession});
 const {openRevision, renderRevisionPreview} = createRequirementsForm({getContext, api, dialogs, refresh, announce});
 const browserSession = createBrowserSession({drafts, disclosures, assignmentRequests, operationRequests, projectSelections, onWarning: showError});
@@ -110,7 +110,8 @@ const publicationPanel = createPublicationView({getContext, captureSession:conne
 const taskViews = createTaskViews({getContext, parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
   switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections, openAgentConnection});
 const views = {
-  projects: createProjectsView({getContext, disclosure, getProjectSelection:id=>projectSelections.get(id), selectProject, switchView, openTaskComposer, changeProjectPage, createStarter: async () => {
+  projects: createProjectsView({getContext, disclosure, collections, selectProject, switchView, openTaskComposer,
+    openProjectSearch: () => navigation.openCommands(), changeProjectPage, createStarter: async () => {
     const result = await mutate(() => api("/api/workspace/starter", {expectedWorkspaceId:workspace.id}), "Your starter project is ready.");
     if (result) await refresh(true);
   }}),
@@ -126,7 +127,7 @@ const views = {
 };
 views.history = views.evidence;
 const viewTitles = {
-  projects: ["Projects", "Projects", "Your code, queued work and decisions stay together."],
+  projects: ["Projects", "Repositories", "Connected code, work in flight, and the next decision."],
   queue: ["Task queue", "Task queue", "All tasks in this project. Open a task for its requirements and candidates."],
   history: ["Project history", "Project history", "All retained candidates and activity in this project."],
   overview: ["Task details", "Task details", "The agreed work, current requirements and next step."],
