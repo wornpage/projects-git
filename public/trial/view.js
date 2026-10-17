@@ -68,10 +68,10 @@ export function renderTrial(root,announcement,state,actions) {
   if(phase==='eligible'||phase==='reserving')nodes.push(
     el('p',{},'Reserve a separate private space. The trial clock starts when the reservation is saved.'),
     details([['Duration',duration(identity.policy.durationMs)+' from reservation'],['Next','Check sample availability'],['Model credits','Not included']]),
-    phase==='eligible'?el('div',{class:'trial-verification'},
+    ...(phase==='eligible'?[el('div',{class:'trial-verification'},
       el('div',{id:'trial-turnstile',class:'cf-turnstile','data-action':'turnstile-spin-v2'}),
       el('p',{id:'trial-turnstile-status',class:'small muted',role:'status'},'Loading security check…'),
-      el('button',{id:'trial-turnstile-retry',type:'button',class:'text-button',hidden:true},'Retry security check')):null,
+      el('button',{id:'trial-turnstile-retry',type:'button',class:'text-button',hidden:true},'Retry security check'))]:[]),
     button(phase==='reserving'?'Reserving…':'Reserve trial',actions.reserve,{id:'reserve-trial',disabled:true}),
     el('p',{class:'small muted'},'A reservation does not start an agent, create a repository or run checks.'));
   if(['admitted','confirm-close','closing'].includes(phase))nodes.push(

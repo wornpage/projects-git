@@ -36,6 +36,12 @@ test('script errors and widget timeouts leave the action disabled with an explic
   const g=fixture();g.show(eligible);await tick();g.renders[0].callback('token');g.renders[0]['timeout-callback']();
   assert.equal(g.verification.take(),'');assert.equal(g.root.querySelector('#reserve-trial').disabled,true);
 });
+test('saving the reservation removes the widget without rendering a null placeholder',()=>{
+  const f=fixture();f.show({...eligible,phase:'reserving'});
+  assert.equal(f.root.querySelector('#trial-turnstile'),null);
+  assert.doesNotMatch(f.root.textContent,/null|undefined/);
+  assert.equal(f.root.querySelector('#reserve-trial').disabled,true);
+});
 test('client refuses a missing token and keeps verification tokens out of published state',async()=>{
   const calls=[],states=[],client=createTrialClient({notify:s=>states.push(s),setTimer:()=>0,clearTimer(){},fetcher:async(path,init)=>{
     calls.push({path,init});if(path==='/api/trial/session')return Response.json(identity);
