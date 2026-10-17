@@ -1,4 +1,4 @@
-import {readMetrics} from './ui/project-metrics.js';
+import {readMetrics,PROJECT_METRIC_PHASES,PROJECT_METRIC_OUTCOMES} from './ui/project-metrics.js';
 
 const annotations=Object.freeze({readOnlyHint:true,untrustedContentHint:true,consequentialHint:false});
 const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
@@ -85,7 +85,32 @@ function taskStatusDto(value,workspaceId,taskId){const data=pageDto(value,worksp
     createdAt:task.createdAt,revision:task.revision??1,baseCommit:task.baseCommit,acceptedRunId:uuid(task.acceptedRunId)?task.acceptedRunId:null,mergedCommit:sha(task.mergedCommit)?task.mergedCommit:null,
     dependsOn:Array.isArray(task.dependsOn)?[...task.dependsOn]:[]},counts:{candidates:candidates.length},candidates};
 }
-function metricsDto(value,projectId){const parsed=readMetrics(value,projectId);return structuredClone(parsed);}
+function metricsDto(value,projectId){
+  const parsed=readMetrics(value,projectId),phases={};
+  for(const name of PROJECT_METRIC_PHASES){
+    const row=parsed.phases[name],outcomes={};
+    for(const outcome of PROJECT_METRIC_OUTCOMES[name])if(Object.hasOwn(row.outcomes,outcome))outcomes[outcome]=row.outcomes[outcome];
+    phases[name]={label:row.label,definition:row.definition,unit:row.unit,total:row.total,observed:row.observed,active:row.active,missing:row.missing,
+      invalid:row.invalid,notStarted:row.notStarted,notApplicable:row.notApplicable,outcomes,medianMs:row.medianMs,minimumMs:row.minimumMs,
+      maximumMs:row.maximumMs,activeMedianElapsedMs:row.activeMedianElapsedMs,remainingMs:row.remainingMs};
+    if(['verification','recovery'].includes(name)){
+      phases[name].coverage={operations:row.coverage.operations,withRecords:row.coverage.withRecords,withoutRecords:row.coverage.withoutRecords};
+      phases[name].historicalAttemptsMayBeUnrecorded=row.historicalAttemptsMayBeUnrecorded;
+    }
+  }
+  return {schemaVersion:parsed.schemaVersion,projectId:parsed.projectId,sourceRevision:parsed.sourceRevision,observedAt:parsed.observedAt,scope:parsed.scope,
+    counts:{tasks:parsed.counts.tasks,candidates:parsed.counts.candidates,retainedOperations:parsed.counts.retainedOperations},phases,
+    modelProvenance:{totalRuns:parsed.modelProvenance.totalRuns,recordedRuns:parsed.modelProvenance.recordedRuns,unattributedRuns:parsed.modelProvenance.unattributedRuns,
+      models:parsed.modelProvenance.models.map(model=>({name:model.name,runs:model.runs}))},
+    usage:{knownRequests:parsed.usage.knownRequests,unknownUsageRequests:parsed.usage.unknownUsageRequests,observedUsageRequests:parsed.usage.observedUsageRequests,
+      modelRunsWithoutReceipt:parsed.usage.modelRunsWithoutReceipt,externalRunsWithoutUsage:parsed.usage.externalRunsWithoutUsage,
+      cachedUsageKnownRequests:parsed.usage.cachedUsageKnownRequests,totalOverflow:parsed.usage.totalOverflow,observedInputTokens:parsed.usage.observedInputTokens,
+      observedOutputTokens:parsed.usage.observedOutputTokens,observedCachedInputTokens:parsed.usage.observedCachedInputTokens,scope:parsed.usage.scope},
+    cost:{currency:parsed.cost.currency,actual:parsed.cost.actual,measuredRequests:parsed.cost.measuredRequests,knownRequests:parsed.cost.knownRequests,
+      estimate:parsed.cost.estimate,reason:parsed.cost.reason},
+    flags:{phaseWindowsMayOverlap:parsed.flags.phaseWindowsMayOverlap,phaseTotalsMustNotBeAdded:parsed.flags.phaseTotalsMustNotBeAdded,
+      historicalRecoveryMayBeUnrecorded:parsed.flags.historicalRecoveryMayBeUnrecorded}};
+}
 
 function eligibility(context,connected){const workspace=context?.workspace,principal=workspace?.authentication?.principal;
   if(!connected||context?.demo||workspace?.provider!=='cloudflare-artifacts'||workspace?.authentication?.mode!=='cloudflare-access'
