@@ -115,7 +115,7 @@ const {loadIndexedSearch, rebuildSearch} = createRetainedSearch({getContext, ret
 const {reviewPanel} = createReviewForm({getContext, drafts, api, mutate, refresh, saveSession, showError,
   getReviewerName: browserSession.getReviewerName, rememberReviewerName: browserSession.rememberReviewerName,
   runCoordination, comparisonKey, comparisonHeads, acceptanceReady, disclosure, evidenceChecks: parts.evidenceChecks, diffPanel: parts.diffPanel, switchView});
-const publicationPanel = createPublicationView({getContext, captureSession:connection.captureSession, api, mutate, refresh, openInspector});
+const publicationPanel = createPublicationView({getContext, captureSession:connection.captureSession, api, mutate, refresh, openInspector, downloadHandoff});
 
 const taskViews = createTaskViews({getContext, parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
   switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections, openAgentConnection});

@@ -72,6 +72,10 @@ export class GitHubPublication {
       refuse('github_base_changed', 'GitHub main has advanced or changed. Update the project and obtain a new approved candidate before publishing.');
   }
 
+  publicationContent(task, run) {
+    return {title:task.title, body:`${task.purpose}\n\nRequirements:\n${task.criteria.map(value => '- ' + value).join('\n')}\n\nLocally accepted and merged commit: ${run.headCommit}\nRequirements revision: ${task.revision}\n\nGitHub review, merge and deployment remain separate actions.`};
+  }
+
   async preview(runId) {
     const {run, task, state} = this.selected(runId);
     if (run.publication) refuse('publication_exists', 'This candidate already has a publication record. Refresh or resume that record.');
@@ -84,7 +88,7 @@ export class GitHubPublication {
     const binding = {local, repository:this.repository, repositoryId:repo.id, baseBranch, headBranch};
     this.assertBinding(runId, binding);
     const preview = {id:randomUUID(), binding, createdAt:new Date(this.now()).toISOString(), expiresAt:new Date(this.now() + 5 * 60_000).toISOString(),
-      title:task.title, body:`${task.purpose}\n\nRequirements:\n${task.criteria.map(value => '- ' + value).join('\n')}\n\nLocally accepted and merged commit: ${run.headCommit}\nRequirements revision: ${task.revision}\n\nGitHub review, merge and deployment remain separate actions.`};
+      ...this.publicationContent(task, run)};
     this.save(next => { next.runs.find(item => item.id === runId).publicationPreview = preview; });
     return structuredClone(preview);
   }
@@ -133,7 +137,7 @@ export class GitHubPublication {
     if (raw) {
       const pr = this.normalizedPR(raw, record);
       return this.update(runId, id, {pr, status:pr.status, stage:'pr', error:pr.status === 'changed'
-        ? {code:'github_source_changed', message:'The PR head or destination changed. This is not the approved publication.'} : null}, `GitHub PR #${pr.number}: ${pr.status}. Local acceptance and merge remain separate records.`);
+        ? {code:'github_source_changed', message:'The PR head or destination changed. This is not the approved publication.'} : null}, `GitHub PR #${pr.number}: ${pr.status}. Source approval and merge remain separate records.`);
     }
     const branchHead = await this.provider.ref(b.headBranch);
     const changed = branchHead && branchHead !== b.local.headCommit;
