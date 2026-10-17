@@ -2,8 +2,9 @@
 
 Status: source/local implementation only. This is not a provisioned or available
 hosted trial. Spending remains unapproved. No signup automatically provisions a
-repository, runs code, or starts an agent. The current browser remains a read-only
-workspace preview; its sample-preparation controls are a later UI slice.
+repository, runs code, or starts an agent. The signup UI now offers explicit sample
+preparation, status inspection and safe resume controls. The workspace itself
+remains a read-only preview; preparing code does not enable coding workflows.
 
 ## API
 
@@ -21,6 +22,31 @@ means the same durable intent can be inspected/resumed; there is no automatic
 mutation retry. Different client keys cannot create additional samples. A fresh
 success returns 201; a completed replay returns 200 without minting credentials
 or reseeding. `ready` describes repository setup only; `workflowReady` stays false.
+
+## Sample setup UI
+
+After checking the current verified identity and active reservation, the browser
+reads sample status. Signup and page load never prepare a repository automatically.
+
+| State | Visible action and consequence |
+| --- | --- |
+| Not started | **Prepare sample repository** sends one empty, identity-bound POST |
+| Request pending | Preparation is disabled; **Check sample status** can inspect the saved outcome |
+| Outcome uncertain | Inspect status first; no prepare/resume action is offered until a fresh read |
+| Preparing / retryable failure | Check status or explicitly **Resume sample setup** using the same retained request key |
+| Permanent or inconsistent setup | Operator attention; no replacement or resume action |
+| Unavailable | Keep the verified reservation and offer the read-only workspace preview |
+| Ready | **Open sample project** links to the confirmed project; full repository and commit are in optional details |
+
+The client validates the complete DTO, derived repository name, workspace identity,
+project ID, commit and false workflow-readiness flag. Malformed and foreign results
+never become a ready state. Authentication loss, identity changes, closure and
+expiry clear prior sample data. Hidden/page-restored tabs use the existing single
+trial client lifecycle; late responses cannot repaint another identity's sample.
+
+The application does not automatically repeat a mutation. Network transports may
+repeat requests, so the backend's one-intent rule and idempotency remain essential.
+Preparing a sample and opening/cancelling closure do not extend the trial deadline.
 
 The response contains the template ID and the owned repository/project IDs and
 recorded commit where known. A `baseCommit` during incomplete setup is a reserved
@@ -77,6 +103,7 @@ closed. Neither proves hosted Artifacts, email delivery or full-trial readiness.
 
 ```sh
 node --test --test-concurrency=1 tests/trial-sample.test.mjs tests/repository-creation.test.mjs tests/trial-isolation.test.mjs tests/trial-runtime.test.mjs
+node --test --test-concurrency=1 tests/trial-sample-ui-client.test.mjs tests/trial-sample-ui-http.test.mjs tests/trial-ui-client.test.mjs tests/trial-ui-view.test.mjs tests/trial-ui-lifecycle.test.mjs
 npm run typecheck
 ```
 

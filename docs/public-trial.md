@@ -5,7 +5,8 @@ not an available hosted trial. Based on main
 `f8f0eb001a5e3f1d69512b64587f4ef374678533`. No new resources, identity changes,
 deployment or spending are authorized. See [the implemented boundary](trial-admission.md).
 [Fixed sample repository setup](trial-sample-setup.md) has since been implemented
-locally through that owning path; hosted setup and a complete coding trial remain unqualified.
+locally through that owning path, including explicit preparation and recovery UI;
+hosted setup and a complete coding trial remain unqualified.
 
 ## Entry and first useful result
 

@@ -6,8 +6,8 @@ Built on `f4c9c51`, the separate trial entry point now serves a no-invitation si
 flow. The UI reserves real local trial records and opens their isolated metadata
 workspace. It is not deployed, and no email delivery or hosted authentication has
 been qualified. [Sample repository setup](trial-sample-setup.md) is now implemented
-as a separate local API slice; it is not automatically invoked by signup and has
-no preparation controls in this UI yet. Agents, checks, exports and cleanup remain
+with explicit preparation, status and recovery controls in this UI; it is not
+automatically invoked by signup. Agents, checks, exports and cleanup remain
 unavailable. The page states these workflow limits before and after reservation.
 
 The existing private app, demo, challenge README, video and tag are unchanged by

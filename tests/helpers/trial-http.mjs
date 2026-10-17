@@ -28,10 +28,10 @@ async function token(subject='person-a',changes={}){
     .setProtectedHeader({alg:'RS256',kid:jwk.kid}).sign(pair.privateKey);
 }
 function context(storage,name){return{storage:{...storage,getAlarm:async()=>null,setAlarm:async()=>{throw new Error('No background scheduling allowed');}},id:{name}};}
-function fixture({artifacts,git}={}){
+function fixture({artifacts,git,trialPolicy=policy}={}){
   const contexts=new Map(),calls=[],assetCalls=[];
   let registry;
-  const env={WORKSPACE_ID:'',ACCESS_OWNER_SUB:'',TRIAL_POLICY:JSON.stringify(policy),
+  const env={WORKSPACE_ID:'',ACCESS_OWNER_SUB:'',TRIAL_POLICY:JSON.stringify(trialPolicy),
     ...(artifacts?{TRIAL_ARTIFACTS:artifacts}:{}),
     TRIAL_REGISTRY:{getByName:name=>{assert.equal(name,'trial-admissions-v1');return registry;}},
     WORKSPACES:{getByName:name=>{

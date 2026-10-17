@@ -1,11 +1,11 @@
 import {join} from 'node:path';
 import {gitHttpFixture} from './git-http.mjs';
-import {fixture,index} from './trial-http.mjs';
+import {fixture,index,policy} from './trial-http.mjs';
 import {WorkspaceStore} from '../../src/cloudflare/workspace-store.ts';
 
 // Artifacts control-plane fixture; Git objects/pushes and SQLite are real and
 // local. No Cloudflare resource, provider credential or hosted endpoint is used.
-export async function trialSampleFixture(t) {
+export async function trialSampleFixture(t,{policyOverrides={}}={}) {
   const git=await gitHttpFixture(t),repositories=new Map(),calls=[];
   const hooks={};
   const artifacts={
@@ -29,7 +29,7 @@ export async function trialSampleFixture(t) {
     },
   };
   const transport={async seedRepository(options){calls.push(['seed',options.name]);await hooks.beforeSeed?.(options);const head=await git.transport.seedRepository(options);await hooks.afterSeed?.(options,head);return head;}};
-  const http=fixture({artifacts,git:transport});
+  const http=fixture({artifacts,git:transport,trialPolicy:{...policy,...policyOverrides}});
   t.after(()=>{http.sql.db.close();for(const context of http.contexts.values())context.db.close();});
   const store=workspaceId=>new WorkspaceStore(http.contexts.get(workspaceId).storage,workspaceId);
   const operation=workspaceId=>Object.values(store(workspaceId).read().operations).find(operation=>operation.kind==='repository-create');
