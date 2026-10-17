@@ -172,6 +172,7 @@
 .workbench .review-workflow[data-guided=false] .review-grid .button-primary,
 .workbench .review-workflow[data-base-required=true] .review-grid .button-primary,
 .workbench .check-followup .check-setup-action { background:var(--worn-surface); color:var(--worn-text); border-color:var(--workbench-line); }
+.workbench .review-verification > .check-setup-action { margin-block-start:var(--space-16); }
 
 /* Keep a boundary around the main surface, not around every nested section. */
 .workbench .panel .panel { border:0; border-radius:0; box-shadow:none; background:transparent; }
