@@ -101,6 +101,21 @@
 .workbench dialog::backdrop { background:#15271d73; }
 .workbench .connection-dialog-header { align-items:center; gap:var(--space-16); border-color:var(--workbench-line); }
 .workbench .connection-dialog-header h2 { font-size:var(--text-22); letter-spacing:var(--tracking-tight); }
+.workbench #project-connection-dialog .connection-dialog-header { padding:var(--space-24); }
+.workbench .trial-connections { display:grid; gap:var(--space-16); padding:var(--space-24); }
+.workbench .trial-connections > p { margin:0; }
+.workbench .trial-connections > select { justify-self:start; max-width:100%; }
+.workbench .trial-connections > [role=status]:empty { display:none; }
+.workbench .trial-connection-actions { display:flex; flex-wrap:wrap; gap:var(--space-12); align-items:center; }
+.workbench .trial-connections details { min-width:0; }
+.workbench .trial-connections summary { padding-block:var(--space-8); }
+.workbench .trial-connections .output { max-width:100%; overflow-wrap:anywhere; white-space:pre-wrap; }
+@media (max-width:620px) {
+  .workbench #project-connection-dialog { padding:0; }
+  .workbench #project-connection-dialog .connection-dialog-header { padding:var(--space-16); }
+  .workbench .trial-connections { padding:var(--space-16); }
+  .workbench .trial-connection-actions { align-items:stretch; flex-direction:column; }
+}
 .workbench .inspector-drawer { width:min(560px,100%); padding:var(--space-24); }
 .workbench #inspector-content { gap:var(--space-24); }
 .workbench .project-controls-panel > .button { width:100%; justify-content:flex-start; text-align:left; }

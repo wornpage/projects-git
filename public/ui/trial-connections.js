@@ -49,11 +49,11 @@ export function createTrialConnections({workspaceId,captureSession,fetcher=fetch
   }
   const create=el('button',{type:'button',class:'button button-primary',onclick:()=>act()},'Create / replace connection');
   const remove=el('button',{type:'button',class:'button',onclick:()=>act(true)},'Revoke connection');
-  const root=el('section',{},el('p',{},'Use separate connections for your coding agent and independent reviewer. Each connection is limited to this trial.'),
+  const root=el('section',{class:'connection-dialog-body trial-connections'},el('p',{},'Use separate connections for your coding agent and independent reviewer. Each connection is limited to this trial.'),
     role,el('p',{class:'small'},'Replacing a connection revokes its previous credential. Keep the downloaded file outside repositories and shared chats.'),
-    el('div',{class:'actions'},create,remove,download),notice,
+    el('div',{class:'trial-connection-actions'},create,remove,download),notice,
     el('details',{},el('summary',{},'Connect your coding tool'),el('p',{},'Install the Projects Git source, then configure your tool to launch this MCP server with the absolute path to the private connection file:'),
-      el('pre',{},'node scripts/trial-agent-mcp.mjs --connection <absolute-private-connection.json>'),
+      el('pre',{class:'output'},'node scripts/trial-agent-mcp.mjs --connection <absolute-private-connection.json>'),
       el('p',{class:'small'},'The agent supplies the checkout implementation. Publishing, checks, independent review, your decision and merge remain separate.')));
   const suspend=()=>{generation++;clear();abort?.abort();};
   const hidden=()=>{if(document.hidden)suspend();};document.addEventListener('visibilitychange',hidden);
