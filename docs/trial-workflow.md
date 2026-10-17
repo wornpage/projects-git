@@ -12,6 +12,12 @@ trial. Existing private workspace Access and the read-only public demo are separ
 
 ## Visitor flow
 
+The public entry is `https://git-demo.projectsdemo.org/`. **Start trial** opens
+`https://try-git.projectsdemo.org/trial/`, where visitors can read the introduction
+without signing in. **Continue with email** opens the separately protected
+`/trial/signup` route. The trial API, workspace and existing private workspace
+remain authenticated; browsing the introduction does not reserve a trial.
+
 1. Sign in through a dedicated Cloudflare Access application and admit one trial.
 2. Prepare the supplied checkout project and starter task.
 3. Open Project settings and download separate coding-agent and reviewer connections.
