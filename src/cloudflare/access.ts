@@ -1,5 +1,5 @@
 import { createLocalJWKSet, jwtVerify } from 'jose';
-import type { JSONWebKeySet } from 'jose';
+import type { JSONWebKeySet,JWTPayload } from 'jose';
 import { ApiError } from './security.ts';
 
 export interface AccessPolicy { issuer: string; audience: string; workspaceId: string; ownerSubject: string; agentClientIds: string[]; reviewerClientIds?: string[]; reviewerSubjects?: string[]; memberSubjects?: string[] }
@@ -7,6 +7,7 @@ export interface AccessPrincipal { provider: 'cloudflare-access'; kind: 'owner' 
 export interface SystemPrincipal { provider: 'internal'; kind: 'system'; issuer: string; id: 'workspace-alarm'; workspaceId: string; displayName: 'Workspace alarm' }
 export interface HostedAuthority { policy: AccessPolicy; principal: AccessPrincipal | SystemPrincipal; forbiddenSecrets?: string[] }
 export interface AccessEnvironment { ACCESS_TEAM_DOMAIN?: string; ACCESS_AUD?: string; ACCESS_OWNER_SUB?: string; ACCESS_AGENT_CLIENT_IDS?: string; ACCESS_REVIEWER_CLIENT_IDS?: string; ACCESS_REVIEWER_SUBJECTS?: string; ACCESS_MEMBER_SUBJECTS?: string; WORKSPACE_ID?: string }
+export interface HumanAccessIdentity { issuer:string; audience:string; subject:string; displayName:string; issuedAt:number; expiresAt:number }
 
 export function accessPolicy(env: AccessEnvironment): AccessPolicy {
   const issuer = env.ACCESS_TEAM_DOMAIN ?? '', audience = env.ACCESS_AUD ?? '', ownerSubject = env.ACCESS_OWNER_SUB ?? '', workspaceId = env.WORKSPACE_ID ?? '';
@@ -68,7 +69,7 @@ export class AccessVerifier {
     return request;
   }
 
-  async authenticate(request: Request, policy: AccessPolicy): Promise<AccessPrincipal> {
+  private async claims(request: Request, policy: Pick<AccessPolicy,'issuer'|'audience'>): Promise<JWTPayload> {
     const token = request.headers.get('Cf-Access-Jwt-Assertion');
     if (!token || token.length > 16_384) throw new ApiError(401, 'UNAUTHORIZED', 'A valid Access application session is required.');
     try {
@@ -81,6 +82,25 @@ export class AccessVerifier {
       }
       const claims = result.payload;
       if (claims.type !== 'app' || !Number.isFinite(claims.iat) || Number(claims.iat) > Math.floor(this.now() / 1000)) throw new Error('Invalid application claims');
+      return claims;
+    } catch {
+      throw new ApiError(401, 'UNAUTHORIZED', 'Access session validation failed.');
+    }
+  }
+
+  // Authentication does not enroll a trial or confer workspace authority.
+  async authenticateHuman(request:Request, policy:Pick<AccessPolicy,'issuer'|'audience'>):Promise<HumanAccessIdentity> {
+    const claims=await this.claims(request,policy);
+    if(typeof claims.sub!=='string'||!/^[A-Za-z0-9_.:@-]{1,200}$/.test(claims.sub)
+      ||typeof claims.email!=='string'||claims.email.length>320||!/^\S+@\S+$/.test(claims.email)
+      ||claims.common_name!==undefined||claims.email_verified!==undefined&&claims.email_verified!==true)
+      throw new ApiError(403,'HUMAN_IDENTITY_REQUIRED','Trial admission requires a verified human Access login.');
+    return {issuer:policy.issuer,audience:policy.audience,subject:claims.sub,displayName:claims.email,issuedAt:claims.iat!,expiresAt:claims.exp!};
+  }
+
+  async authenticate(request: Request, policy: AccessPolicy): Promise<AccessPrincipal> {
+    try {
+      const claims=await this.claims(request,policy);
       if (claims.sub === policy.ownerSubject && typeof claims.email === 'string' && claims.email.length > 0 && claims.email.length <= 320 && !claims.common_name) {
         return { provider: 'cloudflare-access', kind: 'owner', issuer: policy.issuer, id: claims.sub, workspaceId: policy.workspaceId, displayName: claims.email, issuedAt: claims.iat!, expiresAt: claims.exp! };
       }

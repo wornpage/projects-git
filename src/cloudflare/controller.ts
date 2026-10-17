@@ -88,6 +88,7 @@ interface Operation {
 }
 interface HostedJob { status: 'queued' | 'running' | 'finished' | 'failed'; task: Task; limits: ExecutionLimits; phase: string; pendingCommit?: string; attemptId?: string }
 export interface HostedRuntime {
+  guard?:()=>void;
   currentPolicy?: () => Promise<AccessPolicy>;
   ensureSubscription?: (repositoryName:string,validate:()=>void)=>Promise<void>;
   checks: { verify(source: string, commit: string, signal?: AbortSignal, attemptId?: string): Promise<Evidence> };
@@ -239,6 +240,7 @@ export class HostedController {
   }
 
   private checkBinding(): void {
+    this.runtime?.guard?.();
     const state = this.store.identity();
     assertAuthority(this.authority, state.id);
     assertSession(this.authority.principal, state.sessionsValidAfter);

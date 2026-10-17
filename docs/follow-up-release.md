@@ -102,11 +102,11 @@ unapproved. A discovery list is not evidence of a destination's current rules.
 | Hacker News | [Show HN rules](https://news.ycombinator.com/showhn.html) favor something visitors can try without signup; a signup page alone is ineligible. Routine feature updates generally do not qualify. | Use the real sample/source, explain the technical problem, and assess whether a first submission or substantial overhaul fits. Do not announce only the signup page. |
 | Product Hunt | [Posting guide](https://help.producthunt.com/en/articles/479557-how-to-post-a-product) asks for a personal maker account, direct product link, accurate availability/pricing and gallery assets. | Prepare a draft with the public demo and honest beta status. No upload, paid promotion or submission yet. |
 | BetaList | [Submission guidance](https://betalist.com/criteria) and the [submission entry](https://betalist.com/submit) need a separate eligibility review; submission redirects to login. | Hold until the actual trial/availability and applicable submission terms are settled. No fee or eligibility assumed. |
-| Launch-directory collections | [HN discussion: 100 places to promote an app](https://news.ycombinator.com/item?id=47280008) and [HN: a website that lists submission websites](https://news.ycombinator.com/item?id=48586631) are plausible discovery leads. | Check individual official destinations before choosing a small relevant set; these are not confirmed as the user's remembered post. |
+| Launch-directory collections | The owner confirmed [HN: a website that lists submission websites](https://news.ycombinator.com/item?id=48586631) as the remembered reference. | Use it for discovery, then check individual official destinations before choosing a small relevant set. No bulk submissions or paid listings. |
 
-The literal HN title [List of Lists of Lists](https://news.ycombinator.com/item?id=28615670)
-points to Wikipedia, not a product-launch directory. The exact remembered resource
-remains unconfirmed; do not present any found list as that resource.
+The confirmed reference links to [submission.directory](https://www.submission.directory/).
+Directory inclusion, current pricing and audience fit still require destination-
+specific review. No listing has been submitted.
 
 ## Release package still to prepare after launch authorization
 

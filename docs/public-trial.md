@@ -1,8 +1,9 @@
 # Open trial: follow-up release proposal
 
-Status: local design, not an available hosted trial. Based on main
-`f8f0eb001a5e3f1d69512b64587f4ef374678533`. No signup endpoint, new resources,
-identity changes, deployment or spending are authorized by this document.
+Status: admission and isolated metadata reads are implemented locally; this is
+not an available hosted trial. Based on main
+`f8f0eb001a5e3f1d69512b64587f4ef374678533`. No new resources, identity changes,
+deployment or spending are authorized. See [the implemented boundary](trial-admission.md).
 
 ## Entry and first useful result
 
@@ -12,7 +13,7 @@ before someone can understand the product.
 | Entry | Visitor experience | Current status |
 | --- | --- | --- |
 | Explore without signing up | Inspect the invented checkout project, failed candidate, checks, independent review and merge record | Available in the separate public read-only demo |
-| Start a private trial | Verify email, receive an isolated sample repository, create a task and connect an existing coding agent | Proposed; not implemented |
+| Start a private trial | Verify email, receive an isolated sample repository, create a task and connect an existing coding agent | Admission and metadata isolation proved locally; sample repository, workflow and signup UI pending |
 | Deploy on Cloudflare | Use the MIT source and Cloudflare-first setup guide | Source available; independent installation remains unqualified |
 
 The public sample stays available when trial capacity is full. No waitlist or
@@ -27,7 +28,7 @@ review gate. Existing independent-review and owner-decision criteria stay intact
 
 ## Architecture boundary
 
-The current runtime is deliberately configured for one workspace and owner:
+The existing private deployment is deliberately configured for one workspace and owner:
 `src/cloudflare/access.ts` pins `WORKSPACE_ID` and `ACCESS_OWNER_SUB`;
 `src/cloudflare/index.ts` routes to `WORKSPACES.getByName(env.WORKSPACE_ID)`.
 Repository member permissions do not provide public account creation or tenant
@@ -67,8 +68,10 @@ protection and subscription limits need their own review before configuration.
 
 ## Proposed trial limits
 
-These are design values, not configured quotas or approved spending. Keep them in
-one server-side trial policy when implemented; the UI reads that policy.
+These are proposed product limits, not approved hosted quotas or spending. The
+local admission policy already enforces duration and admission-capacity limits;
+the task, repository and execution capabilities remain unavailable. Keep future
+quotas in one server-side policy; the UI must read that policy.
 
 | Item | Proposed limit | Visible outcome |
 | --- | --- | --- |
