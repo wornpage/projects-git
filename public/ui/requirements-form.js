@@ -76,7 +76,12 @@ export function createRequirementsForm({getContext, api, dialogs, refresh, annou
         $('#revision-status').textContent=error.message + ' Your proposed changes are still here.';
         await refresh(true);
       }
-    } finally { revisionSaving=false; if(revisionDraft===captured)renderRevisionPreview(); }
+    } finally { if(revisionDraft===captured || revisionDraft===null)revisionSaving=false; if(revisionDraft===captured)renderRevisionPreview(); }
   });
-  return {openRevision, renderRevisionPreview};
+  function leave() {
+    revisionDraft=null;revisionSaving=false;
+    for(const id of ['revision-purpose','revision-criteria','revision-reason']){$('#'+id).value='';$('#'+id).disabled=false;}
+    for(const id of ['revision-context','revision-preview','revision-impact','revision-status'])$('#'+id).replaceChildren();
+  }
+  return {openRevision, renderRevisionPreview,leave};
 }

@@ -14,7 +14,7 @@ function fixture({provider='cloudflare-artifacts',manage=true,demo=false}={}){
   const picker=createArtifactPicker({getContext:()=>context,isLocked:()=>locked,saveSession:()=>saves.push({name:$('#repository-path').value,base:$('#repository-base').value}),api:path=>new Promise((resolve,reject)=>calls.push({path,resolve,reject}))});
   const update=()=>picker.update();
   const choose=async name=>{$('#artifact-repository-select').value=name;await $('#artifact-repository-select').dispatch('change');};
-  return {...dom,context,calls,saves,update,choose,lock:value=>{locked=value;update();}};
+  return {...dom,context,calls,saves,update,choose,reset:picker.reset,lock:value=>{locked=value;update();}};
 }
 
 test('hosted discovery loads names and an exact base before allowing confirmation',async()=>{
@@ -80,4 +80,12 @@ test('local, sample and restricted contexts do not query the Artifacts namespace
     if(options.provider==='local-git'){assert.equal(f.$('#repository-manual-fields').hidden,false);assert.equal(f.$('#artifact-picker-field').hidden,true);assert.equal(f.$('#repository-base').attrs.readonly,undefined);}
   }
   const f=fixture();f.$('#task-source').value='sample';f.update();await settle();assert.equal(f.calls.length,0);
+});
+
+test('access-loss reset removes repository names and ignores an outstanding base response',async()=>{
+  const f=fixture();f.update();await settle();f.calls[0].resolve(page(['private-a']));await settle();await f.choose('private-a');
+  f.context.workspace=null;f.$('#repository-path').value='';f.$('#repository-base').value='';f.$('#task-launcher').close();f.reset();
+  f.calls[1].resolve(head('private-a'));await settle();
+  assert.equal(f.$('#artifact-repository-select').options.length,1);assert.ok(!f.$('#artifact-repository-select').textContent.includes('private-a'));
+  assert.equal(f.$('#repository-base').value,'');assert.equal(f.$('#artifact-base-status').textContent,'');assert.equal(f.$('#artifact-catalog-status').textContent,'');
 });

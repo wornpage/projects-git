@@ -1,0 +1,23 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Source/local fixture configuration only. Not an approved hosted install.
+  "name": "projects-git-trial-local",
+  "main": "src/cloudflare/trial-worker.ts",
+  // Pin to the installed local workerd's supported date; no hosted compatibility claim.
+  "compatibility_date": "2026-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "assets": {"directory":"./public","binding":"ASSETS","run_worker_first":true},
+  "vars": {
+    "WORKSPACE_ID": "",
+    "ACCESS_OWNER_SUB": "",
+    "TRIAL_POLICY": "{\"revision\":\"local-admission-v1\",\"issuer\":\"https://fixture.cloudflareaccess.com\",\"audience\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"durationMs\":604800000,\"dailyAdmissions\":20,\"activeTrials\":50,\"totalAdmissions\":1000}"
+  },
+  "durable_objects": {"bindings":[
+    {"name":"TRIAL_REGISTRY","class_name":"TrialAdmissions"},
+    {"name":"WORKSPACES","class_name":"WorkspaceCoordinator"}
+  ]},
+  "migrations": [{"tag":"trial-local-v1","new_sqlite_classes":["TrialAdmissions","WorkspaceCoordinator"]}]
+}
