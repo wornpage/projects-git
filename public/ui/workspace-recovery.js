@@ -31,7 +31,7 @@ export function createWorkspaceRecoveryPanel({getContext,captureSession,api,down
   async function inspect(id,download=false){
     if(!current()||busy)return;busy=true;error='';render();
     try{const value=await api('/api/workspace/recovery-imports/'+id+(download?'/archive':''));if(!current())return;
-      if(download){if(value.sha256!==id)throw Error('Wrong archive.');downloadJson(value,'projects-git-recovery-'+id+'.json');}
+      if(download){if(value.sha256!==id)throw Error('Wrong archive.');downloadJson(value,'projects-git-recovery-'+id+'.json',{compact:true});}
       else {if(value.id!==id)throw Error('Wrong history.');detail=value;records=null;}
     }catch{if(current())error='Could not read the retained archive. Earlier history remains preserved.';}
     if(current()){busy=false;render();}

@@ -33,7 +33,7 @@ export function createWorkspaceBackupPanel({getContext,captureSession,api,downlo
     try{
       const archive=await api('/api/workspace/backup');if(!current()||request!==selection)return;
       if(archive?.format!=='projects-git-workspace-backup/v1'||archive.payload?.workspace?.id!==workspaceId||!/^[a-f0-9]{64}$/.test(archive.sha256))throw Error('A complete backup for this workspace was not returned.');
-      downloadJson(archive,'projects-git-workspace-backup-'+archive.sha256.slice(0,12)+'.json');
+      downloadJson(archive,'projects-git-workspace-backup-'+archive.sha256.slice(0,12)+'.json',{compact:true});
     }catch(failure){if(!current()||request!==selection)return;error=failure.message;}
     if(!current()||request!==selection)return;busy=false;render();
   }

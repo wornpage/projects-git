@@ -50,7 +50,7 @@ test('an unknown restore response is read back without automatically repeating m
   assert.match(f.root.textContent,/outcome is not confirmed/);assert.equal(calls.filter(call=>call.path.endsWith('/restore')).length,1);
   await button(f.root,'Read destination and recovery history').dispatch('click');assert.equal(button(f.root,'Retry same history restore request'),undefined);
   await button(f.root,'Read historical import').dispatch('click');await button(f.root,'Read all original historical records').dispatch('click');assert.match(f.root.textContent,/original-source/);
-  await button(f.root,'Download original archive').dispatch('click');assert.deepEqual(f.downloads[0][0],f.archive);assert.equal(calls.filter(call=>call.path.endsWith('/restore')).length,1);
+  await button(f.root,'Download original archive').dispatch('click');assert.deepEqual(f.downloads[0][0],f.archive);assert.deepEqual(f.downloads[0][2],{compact:true});assert.equal(calls.filter(call=>call.path.endsWith('/restore')).length,1);
 });
 
 test('explicit retry retains the same DTO/key, and late session responses cannot update another owner view',async()=>{

@@ -17,7 +17,7 @@ function panel(api){
 test('backup panel requests nothing automatically and downloads only complete current-workspace metadata',async()=>{
   const value=await archive(),calls=[],p=panel(async(...args)=>{calls.push(args);return value;});await tick();assert.deepEqual(calls,[]);
   await p.root.querySelector('button').dispatch('click');assert.deepEqual(calls,[['/api/workspace/backup']]);assert.equal(p.downloads.length,1);
-  assert.deepEqual(p.downloads[0][0],value);assert.match(p.root.textContent,/Metadata alone cannot recover code/);
+  assert.deepEqual(p.downloads[0][0],value);assert.deepEqual(p.downloads[0][2],{compact:true});assert.match(p.root.textContent,/Metadata alone cannot recover code/);
   assert.match(p.root.textContent,/does not resume work or install an active database/);
 });
 test('backup preview is explicit, validates without applying and displays complete uncertainty counts',async()=>{

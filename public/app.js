@@ -1,4 +1,5 @@
 import {createWorkbenchParts, mergeStatusNotice} from './ui/workbench-parts.js';
+import {downloadJson} from './ui/json-download.js';
 import {createRetainedSearch} from './ui/retained-search.js';
 import {createTaskViews} from './ui/views/queue.js';
 import {createWorkView} from './ui/views/work.js';
@@ -617,16 +618,6 @@ async function downloadHandoff(task) {
   const handoff = await mutate(() => api(`/api/tasks/${encodeURIComponent(task.id)}/handoff`), 'Task handoff prepared. Review its private content before sharing.');
   if (!handoff) return;
   downloadJson(handoff,`projects-git-${task.id}-r${handoff.payload.task.revision}.json`);
-}
-function downloadJson(data, filename) {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], { type: 'application/json;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 async function downloadReviewContext(run) {
   const packet=await mutate(()=>api(`/api/runs/${encodeURIComponent(run.id)}/review-context`),'Read-only review context prepared.');
