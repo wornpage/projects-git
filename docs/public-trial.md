@@ -1,6 +1,6 @@
 # Open trial: follow-up release proposal
 
-Status: admission and isolated metadata reads are implemented locally; this is
+Status: admission, signup UI and isolated metadata reads are implemented locally; this is
 not an available hosted trial. Based on main
 `f8f0eb001a5e3f1d69512b64587f4ef374678533`. No new resources, identity changes,
 deployment or spending are authorized. See [the implemented boundary](trial-admission.md).
@@ -13,7 +13,7 @@ before someone can understand the product.
 | Entry | Visitor experience | Current status |
 | --- | --- | --- |
 | Explore without signing up | Inspect the invented checkout project, failed candidate, checks, independent review and merge record | Available in the separate public read-only demo |
-| Start a private trial | Verify email, receive an isolated sample repository, create a task and connect an existing coding agent | Admission and metadata isolation proved locally; sample repository, workflow and signup UI pending |
+| Start a private trial | Verify email, receive an isolated sample repository, create a task and connect an existing coding agent | Signup UI, admission and metadata isolation proved locally; hosted email login, sample repository and workflow pending |
 | Deploy on Cloudflare | Use the MIT source and Cloudflare-first setup guide | Source available; independent installation remains unqualified |
 
 The public sample stays available when trial capacity is full. No waitlist or
@@ -112,8 +112,10 @@ accepting real user data. Do not silently migrate a trial into the real workspac
 | Work/review | Existing checks and independent reviewer requirements. Explain remaining steps without representing illustrative records as new evidence. |
 | Trial settings | Export, delete, expiry and remaining limits. A distinct self-host setup link; no implied migration or paid conversion. |
 
-No live trial button, inactive signup form or invented signup-success screen is
-part of this source-only preparation. The existing public demo remains read-only.
+The local signup UI is connected to real local admission records. It reports a
+reservation and read-only preview, not an available full workflow. There is no
+email form that pretends to send a code or verify an address. The existing public
+demo remains read-only and unchanged.
 
 ## Bounded implementation and release gates
 

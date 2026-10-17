@@ -7,33 +7,35 @@ human Access identities without invitations. It reserves one durable trial per
 `(issuer, subject)`, enforces global daily/active/lifetime admission limits, and
 routes allowed metadata reads to separate SQLite-backed workspace coordinators.
 
-This is source/local proof only. The trial is not deployed, the email login policy
-is not configured, and there is no signup UI, sample-repository provisioning,
-agent connection, hosted execution or cleanup implementation. `workflowReady`
+The [signup UI](trial-signup.md) is implemented and reviewed locally. The trial is
+not deployed and its email login policy is not configured. There is no sample-
+repository provisioning, agent connection, hosted execution or cleanup implementation. `workflowReady`
 is explicitly false. All unsupported capabilities return a denial, including
 repository discovery, Git access, exports, search, assignments and execution.
 This stage must not be advertised as a working full-workflow trial.
 
 ## HTTP contract
 
-Every endpoint needs a signed human JWT for the trial-specific Access audience.
+Every API endpoint needs a signed human JWT for the trial-specific Access audience.
 Neither a submitted email nor an unsigned header authenticates a user. A later
 hosted configuration must use an identity provider/login method that actually
 verifies email; these fixtures do not prove delivery or the provider's policy.
 
 | Route | Request | Result |
 | --- | --- | --- |
-| `POST /api/trial` | Empty JSON object; valid idempotency key; same-origin browser mutation | Stable admission status; no providers or Git operations |
+| `GET /api/trial/session` | No query or workspace header | Verified email, identity precondition and current duration; no enrollment |
+| `POST /api/trial` | Empty JSON object; valid idempotency key and `X-Trial-Identity` precondition; same-origin browser mutation | Stable admission status; no providers or Git operations |
 | `GET /api/trial` | No query or workspace header | Current identity's status, expiry and unavailable capabilities; no auto-enrollment |
-| `POST /api/trial/close` | Empty JSON object; valid idempotency key | Idempotent closure; denies further workspace access; does not claim deletion |
+| `POST /api/trial/close` | Empty JSON object; valid idempotency key and `X-Trial-Identity` precondition | Idempotent closure; denies further workspace access; does not claim deletion |
 | `GET /api/workspace` | Optional matching workspace precondition | The admitted identity's isolated metadata; management and execution capabilities false |
 | `GET /api/projects/catalog` | Existing catalog paging contract | Only the selected identity's coordinator records |
 | `GET /api/projects/:id/metrics` or `/access` | Existing project read contract | A project in that identity's workspace, or a denial |
 
-The normal application assets require an active admission. This entry point does
-not replace or alter the separate public read-only sample. It has no public demo
-or unguarded signup-success page. The existing private app retains its pinned
-owner and Access audience.
+The normal application assets require an active admission. The trial landing and
+its closed static dependency list are public; the signup document needs a verified
+identity but never automatically reserves a trial. This entry point does not
+replace or alter the separate public read-only sample. The existing private app
+retains its pinned owner and Access audience.
 
 Missing or invalid authentication returns 401/403. A new identity without an
 admission returns 404; full capacity returns 429. Closed/expired workspace access
@@ -102,7 +104,7 @@ request in process with a fixture JWKS response; any other outbound URL fails th
 test. The local runtime is disposed afterward. It is not a hosted workflow,
 benchmark or independent Cloudflare-installation claim.
 
-Before a hosted trial, implement and review the remaining UI, sample-resource
+Before a hosted trial, implement and review sample-resource
 ownership, execution quotas, abuse controls, export/cleanup lifecycle and terms.
 Then obtain a separate resource/configuration and spending decision. A capacity
 limit is not a guaranteed dollar spending cap.

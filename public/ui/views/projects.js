@@ -1,4 +1,4 @@
-import {el, panel, shortSha} from '../dom.js';
+import {el, panel, shortSha, dateTime} from '../dom.js';
 import {projectAttentionBrief} from '../../workbench-state.js';
 
 // Workspace discovery is a read-only projection of the same project selectors.
@@ -53,6 +53,11 @@ export function createProjectsView({getContext, disclosure, collections, selectP
         el('button',{id:'projects-next','data-focus-fallback':'projects-page-status',class:'button button-small',disabled:busy||page.nextOffset===null,onclick:()=>changeProjectPage(page.nextOffset)},'Next projects')] : null,
         el('button',{id:'projects-refresh','data-focus-fallback':'projects-page-status',class:'button button-small',disabled:busy,onclick:()=>changeProjectPage(0,true)},'Refresh projects'))) : null;
     return el('div',{class:'projects-home'},
+      workspace.trial?.workflowReady===false ? panel('Trial workspace preview',el('div',{class:'panel-body'},
+        el('p',{},'Your reservation is saved. This separate workspace is read-only while repository setup is prepared.'),
+        el('p',{},'Repository creation, agents, checks and exports are not available yet.'),
+        el('p',{class:'small muted'},'Trial access expires '+dateTime(workspace.trial.expiresAt)+'.'),
+        el('a',{class:'button button-small',href:'/trial/signup'},'Manage trial reservation'))) : null,
       workspace.personalWorkspace && !projects.length ? panel('Your isolated workspace', el('div',{class:'panel-body'},
         el('p',{},'Your projects, tasks and repositories are separate from other visitors and the working workspace. Start with a fresh checkout project, then edit its task queue, requirements and project policy.'),
         el('p',{class:'small muted'},'This trial has no connected agents or model key. It does not run agents or manufacture completed work.'),
@@ -71,7 +76,7 @@ export function createProjectsView({getContext, disclosure, collections, selectP
         group('Other repositories',catalog.items.filter(row=>!row.brief.needsAttention)),
         !catalog.items.length ? el('p',{class:'no-command-results'},'No loaded repositories match these filters. Clear the filters or find a project across the workspace.') : null,
         catalog.navigation)
-        : workspace.personalWorkspace ? null : panel('Your first project',el('div',{class:'panel-body'},
+        : workspace.personalWorkspace || workspace.trial ? null : panel('Your first project',el('div',{class:'panel-body'},
           el('p',{},workspace.authentication && !workspace.authentication.permissions.manage ? 'The workspace owner connects projects and queues tasks. Your assigned work will appear here.' : workspace.capabilities?.repositoryCreate ? 'Start with New project. Create a private repository or connect existing code, then describe one useful task.' : 'Start with New project. Connect committed code, then describe one useful task.'),
           el('ol',{class:'journey-steps'},
             el('li',{},workspace.capabilities?.repositoryCreate ? 'Choose Create repository to start with a README, or connect an existing Artifacts repository and confirm its current commit.' : workspace.provider==='cloudflare-artifacts' ? 'Choose an Artifacts repository in New project, then confirm the loaded default branch and base commit.' : 'Enter your local repository path, read its current commit, and confirm the code to use.'),

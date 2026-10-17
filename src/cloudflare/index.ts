@@ -465,7 +465,7 @@ export function createAuthenticatedFetch(verifier: AccessVerifier) {
 // authority. Caller-supplied workspace IDs are equality conditions, never routes.
 export async function dispatchWorkspaceRequest(request:Request,env:Env,policy:AccessPolicy,principal:AccessPrincipal):Promise<Response> {
   const url=new URL(request.url);
-  if (!url.pathname.startsWith('/api/')) return String(env.PUBLIC_ENTRANCE_ENABLED)==='true'
+  if (!url.pathname.startsWith('/api/')) return isTrial(env)||String(env.PUBLIC_ENTRANCE_ENABLED)==='true'
     ? await privateWorkbench(request, env.ASSETS) : await env.ASSETS.fetch(request);
   authorizeRoute(principal, request.method, url.pathname);
   const workspaceId=policy.workspaceId;
