@@ -523,14 +523,16 @@ function repositoryAgents(task) {
   const disabled = actions.busy || !pending && (paused || !dependency.ready || task.acceptedRunId || task.mergedCommit || workspace.repositoryWorkflow?.busyTaskIds.includes(task.id));
   if (workspace.personalWorkspace && !workspace.personalWorkspace.agentConnections) return panel('Agent connections', el('div', {class:'panel-body'}, el('p',{},'This isolated trial has no connected agents or model key. You can edit the queue, requirements and project policy; creating tasks does not start an agent.')));
   const feedbackKey=actionKey('assignment',task);
-  const client = workspace.authentication ? el('select', {id:'agent-client',required:true,disabled:Boolean(pending)}, el('option',{value:''},'Choose an Access agent client'), workspace.authentication.agentClientIds.map(id=>el('option',{value:id,selected:pending?.agentClientId===id},id))) : null;
+  const trial=workspace.trial?.workflowReady;
+  const client = workspace.authentication ? el('select', {id:'agent-client',required:true,disabled:Boolean(pending)}, el('option',{value:''},trial?'Choose a trial agent':'Choose an Access agent client'), workspace.authentication.agentClientIds.map(id=>el('option',{value:id,selected:pending?.agentClientId===id},trial?'Trial coding agent':id))) : null;
   const name = el('input', { id: 'agent-label', maxlength: '160', required: true, readonly: Boolean(pending), value: pending?.label ?? '', placeholder: 'For example: Codex · validation approach' });
   return panel('Agent assignments', el('div', { class: 'panel-body' },
     !pending && !dependency.ready ? el('p', { class: 'capability-note' }, dependency.invalid ?? 'Wait for prerequisite integration before preparing agent code access.') : null,
     el('p', { class: 'small' }, pending
       ? task.acceptedRunId || task.mergedCommit ? 'Recover the earlier assignment result with its saved details. Closed tasks can return an existing result; they cannot prepare new work.' : 'Retry the saved assignment with its original details. Current permissions and project state still apply.'
+      : trial ? 'Reserve this task for your trial coding agent. Use its private MCP connection to read, publish and submit the implementation.'
       : hosted ? 'Prepare an isolated Artifacts fork. Your agent clones it, reports its start, and submits a Git commit. Fork access is issued once and expires after 15 minutes.' : 'Prepare one isolated checkout for this task. Give it to your coding agent, which reports its start and submits a Git commit using the handoff commands.'),
-    pending && hosted ? el('p', {class:'small muted'},'Recovering a completed assignment does not reissue its Git credentials.') : null,
+    pending && hosted && !trial ? el('p', {class:'small muted'},'Recovering a completed assignment does not reissue its Git credentials.') : null,
     el('form', { class: 'assignment-form', onsubmit: async event => {
       event.preventDefault(); if (disabled || actions.busy) return;
       if (pending && assignmentRequests.get(task.id) !== pending) {
@@ -564,7 +566,7 @@ function repositoryAgents(task) {
           if (inspector?.open && inspector.contains(form)) inspector.close();
         }
       }
-    } }, el('label', { for: 'agent-label' }, 'Agent or approach name'), name, client ? el('label', {for:'agent-client'}, 'Access agent client') : null, client,
+    } }, el('label', { for: 'agent-label' }, 'Agent or approach name'), name, client ? el('label', {for:'agent-client'}, trial?'Trial agent':'Access agent client') : null, client,
       el('button', { id:'assign-'+task.id, type: 'submit', class: 'button button-primary', disabled, title: actions.busy ? 'Wait for the current action.' : pending ? 'Recover the saved assignment using the same details. Current server permissions still apply.' : !dependency.ready ? dependency.invalid ?? 'Wait for prerequisite integration before preparing this checkout.' : paused ? 'New agent work is paused. Enable it in the project home.' : disabled ? 'Assignments close when a candidate is chosen, or while an operation is in progress.' : 'Prepare isolated code access without starting a model.' }, actionFeedback.get(feedbackKey)?.phase==='pending' ? 'Preparing code access…' : pending ? 'Recover saved assignment' : hosted ? 'Prepare agent fork' : 'Prepare checkout')),
     actionNotice(feedbackKey)));
 }
@@ -594,22 +596,27 @@ function externalHandoff(run) {
 }
 function hostedHandoff(run) {
   const active = ['assigned', 'running'].includes(run.status);
+  const trial=workspace.trial?.workflowReady;
   const credential = forkCredentials.get(run.id);
   const available = active && credential && Date.parse(credential.expiresAt) > Date.now();
   if (!available) forkCredentials.delete(run.id);
   const note = el('input', { id: 'close-reason-' + run.id, maxlength: '2000', required: true, placeholder: 'For example: Agent disconnected before starting' });
-  return disclosure('agent-handoff-' + run.id, 'Fork access and agent handoff',
-    run.repository ? el('pre', { class: 'output' }, 'Git remote: ' + run.repository + '\nBranch: ' + run.branch + '\nBase: ' + run.baseCommit
+  return disclosure('agent-handoff-' + run.id, trial?'Trial agent handoff':'Fork access and agent handoff',
+    trial ? el('div',{},el('p',{},'Use the coding-agent connection from Project settings. Read the current workspace before continuing this assignment.'),
+      el('pre',{class:'output'},'Run ID: '+run.id+'\nTask ID: '+run.taskId+'\nBase: '+run.baseCommit
+        +'\n\nUse projects_git_trial_start, then projects_git_trial_source with this run ID. Publish checkout.mjs with projects_git_trial_publish, then submit the returned commit with projects_git_trial_submit. Keep each mutation request ID with its input; inspect uncertain results before retrying.'),
+      el('p',{class:'small'},'No Git credential is issued to your agent. Checks, independent review, acceptance and merge follow separately.'))
+    : run.repository ? el('pre', { class: 'output' }, 'Git remote: ' + run.repository + '\nBranch: ' + run.branch + '\nBase: ' + run.baseCommit
       + '\n\nReport start: POST /api/runs/' + run.id + '/start with {}'
       + '\nSubmit commit: POST /api/runs/' + run.id + '/submit with {"headCommit":"<full Git ID>","summary":"<what changed>"}'
       + (run.reconcilesRunId ? '\n\nResolve the intended change from retained candidate ' + run.reconcilesRunId + '. Read its original diff and requirements in GET /api/tasks/' + run.taskId + '/handoff. Start from the new base above and commit the resolution; old approval is not carried forward.' : '')
       + '\n\nAuthenticate API calls with the assigned Access service client. Only that client can start, submit or fail this assignment. For Git, use an ephemeral credential helper scoped to this exact remote: a nonempty username and the token secret before ?expires= as the password. Keep the remote and Git configuration credential-free. Submission does not verify, accept or merge the change.') : el('p', {}, 'Fork preparation has not finished. Retry the same assignment request to recover it. The reserved task cannot be claimed twice.'),
-    available ? el('div', {}, el('p', { class: 'small' }, 'Temporary Git access expires ' + dateTime(credential.expiresAt) + '. The token is held only in this tab; refreshing loses it.'),
+    !trial && available ? el('div', {}, el('p', { class: 'small' }, 'Temporary Git access expires ' + dateTime(credential.expiresAt) + '. The token is held only in this tab; refreshing loses it.'),
       el('button', { class: 'button button-small', onclick: async event => {
         if (Date.parse(credential.expiresAt) <= Date.now()) { forkCredentials.delete(run.id); event.currentTarget.disabled=true;
           event.currentTarget.textContent='Git access expired'; showError('This temporary Git credential has expired. Close the assignment and prepare another if fresh access is needed.'); return; }
         try { await navigator.clipboard.writeText(credential.token); announce('Temporary Git token copied. Keep it out of logs and saved configuration.'); } catch { showError('Clipboard access is unavailable. Use the authenticated agent API to receive credentials directly.'); }
-      } }, 'Copy temporary Git token')) : active && run.repository ? el('p', { class: 'small muted' }, 'Git credentials were issued once to the assigning client. This page cannot retrieve them again. If that response was lost or access expired, close the assignment and prepare another.') : null,
+      } }, 'Copy temporary Git token')) : !trial && active && run.repository ? el('p', { class: 'small muted' }, 'Git credentials were issued once to the assigning client. This page cannot retrieve them again. If that response was lost or access expired, close the assignment and prepare another.') : null,
     active ? el('form', { class: 'assignment-form', onsubmit: async event => {
       event.preventDefault();
       const result = await mutate(() => api('/api/runs/' + run.id + '/fail', { message: note.value.trim() }), 'Assignment closed. Its code and history are retained.');

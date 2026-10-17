@@ -88,3 +88,15 @@ test('busy actions and restricted roles keep recovery unavailable',async()=>{
   assert.equal(f.view().querySelector('#assign-'+f.task.id).disabled,true);
   f.actions.busy=false;f.workspace.authentication.permissions.manage=false;assert.equal(f.view(),null);
 });
+
+test('trial assignment and retained handoff use scoped MCP instructions without promising Git credentials',()=>{
+  const f=fixture({closed:'open',pending:false});f.workspace.trial={workflowReady:true};
+  const assignment=f.view();assert.match(assignment.textContent,/private MCP connection/);assert.doesNotMatch(assignment.textContent,/15 minutes|Access agent client|agent clones/);
+  const begin=source.indexOf('function hostedHandoff(run) {'),end=source.indexOf('\nasync function finishBaseUpdate',begin);
+  const ports={workspace:f.workspace,forkCredentials:new Map(),el,disclosure:(_id,title,...children)=>el('details',{},el('summary',{},title),...children),actions:{busy:false}};
+  const build=new Function(...Object.keys(ports),'return ('+source.slice(begin,end)+');')(...Object.values(ports));
+  const handoff=build({id:crypto.randomUUID(),taskId:f.task.id,status:'assigned',repository:'https://git.example.test/fork.git',baseCommit:'a'.repeat(40)});
+  assert.match(handoff.textContent,/projects_git_trial_source/);assert.match(handoff.textContent,/projects_git_trial_publish/);
+  assert.doesNotMatch(handoff.textContent,/service client|Git credentials were issued|Copy temporary Git token|Git remote:/);
+  assert.match(handoff.textContent,/Close assignment/);
+});
