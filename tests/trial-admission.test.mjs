@@ -1,3 +1,4 @@
+import {unapprovedTrialResources} from './helpers/trial-policy.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -7,7 +8,7 @@ import {TrialAdmissionStore,readTrialPolicy,trialStatus,trialAccessPolicy,trialR
 import {sqliteStorage} from './helpers/sqlite-store.mjs';
 
 const start=Date.parse('2026-10-16T12:00:00Z');
-const policy={revision:'fixture-v1',issuer:'https://fixture.cloudflareaccess.com',audience:'a'.repeat(64),durationMs:604800000,dailyAdmissions:20,activeTrials:50,totalAdmissions:1000};
+const policy={revision:'fixture-v1',issuer:'https://fixture.cloudflareaccess.com',audience:'a'.repeat(64),durationMs:604800000,dailyAdmissions:20,activeTrials:50,totalAdmissions:1000,resources:unapprovedTrialResources};
 const identity=(subject='person-a',now=start)=>({issuer:policy.issuer,audience:policy.audience,subject,displayName:'person@example.test',issuedAt:Math.floor(now/1000)-10,expiresAt:Math.floor(now/1000)+3600});
 const principal=(person,grant)=>({provider:'cloudflare-access',kind:'owner',issuer:person.issuer,id:person.subject,workspaceId:grant.workspaceId,displayName:person.displayName,issuedAt:person.issuedAt,expiresAt:person.expiresAt});
 function setup(changes={}){const sql=sqliteStorage();let clock=start;const store=new TrialAdmissionStore(sql.storage,{...policy,...changes},()=>clock);return {...sql,store,get now(){return clock;},set now(value){clock=value;}};}
@@ -51,7 +52,7 @@ test('closure and expiry never silently re-enroll, restore authority or report c
   const c=setup();const first=await c.store.admit(identity(),'first-request');
   const closed=await c.store.close(identity());assert.equal(trialStatus(closed,c.now).status,'closed');
   assert.equal(trialStatus(closed,c.now).remainingMs,0);assert.equal(trialStatus(closed,c.now).capabilities.workspaceReads,false);
-  assert.equal(trialStatus(closed,c.now).cleanup,'not-implemented');
+  assert.equal(trialStatus(closed,c.now).cleanup,'pending');
   assert.equal((await c.store.admit(identity(),'another-key')).closedAt,closed.closedAt);
   await assert.rejects(c.store.authorize(first.workspaceId,principal(identity(),first)),{code:'TRIAL_CLOSED'});
   const b=await c.store.admit(identity('person-b'),'other-person-key');c.now=b.expiresAt;

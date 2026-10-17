@@ -13,7 +13,7 @@
   "vars": {
     "WORKSPACE_ID": "",
     "ACCESS_OWNER_SUB": "",
-    "TRIAL_POLICY": "{\"revision\":\"local-admission-v1\",\"issuer\":\"https://fixture.cloudflareaccess.com\",\"audience\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"durationMs\":604800000,\"dailyAdmissions\":20,\"activeTrials\":50,\"totalAdmissions\":1000}"
+    "TRIAL_POLICY": "{\"revision\":\"local-admission-v1\",\"issuer\":\"https://fixture.cloudflareaccess.com\",\"audience\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"durationMs\":604800000,\"dailyAdmissions\":20,\"activeTrials\":50,\"totalAdmissions\":1000,\"resources\":{\"approval\":null,\"approvalExpiresAt\":null,\"dailySetups\":0,\"totalSetups\":0,\"setupAttempts\":0,\"providerCalls\":0,\"cleanupDelayMs\":86400000}}"
   },
   "durable_objects": {"bindings":[
     {"name":"TRIAL_REGISTRY","class_name":"TrialAdmissions"},

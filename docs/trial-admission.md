@@ -10,7 +10,9 @@ routes allowed metadata reads to separate SQLite-backed workspace coordinators.
 The [signup UI](trial-signup.md) is implemented and reviewed locally. The trial is
 not deployed and its email login policy is not configured. [Supplied sample setup](trial-sample-setup.md)
 is implemented and checked with local provider fixtures; no Cloudflare repository
-has been provisioned. Agent connection, hosted execution and cleanup remain unavailable. `workflowReady`
+has been provisioned. [Cleanup and resource controls](trial-cleanup-controls.md) are
+implemented for the supplied-sample preview and checked locally. Agent connection
+and hosted execution remain unavailable. `workflowReady`
 is explicitly false. All unsupported capabilities return a denial, including
 repository discovery, Git access, exports, search, assignments and execution.
 This stage must not be advertised as a working full-workflow trial.
@@ -107,7 +109,7 @@ request in process with a fixture JWKS response; any other outbound URL fails th
 test. The local runtime is disposed afterward. It is not a hosted workflow,
 benchmark or independent Cloudflare-installation claim.
 
-Before a hosted trial, qualify sample-resource ownership on Cloudflare and implement
-and review execution quotas, abuse controls, export/cleanup lifecycle and terms.
+Before a hosted trial, qualify sample-resource ownership and cleanup on Cloudflare,
+then implement/review execution quotas, edge abuse controls, exports and terms.
 Then obtain a separate resource/configuration and spending decision. A capacity
 limit is not a guaranteed dollar spending cap.

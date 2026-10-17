@@ -1,3 +1,4 @@
+import {approvedTrialAllowance} from './helpers/trial-policy.mjs';
 import test,{afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {createTrialClient} from '../public/trial/client.js';
@@ -6,7 +7,7 @@ const identity={identityKey:'a'.repeat(64),email:'alex@example.test',policy:{rev
 const trial={workspaceId:'trial-'+'b'.repeat(64),status:'admitted',createdAt:'2026-10-17T12:00:00Z',expiresAt:'2026-10-24T12:00:00Z',remainingMs:604800000,
   policyRevision:identity.policy.revision,workflowReady:false,capabilities:{workspaceReads:true,repositoryCreation:false,agents:false,checks:false,modelCredits:false},cleanup:'not-due',identityKey:identity.identityKey};
 const repo={name:'sample-'+'b'.repeat(64),repositoryId:'repository-fixture',projectId:'11111111-1111-4111-8111-111111111111',baseCommit:'c'.repeat(40)};
-const sample=(changes={})=>({workspaceId:trial.workspaceId,template:'checkout-v1',phase:'not-started',retryable:true,repository:null,errorCode:null,workflowReady:false,...changes});
+const sample=(changes={})=>({workspaceId:trial.workspaceId,template:'checkout-v1',phase:'not-started',retryable:true,repository:null,errorCode:null,workflowReady:false,allowance:structuredClone(approvedTrialAllowance),...changes});
 const ready=(changes={})=>sample({phase:'ready',retryable:false,repository:repo,...changes});
 const json=value=>Response.json(value),error=(code,status=503)=>Response.json({code,error:'private raw provider error'},{status});
 const admission=(value=sample())=>[json(identity),json(trial),json(value)];
@@ -18,6 +19,24 @@ function fixture(replies){const calls=[],states=[],timers=[];let sequence=0,cloc
     fetcher:async(path,options)=>{calls.push({path,options});const reply=replies.shift();if(!reply){unexpected.push(path);throw Error('Unexpected request');}return typeof reply==='function'?reply(path,options):reply;}});
   return {client,calls,states,timers,advance:ms=>{clock+=ms;}};
 }
+
+test('unapproved or exhausted allowances cannot send preparation even through direct client calls',async()=>{
+  for(const allowance of [
+    {spending:'TRIAL_SPENDING_UNAPPROVED',setupAvailable:false,reason:'TRIAL_SPENDING_UNAPPROVED',setupAttempts:{used:0,limit:0},providerCalls:{used:0,limit:0},billingCapGuaranteed:false},
+    {...approvedTrialAllowance,setupAvailable:false,reason:'TRIAL_RESOURCE_LIMIT',setupAttempts:{used:10,limit:10}},
+  ]){
+    const c=fixture(admission(sample({allowance})));await c.client.refresh();assert.equal(c.client.getState().phase,'admitted');
+    await c.client.prepareSample();assert.equal(c.calls.length,3);assert.ok(c.calls.every(call=>call.options.method==='GET'));c.client.suspend();
+  }
+});
+
+test('a claimed invoice cap or inconsistent allowance cannot enable resource work',async()=>{
+  for(const change of [{billingCapGuaranteed:true},{providerCalls:{used:0,limit:201}},{reason:'TRIAL_RESOURCE_LIMIT'},
+    {spending:'TRIAL_SPENDING_UNAPPROVED'}]){
+    const c=fixture(admission(sample({allowance:{...approvedTrialAllowance,...change}})));await c.client.refresh();
+    assert.equal(c.client.getState().phase,'failed');assert.equal(c.client.getState().sample,null);c.client.suspend();
+  }
+});
 
 test('bootstrap inspects sample state with GET only; reservation never automatically prepares it',async()=>{
   const c=fixture(admission());await c.client.refresh();assert.equal(c.client.getState().sample.phase,'not-started');assert.ok(c.calls.every(call=>call.options.method==='GET'));
@@ -98,7 +117,7 @@ test('sample updates and closure confirmations retain the observed expiry deadli
 });
 
 test('preparation at the observed expiry rechecks access instead of sending a POST',async()=>{
-  const expired={...trial,status:'expired',remainingMs:0,capabilities:{...trial.capabilities,workspaceReads:false},cleanup:'not-implemented'};
+  const expired={...trial,status:'expired',remainingMs:0,capabilities:{...trial.capabilities,workspaceReads:false},cleanup:'pending'};
   const c=fixture([...admission(),json(identity),json(expired)]);await c.client.refresh();c.advance(trial.remainingMs);await c.client.prepareSample();
   assert.equal(c.client.getState().phase,'expired');assert.equal(c.client.getState().sample,null);assert.ok(c.calls.every(call=>call.options.method==='GET'));
 });

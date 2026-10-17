@@ -24,6 +24,8 @@ import { chatProvider } from '../core/agent.mjs';
 import {isTrial,coordinatorWorkspaceId,trialRegistry,assertTrialRoute,assertNoTrialBackground,configuredTrialPolicy} from './trial-scope.ts';
 import {assertTrialActive,trialAccessPolicy,trialStatus,trialGrant} from './trial-admission.ts';
 import type {TrialGrant,TrialPolicy} from './trial-admission.ts';
+import {cleanupTrialResources,purgeTrialWorkspace,retainedTrialCleanup} from './trial-cleanup.ts';
+import type {TrialCleanupResult} from './trial-cleanup.ts';
 import type { ModelProvider } from '../core/agent.mjs';
 export { RepositoryCheckContainer } from './check-container.ts';
 
@@ -60,6 +62,8 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   // recovery source; this chain only coordinates calls in this DO instance.
   private indexWork = new Map<string, Promise<void>>();
   private checkoutExecutions = new Map<string, { abort: AbortController; finished: Promise<unknown> }>();
+  private activeCalls=0;
+  private trialCleanupRunning=false;
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.store = new WorkspaceStore(ctx.storage, coordinatorWorkspaceId(ctx,env));
@@ -149,6 +153,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     let trialFailure:unknown;
     const validateTrial=async()=>{
       try {
+        if(this.trialCleanupRunning||retainedTrialCleanup(this.ctx.storage))throw new ApiError(403,'TRIAL_CLOSED','Trial cleanup fences new work.');
         if(authority.principal.kind!=='owner')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Sample setup requires the trial owner.');
         assertTrialActive(trial!);
         const fresh=trialGrant(await trialRegistry(this.env).authorize(trial!.workspaceId,authority.principal,configuredTrialPolicy(this.env)));
@@ -160,7 +165,16 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     };
     return new HostedController(this.store, this.artifacts(), authority, {
       guard:trial?()=>{if(trialFailure)throw trialFailure;assertTrialActive(trial);}:undefined,
-      trial:trial?{workspaceId:trial.workspaceId,validate:validateTrial}:undefined,
+      trial:trial?{workspaceId:trial.workspaceId,validate:validateTrial,
+        reserve:async kind=>{const principal=authority.principal;if(principal.kind!=='owner')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Trial resources require the owner.');
+          trialGrant(await trialRegistry(this.env).reserveResource(trial!.workspaceId,principal,configuredTrialPolicy(this.env),kind));},
+        allowance:async()=>{
+          const principal=authority.principal;if(principal.kind!=='owner')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Trial allowance requires the owner.');
+          const reply=await trialRegistry(this.env).controls({issuer:principal.issuer,audience:authority.policy.audience,
+            subject:principal.id,displayName:principal.displayName,issuedAt:principal.issuedAt,expiresAt:principal.expiresAt},configuredTrialPolicy(this.env));
+          const fresh=trialGrant(reply);if(fresh.workspaceId!==trial!.workspaceId||!reply.allowance)throw new ApiError(503,'TRIAL_UNAVAILABLE','Trial allowance is unavailable.');
+          assertTrialActive(fresh);Object.assign(trial!,fresh);return reply.allowance;
+        }}:undefined,
       currentPolicy: () => currentPolicy(this.env.CURRENT_POLICY, this.env.WORKSPACE_ID),
       ensureSubscription:(repository,validate)=>this.ensureSubscription(repository,validate),
       checks: { verify: (source, commit, signal, attemptId) => this.verifyCheckout(source, commit, signal, attemptId) }, git: this.gitTransport(), provider,
@@ -282,7 +296,32 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     }
   }
 
+  async cleanupTrial(policy:TrialPolicy):Promise<TrialCleanupResult> {
+    if(!isTrial(this.env))throw new ApiError(403,'TRIAL_ROUTING_REQUIRED','This is not a trial coordinator.');
+    const workspaceId=coordinatorWorkspaceId(this.ctx,this.env);
+    const validate=async()=>{
+      const grant=trialGrant(await trialRegistry(this.env).cleanupGrant(workspaceId,policy));
+      if(grant.workspaceId!==workspaceId)throw new ApiError(403,'WORKSPACE_FORBIDDEN','Cleanup authority targets another workspace.');
+    };
+    if(this.trialCleanupRunning)return {state:'pending',resources:null,deleted:null,reason:'OPERATION_IN_FLIGHT'};
+    this.trialCleanupRunning=true;
+    try {
+      await validate();
+      const prior=retainedTrialCleanup(this.ctx.storage);if(prior)return prior;
+      if(this.activeCalls)return {state:'pending',resources:null,deleted:null,reason:'OPERATION_IN_FLIGHT'};
+      const result=await cleanupTrialResources(this.ctx.storage,this.store.read(),this.env.TRIAL_ARTIFACTS,validate);
+      if(result.state==='complete'){
+        await validate();
+        if(this.activeCalls)return {...result,state:'pending',reason:'OPERATION_IN_FLIGHT'};
+        purgeTrialWorkspace(this.ctx.storage,workspaceId,result);
+      }
+      return result;
+    }finally {this.trialCleanupRunning=false;}
+  }
+
   async api(call: ApiCall): Promise<Response> {
+    if(this.trialCleanupRunning)return json({code:'TRIAL_CLEANUP_IN_PROGRESS',error:'Trial cleanup is in progress.'},409);
+    this.activeCalls++;
     const reply = (value:unknown,status=200) => json(call.method==='POST'?projectMutationResult(value,call.path):value,status);
     let controller: HostedController | undefined;
     try {
@@ -432,7 +471,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
       }
       throw new ApiError(404, "NOT_FOUND", "API route not found.");
     } catch (error) { return errorResponse(error); }
-    finally { if (controller) await this.schedule(controller); }
+    finally { try {if (controller) await this.schedule(controller);} finally {this.activeCalls--;} }
   }
 }
 

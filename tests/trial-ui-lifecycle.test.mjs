@@ -1,3 +1,4 @@
+import {approvedTrialAllowance} from './helpers/trial-policy.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -38,7 +39,7 @@ test('returning as B cannot retain A’s ready sample link or repository metadat
       if(owner==='b')return Response.json({code:'TRIAL_NOT_ADMITTED'},{status:404});
       if(path==='/api/trial')return Response.json({workspaceId,status:'admitted',createdAt:'2026-10-17T12:00:00Z',expiresAt:'2026-10-24T12:00:00Z',remainingMs:604800000,policyRevision:'test',workflowReady:false,
         capabilities:{workspaceReads:true,repositoryCreation:false,agents:false,checks:false,modelCredits:false},cleanup:'not-due',identityKey:'a'.repeat(64)});
-      return Response.json({workspaceId,template:'checkout-v1',phase:'ready',retryable:false,repository:{name:'sample-'+'b'.repeat(64),repositoryId:'a-repository',projectId,baseCommit:'c'.repeat(40)},errorCode:null,workflowReady:false});
+      return Response.json({workspaceId,template:'checkout-v1',phase:'ready',retryable:false,repository:{name:'sample-'+'b'.repeat(64),repositoryId:'a-repository',projectId,baseCommit:'c'.repeat(40)},errorCode:null,workflowReady:false,allowance:approvedTrialAllowance});
     }});
     const refresh=client.refresh;client.refresh=()=>latest=refresh();return client;
   }};

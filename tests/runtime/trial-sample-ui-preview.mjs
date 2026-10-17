@@ -42,7 +42,7 @@ const server=createServer(async(request,response)=>{
     headers.set('Cf-Access-Jwt-Assertion',actor);
     let result=await handler(new Request(origin+url.pathname+url.search,{method:request.method,headers,body}),f.env);
     if(scenario==='expired'&&url.pathname==='/api/trial'&&request.method==='GET'&&result.ok){const status=await result.json(),expires=Date.now()-1000;
-      result=Response.json({...status,status:'expired',createdAt:new Date(expires-604800000).toISOString(),expiresAt:new Date(expires).toISOString(),remainingMs:0,capabilities:{...status.capabilities,workspaceReads:false},cleanup:'not-implemented'});}
+      result=Response.json({...status,status:'expired',createdAt:new Date(expires-604800000).toISOString(),expiresAt:new Date(expires).toISOString(),remainingMs:0,capabilities:{...status.capabilities,workspaceReads:false},cleanup:'pending'});}
     observations.push({method:request.method,path:url.pathname,status:result.status,scenario});
     if(scenario==='lost-response'&&!lost&&url.pathname==='/api/trial/sample'&&request.method==='POST'&&result.ok){lost=true;response.destroy();return;}
     const outgoing=Object.fromEntries(result.headers);outgoing['cache-control']='no-store';

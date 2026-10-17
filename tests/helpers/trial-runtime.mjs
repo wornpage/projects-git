@@ -1,3 +1,4 @@
+import {unapprovedTrialResources} from './trial-policy.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {resolve,sep,extname} from 'node:path';
@@ -12,7 +13,7 @@ const types={'.html':'text/html;charset=utf-8','.js':'text/javascript;charset=ut
 export async function createLocalTrialRuntime(overrides={}) {
   const issuer='https://fixture.cloudflareaccess.com',audience='a'.repeat(64);
   const pair=await generateKeyPair('RS256'),jwk={...await exportJWK(pair.publicKey),kid:'runtime-fixture',alg:'RS256'};
-  const policy={revision:'runtime-local-v1',issuer,audience,durationMs:60000,dailyAdmissions:2,activeTrials:2,totalAdmissions:2,...overrides};
+  const policy={revision:'runtime-local-v1',issuer,audience,durationMs:60000,dailyAdmissions:2,activeTrials:2,totalAdmissions:2,resources:unapprovedTrialResources,...overrides};
   const result=await build({entryPoints:[resolve(root,'src/cloudflare/trial-worker.ts')],bundle:true,write:false,
     platform:'neutral',format:'esm',target:'es2022',external:['cloudflare:*','node:*'],mainFields:['module','main'],conditions:['workerd','worker','browser'],
     banner:{js:'import {createRequire} from "node:module"; const require = createRequire("/trial.mjs");'},logLevel:'silent'});

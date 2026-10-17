@@ -17,16 +17,25 @@ function statusValue(value,identity) {
   if(typeof value.workspaceId!=='string'||!/^trial-[a-f0-9]{64}$/.test(value.workspaceId)||!['admitted','expired','closed'].includes(value.status)
     ||!Number.isFinite(Date.parse(value.createdAt))||!Number.isFinite(Date.parse(value.expiresAt))||Date.parse(value.expiresAt)<=Date.parse(value.createdAt)
     ||!Number.isSafeInteger(value.remainingMs)||value.remainingMs<0||value.remainingMs>identity.policy.durationMs
-    ||value.policyRevision!==identity.policy.revision||value.workflowReady!==false||!['not-implemented','not-due'].includes(value.cleanup)
+    ||value.policyRevision!==identity.policy.revision||value.workflowReady!==false||!['pending','blocked','complete','not-due'].includes(value.cleanup)
     ||!exact(value.capabilities,caps)||caps.some(key=>typeof value.capabilities[key]!=='boolean')
     ||caps.filter(key=>key!=='workspaceReads').some(key=>value.capabilities[key]!==false)
     ||value.capabilities.workspaceReads!==(value.status==='admitted'))throw new TrialClientError('INVALID_RESPONSE');
   return value;
 }
 function sampleValue(value,trial,mutation=false) {
-  const keys=['workspaceId','template','phase','retryable','repository','errorCode','workflowReady',...(mutation?['replayed']:[])];
+  const keys=['workspaceId','template','phase','retryable','repository','errorCode','workflowReady','allowance',...(mutation?['replayed']:[])];
   if(!exact(value,keys))throw new TrialClientError('INVALID_RESPONSE');
   if(value.workspaceId!==trial.workspaceId)throw new TrialClientError('TRIAL_IDENTITY_CHANGED');
+  const allowance=value.allowance,reasons=['TRIAL_SPENDING_UNAPPROVED','TRIAL_APPROVAL_EXPIRED','TRIAL_SPENDING_PAUSED','TRIAL_RESOURCE_LIMIT'];
+  if(!exact(allowance,['spending','setupAvailable','reason','setupAttempts','providerCalls','billingCapGuaranteed'])
+    ||!['approved',...reasons.slice(0,3)].includes(allowance.spending)||typeof allowance.setupAvailable!=='boolean'
+    ||allowance.reason!==null&&!reasons.includes(allowance.reason)||allowance.setupAvailable!==(allowance.reason===null)
+    ||allowance.spending!=='approved'&&allowance.reason!==allowance.spending||allowance.billingCapGuaranteed!==false)
+    throw new TrialClientError('INVALID_RESPONSE');
+  for(const [pair,max] of [[allowance.setupAttempts,10],[allowance.providerCalls,200]])if(!exact(pair,['used','limit'])
+    ||!Number.isSafeInteger(pair.used)||pair.used<0||!Number.isSafeInteger(pair.limit)||pair.limit<0||pair.limit>max||pair.used>pair.limit
+    ||allowance.setupAvailable&&pair.used>=pair.limit)throw new TrialClientError('INVALID_RESPONSE');
   const repo=value.repository,uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
   if(value.template!=='checkout-v1'||!['not-started','preparing','failed','ready'].includes(value.phase)||typeof value.retryable!=='boolean'
     ||value.workflowReady!==false||mutation&&(typeof value.replayed!=='boolean'||value.phase!=='ready')
@@ -93,7 +102,8 @@ export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.
       'WORKSPACE_FORBIDDEN','TRIAL_NOT_ADMITTED','TRIAL_CLOSED','TRIAL_EXPIRED','TRIAL_POLICY_CHANGED','INVALID_RESPONSE'].includes(code)){
       failed(error,operation);return;
     }
-    publish({phase:'admitted',identity,trial,error:null,sample:{phase:code==='TRIAL_SAMPLE_UNAVAILABLE'?'unavailable':code==='TRIAL_SAMPLE_STATE_CHANGED'?'blocked':'unknown',result:null,error:code}});
+    publish({phase:'admitted',identity,trial,error:null,sample:{phase:code==='TRIAL_SAMPLE_UNAVAILABLE'?'unavailable':code==='TRIAL_SAMPLE_STATE_CHANGED'?'blocked':
+      ['TRIAL_SPENDING_UNAPPROVED','TRIAL_SPENDING_PAUSED','TRIAL_APPROVAL_EXPIRED','TRIAL_RESOURCE_LIMIT'].includes(code)?'limited':'unknown',result:null,error:code}});
   };
   async function readSample(operation,identity,trial) {
     publish({phase:'admitted',identity,trial,error:null,sample:{phase:'checking',result:null,error:null}});
@@ -132,7 +142,7 @@ export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.
     }catch(error){failed(error,operation);}
   }
   async function prepareSample() {
-    if(state.phase!=='admitted'||!['not-started','preparing','failed'].includes(state.sample?.phase)||!state.sample.result?.retryable)return;
+    if(state.phase!=='admitted'||!['not-started','preparing','failed'].includes(state.sample?.phase)||!state.sample.result?.retryable||!state.sample.result.allowance.setupAvailable)return;
     if(now()>=expiryDeadline)return refresh();
     const {identity,trial}=state;if(!identity||!trial)return;
     const operation=begin();publish({phase:'admitted',identity,trial,error:null,sample:{phase:'saving',result:null,error:null}});

@@ -13,12 +13,12 @@ const errors={TRIAL_POLICY_CHANGED:'Trial settings changed. Check your status ag
   NETWORK_UNCERTAIN:'The connection was interrupted. Your last action may have completed. Check the trial status before trying again.'};
 const sampleTitles={checking:'Checking sample setup',saving:'Preparing your sample',
   'not-started':'Prepare your sample repository',preparing:'Sample preparation is not yet confirmed',ready:'Your sample repository is prepared',
-  failed:'Sample setup needs attention',blocked:'Sample setup needs operator attention',unavailable:'Sample setup is unavailable',unknown:'We couldn’t confirm sample setup'};
+  failed:'Sample setup needs attention',blocked:'Sample setup needs operator attention',limited:'Sample preparation is paused',unavailable:'Sample setup is unavailable',unknown:'We couldn’t confirm sample setup'};
 
 function samplePanel(sample,actions) {
   const {phase,result}=sample,waiting=['checking','saving'].includes(phase);
   const heading=el('h3',{id:'sample-heading',tabindex:'-1'},sampleTitles[phase]);
-  const action=(label,callback,id)=>el('button',{type:'button',class:'button primary',id,disabled:waiting,onclick:callback},label);
+  const action=(label,callback,id)=>el('button',{type:'button',class:'button primary',id,disabled:waiting||!result?.allowance?.setupAvailable,onclick:callback},label);
   const check=()=>el('button',{type:'button',class:'text-button',id:'check-sample-status',onclick:actions.refresh},'Check sample status');
   const body=[heading];
   if(phase==='checking')body.push(el('p',{class:'muted'},'Reading the saved preparation status…'));
@@ -32,6 +32,11 @@ function samplePanel(sample,actions) {
     : 'This sample needs operator attention. No replacement repository will be created.'),check());
   if(['preparing','failed'].includes(phase)&&result.retryable)body.push(action('Resume sample setup',actions.prepareSample,'resume-sample'));
   if(phase==='unknown')body.push(el('p',{class:'notice',role:'alert'},'The last action may have completed. Check the saved status before preparing or resuming the sample.'),check());
+  if(phase==='limited')body.push(el('p',{class:'notice',role:'alert'},'New sample work is paused or its allowance is used. Check status; cleanup can still finish.'),check());
+  if(result?.allowance&&phase!=='ready')body.push(el('p',{class:'small muted'},
+    `Setup attempts: ${result.allowance.setupAttempts.used} / ${result.allowance.setupAttempts.limit}. Provider operations: ${result.allowance.providerCalls.used} / ${result.allowance.providerCalls.limit}.`),
+    !result.allowance.setupAvailable?el('p',{class:'notice'},result.allowance.reason==='TRIAL_SPENDING_UNAPPROVED'
+      ? 'Resource spending has not been approved. No sample will be created.' : 'Sample preparation is paused or its allowance is used. Status checks remain available.'):null);
   if(phase==='blocked')body.push(el('p',{class:'notice',role:'alert'},'The saved setup no longer matches its repository or project. Operator attention is needed; no replacement will be created.'),check());
   if(phase==='unavailable')body.push(el('p',{},'Your reservation is saved. Sample preparation is unavailable; you can still open the read-only workspace preview.'),check());
   if(phase==='ready')body.push(el('p',{},'Your supplied checkout starter is prepared. It is starter code, not completed agent work.'),
@@ -71,18 +76,21 @@ export function renderTrial(root,announcement,state,actions) {
       el('button',{type:'button',class:'text-button',id:'close-trial',disabled:busy,onclick:actions.confirmClose},'Close trial')));
   if(phase==='closed'||phase==='expired')nodes.push(
     el('p',{},phase==='closed'?'Trial access is closed. This reservation won’t reopen or restart automatically.':'The trial period has ended. Signing in again won’t restart its clock.'),
-    el('p',{class:'notice'},'Retained records have not been deleted. Export and automatic cleanup are not available in this preview.'),sampleLink());
+    el('p',{class:'notice'},trial?.cleanup==='complete'?'Trial repository and workspace cleanup is confirmed. A minimal admission record remains to prevent another trial.'
+      :trial?.cleanup==='blocked'?'Cleanup needs operator attention. Retained resources have not been confirmed deleted.'
+      :'Cleanup is scheduled after retention. Retained resources have not yet been confirmed deleted.'),
+    el('button',{type:'button',class:'text-button',onclick:actions.refresh},'Check cleanup status'),sampleLink());
   if(phase==='capacity')nodes.push(el('p',{},'We can’t reserve another trial right now. The public example is still available without an account.'),sampleLink(),
     el('button',{type:'button',class:'text-button',onclick:actions.refresh},'Check availability'));
   if(phase==='signedOut')nodes.push(el('p',{class:'notice'},errors[state.error]??'Your sign-in is needed or has expired. Verify your email to inspect your trial.'),signIn());
   if(phase==='blocked')nodes.push(el('p',{class:'notice'},'Trial signup requires a verified human email login. No reservation has been created.'),sampleLink());
   if(phase==='failed')nodes.push(el('p',{class:'notice',role:'alert'},errors[state.error]??'Trial signup is unavailable. Check your reservation status before trying again.'),button('Check reservation status',actions.refresh),sampleLink());
   if(['eligible','admitted'].includes(phase))nodes.push(el('details',{class:'reservation-help'},el('summary',{},'About this early preview'),
-    el('p',{},'Your identity owns one reservation. Repeating signup keeps the original expiry. Closing a trial stops access but does not delete retained records. No model credits, coding runs, exports or automatic cleanup are included.')));
+    el('p',{},'Your identity owns one reservation. Repeating signup keeps the original expiry. Closing stops access and schedules cleanup after retention. Cleanup status can be pending, blocked or confirmed. Setup allowances bound application work; they do not guarantee a Cloudflare billing cap. No model credits, coding runs or exports are included.')));
   let dialog;
   if(phase==='confirm-close') {
     dialog=el('dialog',{class:'confirmation','aria-labelledby':'close-heading','aria-describedby':'close-description',oncancel:event=>{event.preventDefault();actions.cancelClose();}},
-      el('h2',{id:'close-heading'},'Close this trial?'),el('p',{id:'close-description'},'This stops access for the signed-in identity. The reservation cannot reopen automatically, and retained records will not be deleted.'),
+      el('h2',{id:'close-heading'},'Close this trial?'),el('p',{id:'close-description'},'This stops access and schedules repository and workspace cleanup after retention. The reservation cannot reopen automatically. Deletion is confirmed only when cleanup succeeds.'),
       el('div',{class:'actions'},button('Keep trial',actions.cancelClose,{autofocus:true}),button('Close trial',actions.close,{class:'button danger'})));
     nodes.push(dialog);
   }

@@ -1,3 +1,4 @@
+import {unapprovedTrialResources} from './trial-policy.mjs';
 import {createHash} from 'node:crypto';
 import {decodeJwt} from 'jose';
 import assert from 'node:assert/strict';
@@ -19,7 +20,7 @@ function load(name,index){
 }
 const index=load('index.ts'),trial=load('trial-worker.ts',index);
 const pair=await generateKeyPair('RS256'),jwk={...await exportJWK(pair.publicKey),kid:'trial-test',alg:'RS256'};
-const policy={revision:'fixture-v1',issuer:'https://fixture.cloudflareaccess.com',audience:'a'.repeat(64),durationMs:60_000,dailyAdmissions:20,activeTrials:50,totalAdmissions:1000};
+const policy={revision:'fixture-v1',issuer:'https://fixture.cloudflareaccess.com',audience:'a'.repeat(64),durationMs:60_000,dailyAdmissions:20,activeTrials:50,totalAdmissions:1000,resources:unapprovedTrialResources};
 const verifier=new AccessVerifier(async()=>Response.json({keys:[jwk]}),()=>Date.now());
 const handler=trial.createTrialFetch(verifier);
 async function token(subject='person-a',changes={}){
@@ -27,7 +28,7 @@ async function token(subject='person-a',changes={}){
   return new SignJWT({type:'app',iss:policy.issuer,aud:[policy.audience],sub:subject,email:'same@example.test',iat:now-1,exp:now+3600,...changes})
     .setProtectedHeader({alg:'RS256',kid:jwk.kid}).sign(pair.privateKey);
 }
-function context(storage,name){return{storage:{...storage,getAlarm:async()=>null,setAlarm:async()=>{throw new Error('No background scheduling allowed');}},id:{name}};}
+function context(storage,name){let alarm=null;return{storage:{...storage,getAlarm:async()=>alarm,setAlarm:async value=>{alarm=value;},deleteAlarm:async()=>{alarm=null;}},id:{name}};}
 function fixture({artifacts,git,trialPolicy=policy}={}){
   const contexts=new Map(),calls=[],assetCalls=[];
   let registry;

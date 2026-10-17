@@ -113,8 +113,10 @@ Generate binding types without contacting a provider:
 wrangler types --config wrangler.trial-sample.template.jsonc --env-interface TrialSampleEnv --include-runtime=false --strict-vars=false src/cloudflare/trial-sample-configuration.d.ts
 ```
 
-General repository creation/discovery, Git access for external agents, assignments,
-execution/checks, exports, deletion and scheduled cleanup remain unavailable.
+Sample-only [cleanup and resource controls](trial-cleanup-controls.md) are now
+implemented locally, with unapproved deployment defaults. General repository
+creation/discovery, Git access for external agents, assignments, execution/checks
+and exports remain unavailable.
 Spending, provisioning, hosted runs and launch are separate decisions. The deleted
 speed goal, private workspace, submitted video, challenge README and tag are not
 changed by this work.

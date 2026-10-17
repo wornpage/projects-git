@@ -7,6 +7,9 @@ deployment or spending are authorized. See [the implemented boundary](trial-admi
 [Fixed sample repository setup](trial-sample-setup.md) has since been implemented
 locally through that owning path, including explicit preparation and recovery UI;
 hosted setup and a complete coding trial remain unqualified.
+[Sample cleanup and resource controls](trial-cleanup-controls.md) are also now
+implemented locally, with unapproved spending defaults. They do not implement a
+guaranteed monetary cap or enable the planned coding workflow.
 
 ## Entry and first useful result
 

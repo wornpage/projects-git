@@ -1,3 +1,4 @@
+import {approvedTrialAllowance} from './helpers/trial-policy.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {renderTrial} from '../public/trial/view.js';
@@ -24,7 +25,7 @@ test('close confirmation preserves the warning and cancellation restores trigger
   installFakeDOM();const root=document.createElement('div'),announcement=document.createElement('p');
   renderTrial(root,announcement,{phase:'confirm-close',identity,trial,error:null},actions);
   const dialog=nodes(root).find(node=>node.tagName==='DIALOG');assert.equal(dialog.open,true);
-  assert.match(dialog.textContent,/retained records will not be deleted/);
+  assert.match(dialog.textContent,/cleanup after retention/);
   assert.equal(nodes(dialog).find(node=>node.textContent==='Keep trial').attrs.autofocus,'');
   renderTrial(root,announcement,{phase:'admitted',identity,trial,error:null},actions);
   assert.equal(document.activeElement.id,'close-trial');
@@ -34,22 +35,34 @@ test('sample preparation is explicit and uncertain states offer inspection befor
   installFakeDOM();const root=document.createElement('div'),announcement=document.createElement('p');let preparations=0,reads=0;
   const handlers={...actions,prepareSample:()=>preparations++,refresh:()=>reads++};
   const render=sample=>renderTrial(root,announcement,{phase:'admitted',identity,trial,error:null,sample},handlers);
-  render({phase:'not-started',result:{retryable:true},error:null});assert.equal(preparations,0);await root.querySelector('#prepare-sample').dispatch('click');assert.equal(preparations,1);
+  render({phase:'not-started',result:{retryable:true,allowance:approvedTrialAllowance},error:null});assert.equal(preparations,0);await root.querySelector('#prepare-sample').dispatch('click');assert.equal(preparations,1);
   render({phase:'unknown',result:null,error:'PRIVATE_PROVIDER_TEXT'});assert.equal(root.querySelector('#prepare-sample'),null);assert.equal(root.querySelector('#resume-sample'),null);
   assert.doesNotMatch(root.textContent,/PRIVATE_PROVIDER_TEXT/);await root.querySelector('#check-sample-status').dispatch('click');assert.equal(reads,1);
-  render({phase:'failed',result:{retryable:true},error:null});await root.querySelector('#resume-sample').dispatch('click');assert.equal(preparations,2);
-  render({phase:'failed',result:{retryable:false},error:null});assert.equal(root.querySelector('#resume-sample'),null);assert.match(root.textContent,/operator attention/);
+  render({phase:'failed',result:{retryable:true,allowance:approvedTrialAllowance},error:null});await root.querySelector('#resume-sample').dispatch('click');assert.equal(preparations,2);
+  render({phase:'failed',result:{retryable:false,allowance:approvedTrialAllowance},error:null});assert.equal(root.querySelector('#resume-sample'),null);assert.match(root.textContent,/operator attention/);
 });
 
 test('only a confirmed ready sample offers its private project link and full provenance',()=>{
   installFakeDOM();const root=document.createElement('div'),announcement=document.createElement('p');
   const result={repository:{projectId:'11111111-1111-4111-8111-111111111111',name:'sample-'+'b'.repeat(64),baseCommit:'c'.repeat(40)}};
   for(const phase of ['checking','saving','preparing','unavailable','unknown','failed','blocked']){
-    renderTrial(root,announcement,{phase:'admitted',identity,trial,error:null,sample:{phase,result:{retryable:false},error:null}},actions);
+    renderTrial(root,announcement,{phase:'admitted',identity,trial,error:null,sample:{phase,result:{retryable:false,allowance:approvedTrialAllowance},error:null}},actions);
     assert.equal(root.querySelector('#open-sample'),null);assert.ok(!root.textContent.includes('c'.repeat(40)));
   }
   renderTrial(root,announcement,{phase:'admitted',identity,trial,error:null,sample:{phase:'ready',result,error:null}},actions);
   assert.equal(root.querySelector('#open-sample').attrs.href,'/workspace/?view=queue&project='+result.repository.projectId);
-  assert.match(root.textContent,/starter code, not completed agent work/);assert.match(root.textContent,/No model credits, coding runs, exports or automatic cleanup/);
+  assert.match(root.textContent,/starter code, not completed agent work/);assert.match(root.textContent,/No model credits, coding runs or exports/);
   assert.ok(root.textContent.includes(result.repository.baseCommit));assert.equal(document.activeElement.id,'sample-heading');
+});
+
+test('resource allowance and cleanup views distinguish limits, pending, blocked and confirmed outcomes',()=>{
+  installFakeDOM();const root=document.createElement('div'),announcement=document.createElement('p');
+  const allowance={spending:'TRIAL_SPENDING_UNAPPROVED',setupAvailable:false,reason:'TRIAL_SPENDING_UNAPPROVED',setupAttempts:{used:0,limit:0},providerCalls:{used:0,limit:0},billingCapGuaranteed:false};
+  renderTrial(root,announcement,{phase:'admitted',identity,trial,error:null,sample:{phase:'not-started',result:{retryable:true,allowance}}},actions);
+  assert.equal(root.querySelector('#prepare-sample').disabled,true);assert.match(root.textContent,/spending has not been approved/);
+  assert.match(root.textContent,/0 \/ 0/);assert.match(root.textContent,/do not guarantee a Cloudflare billing cap/);
+  for(const [cleanup,phrase] of [['pending','not yet been confirmed deleted'],['blocked','operator attention'],['complete','cleanup is confirmed']]){
+    renderTrial(root,announcement,{phase:'closed',identity,trial:{...trial,cleanup},error:null,sample:null},actions);
+    assert.ok(root.textContent.includes(phrase));assert.equal(root.querySelector('#open-sample'),null);
+  }
 });

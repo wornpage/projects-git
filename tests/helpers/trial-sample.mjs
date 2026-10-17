@@ -1,3 +1,4 @@
+import {approvedTrialResources} from './trial-policy.mjs';
 import {join} from 'node:path';
 import {gitHttpFixture} from './git-http.mjs';
 import {fixture,index,policy} from './trial-http.mjs';
@@ -9,6 +10,7 @@ export async function trialSampleFixture(t,{policyOverrides={}}={}) {
   const git=await gitHttpFixture(t),repositories=new Map(),calls=[];
   const hooks={};
   const artifacts={
+    async delete(name){calls.push(['delete',name]);await hooks.beforeDelete?.(name);const deleted=repositories.delete(name);await hooks.afterDelete?.(name);return deleted;},
     async get(name){calls.push(['get',name]);const repo=repositories.get(name);if(!repo)throw Object.assign(Error('Not found'),{code:'NOT_FOUND'});return repo;},
     async create(name,options){
       calls.push(['create',name]);if(repositories.has(name))throw Object.assign(Error('Exists'),{code:'ALREADY_EXISTS'});
@@ -29,7 +31,7 @@ export async function trialSampleFixture(t,{policyOverrides={}}={}) {
     },
   };
   const transport={async seedRepository(options){calls.push(['seed',options.name]);await hooks.beforeSeed?.(options);const head=await git.transport.seedRepository(options);await hooks.afterSeed?.(options,head);return head;}};
-  const http=fixture({artifacts,git:transport,trialPolicy:{...policy,...policyOverrides}});
+  const http=fixture({artifacts,git:transport,trialPolicy:{...policy,resources:approvedTrialResources,...policyOverrides}});
   t.after(()=>{http.sql.db.close();for(const context of http.contexts.values())context.db.close();});
   const store=workspaceId=>new WorkspaceStore(http.contexts.get(workspaceId).storage,workspaceId);
   const operation=workspaceId=>Object.values(store(workspaceId).read().operations).find(operation=>operation.kind==='repository-create');

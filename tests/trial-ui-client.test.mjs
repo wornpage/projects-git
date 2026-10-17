@@ -48,7 +48,7 @@ test('capacity has its own state and never retries or assumes when a slot will o
 });
 
 test('closure requires confirmation and keeps an uncertain result out of an open-workspace success state',async()=>{
-  const closed=status({status:'closed',remainingMs:0,capabilities:{...status().capabilities,workspaceReads:false},cleanup:'not-implemented'});
+  const closed=status({status:'closed',remainingMs:0,capabilities:{...status().capabilities,workspaceReads:false},cleanup:'pending'});
   const c=fixture([json(session),json(status()),()=>{throw Error('lost close');},json(session),json(closed)]);
   await c.client.refresh();await c.client.close();assert.equal(c.calls.length,3);
   c.client.confirmClose();assert.equal(c.client.getState().phase,'confirm-close');c.client.cancelClose();assert.equal(c.client.getState().phase,'admitted');
@@ -81,7 +81,7 @@ test('suspending clears identity and prevents a delayed reservation result from 
 
 test('closed and expired results offer neither renewal nor closure mutations',async()=>{
   for(const phase of ['closed','expired']){
-    const c=fixture([json(session),json(status({status:phase,remainingMs:0,capabilities:{...status().capabilities,workspaceReads:false},cleanup:'not-implemented'}))]);
+    const c=fixture([json(session),json(status({status:phase,remainingMs:0,capabilities:{...status().capabilities,workspaceReads:false},cleanup:'pending'}))]);
     await c.client.refresh();assert.equal(c.client.getState().phase,phase);await c.client.reserve();c.client.confirmClose();await c.client.close();assert.equal(c.calls.length,2);
   }
 });

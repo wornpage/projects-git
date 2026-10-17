@@ -7,8 +7,9 @@ flow. The UI reserves real local trial records and opens their isolated metadata
 workspace. It is not deployed, and no email delivery or hosted authentication has
 been qualified. [Sample repository setup](trial-sample-setup.md) is now implemented
 with explicit preparation, status and recovery controls in this UI; it is not
-automatically invoked by signup. Agents, checks, exports and cleanup remain
-unavailable. The page states these workflow limits before and after reservation.
+automatically invoked by signup. [Resource controls and scheduled sample cleanup](trial-cleanup-controls.md)
+are now implemented locally. Agents, checks and exports remain unavailable. The
+page states these workflow limits before and after reservation.
 
 The existing private app, demo, challenge README, video and tag are unchanged by
 the local UI work. No Cloudflare resource, login policy, credential or spend has

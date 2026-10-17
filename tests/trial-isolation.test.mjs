@@ -92,7 +92,7 @@ test('closure and exact-boundary expiry revoke coordinator and assets access wit
   const b=await token('person-b'),bg=await admit(c,b);await handler(req('/api/workspace',b),c.env);
   assert.equal((await handler(req('/api/trial/close',b,{}),c.env)).status,200);
   assert.equal((await handler(req('/api/workspace',b),c.env)).status,403);
-  const status=await admit(c,b);assert.equal(status.status,'closed');assert.equal(status.workspaceId,bg.workspaceId);assert.equal(status.cleanup,'not-implemented');
+  const status=await admit(c,b);assert.equal(status.status,'closed');assert.equal(status.workspaceId,bg.workspaceId);assert.equal(status.cleanup,'not-due');
   assert.equal(c.sql.storage.sql.exec('SELECT count(*) n FROM trial_admissions').one().n,2);
 });
 

@@ -92,7 +92,9 @@ interface Operation {
 interface HostedJob { status: 'queued' | 'running' | 'finished' | 'failed'; task: Task; limits: ExecutionLimits; phase: string; pendingCommit?: string; attemptId?: string }
 export interface HostedRuntime {
   guard?:()=>void;
-  trial?: {workspaceId:string;validate:()=>Promise<void>};
+  trial?: {workspaceId:string;validate:()=>Promise<void>;
+    reserve:(kind:'setup'|'read'|'create'|'issue'|'push')=>Promise<void>;
+    allowance:()=>Promise<ReturnType<import('./trial-controls.ts').TrialResourceStore['status']>>};
   currentPolicy?: () => Promise<AccessPolicy>;
   ensureSubscription?: (repositoryName:string,validate:()=>void)=>Promise<void>;
   checks: { verify(source: string, commit: string, signal?: AbortSignal, attemptId?: string): Promise<Evidence> };
@@ -308,6 +310,7 @@ export class HostedController {
 
   async trialSampleStatus() {
     const {workspaceId,name}=this.trialSampleContext(),key=await this.operationKey('trial-sample-setup-v1'),seedDigest=await digest(JSON.stringify(TRIAL_SAMPLE.files));
+    const allowance=await this.runtime!.trial!.allowance();
     this.requireOwner();
     const operation=this.store.operation(key),project=operation?.projectId?this.store.project(operation.projectId):undefined;
     if(operation&&(operation.kind!=='repository-create'||operation.resourceName!==name||operation.seedTemplate!==TRIAL_SAMPLE.id||operation.seedDigest!==seedDigest))
@@ -315,10 +318,10 @@ export class HostedController {
     if(operation?.state==='complete'&&(!operation.repositoryId||!operation.pendingCommit||project?.repositoryName!==name
       ||project.mainCommit!==operation.pendingCommit||project.kind!=='artifacts'||project.codeConnected!==true))
       throw new ApiError(409,'TRIAL_SAMPLE_STATE_CHANGED','The confirmed sample repository no longer matches its project.');
-    const retryable=!operation||operation.state==='pending'&&(!operation.errorCode||['REPOSITORY_CREATION_INTERRUPTED','TOKEN_REVOCATION_UNCONFIRMED','TOKEN_INVENTORY_INCOMPLETE'].includes(operation.errorCode));
+    const retryable=!operation||operation.state==='pending'&&(!operation.errorCode||['REPOSITORY_CREATION_INTERRUPTED','TOKEN_REVOCATION_UNCONFIRMED','TOKEN_INVENTORY_INCOMPLETE','TRIAL_CREATE_OUTCOME_UNKNOWN'].includes(operation.errorCode));
     return {workspaceId,template:TRIAL_SAMPLE.id,phase:!operation?'not-started':operation.state==='complete'?'ready':operation.errorCode||operation.state==='failed'?'failed':'preparing',
       retryable,repository:operation?{name,repositoryId:operation.repositoryId??null,projectId:operation.projectId??null,baseCommit:operation.pendingCommit??null}:null,
-      errorCode:operation?.errorCode??null,workflowReady:false};
+      errorCode:operation?.errorCode??null,workflowReady:false,allowance};
   }
 
   async setupTrialSample(input:Record<string,unknown>,requestKey:string) {
@@ -357,6 +360,7 @@ export class HostedController {
     if (prior?.state === 'complete') return result(prior, true);
     if (prior?.state === 'failed') throw new ApiError(409, 'REPOSITORY_NAME_TAKEN', 'This name belongs to an existing repository. Choose another name or connect the existing repository.');
     if (prior && (prior.leaseUntil ?? 0) > Date.now()) throw new ApiError(409, 'OPERATION_IN_PROGRESS', 'Repository creation is still in progress. Retry this same request shortly.');
+    if(template)await this.runtime!.trial!.reserve('setup');
     if (Object.values(snapshot.workspace.projects ?? {}).some(project => project.repositoryName === name))
       throw new ApiError(409, 'REPOSITORY_NAME_TAKEN', 'This repository already has a project. Open that project or choose another name.');
     if (Object.entries(snapshot.operations).some(([otherKey, op]) => otherKey !== key && op.kind === 'repository-create' && op.resourceName === name && op.state === 'pending'))
@@ -372,6 +376,9 @@ export class HostedController {
     this.save(snapshot);
     const current = () => {this.requireOwner(); return this.assertLease(key, attemptId);};
     const beforeEffect=async()=>{if(template)await this.runtime!.trial!.validate();return current();};
+    const effect=async<T>(kind:'read'|'create'|'issue'|'push',work:()=>Promise<T>):Promise<T>=>{
+      if(template){await this.runtime!.trial!.reserve(kind);current();}return work();
+    };
     const ownsAttempt = () => {
       const retained = this.store.read(), operation = retained.operations[key];
       if (operation?.state !== 'pending' || operation.attemptId !== attemptId)
@@ -380,13 +387,15 @@ export class HostedController {
     };
     try {
       let handle: ArtifactsRepo | undefined;
-      try {handle = await this.artifacts.get(name);}
+      try {handle = await effect('read',()=>this.artifacts.get(name));}
       catch (error) {if (!(error && typeof error === 'object' && 'code' in error && error.code === 'NOT_FOUND')) throw error;}
       if (!handle) {
         await beforeEffect();
         // Never persist or return the initial plaintext token. Owned-repo token
         // enumeration also recovers it if create() succeeded but its reply was lost.
-        await this.artifacts.create(name, {description: marker, readOnly: false, setDefaultBranch: 'main'});
+        await effect('create',()=>this.artifacts.create(name, {description: marker, readOnly: false, setDefaultBranch: 'main'}));
+        // These bounded ownership reads are credential teardown, not new work:
+        // a close or spending stop during create must not strand its initial token.
         handle = await this.artifacts.get(name);
       }
       using repo = handle;
@@ -400,7 +409,7 @@ export class HostedController {
         throw new ApiError(502,'INVALID_REPOSITORY_METADATA','The repository identity was not confirmed. Setup is retained for operator review.');
       // Cleanup is authorized by the retained operation, even if the caller's
       // session expired during create(). A displaced attempt cannot revoke tokens.
-      await this.revokeRunTokens(repo, ownsAttempt);
+      await this.revokeRunTokens(repo, ownsAttempt,template?16:1000);
       snapshot = await beforeEffect();
       snapshot.operations[key].repositoryId = info.id;
       this.save(snapshot);
@@ -408,7 +417,7 @@ export class HostedController {
         throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The new repository settings changed. Creation is retained for operator review.');
       const remote = safeRemote(info.remote);
       let history: ArtifactsCommitMetadata[];
-      try {history = await repo.log({ref: 'main', limit: 1});}
+      try {history = await effect('read',()=>repo.log({ref: 'main', limit: 1}));}
       catch (error) {if (!(error && typeof error === 'object' && 'code' in error && error.code === 'NOT_FOUND')) throw error; history = [];}
       snapshot = current();
       const expected = snapshot.operations[key].pendingCommit;
@@ -416,27 +425,27 @@ export class HostedController {
         throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The repository contains a different commit. No code was replaced; creation is retained for operator review.');
       if (!history.length) {
         await beforeEffect();
-        const credential = await repo.createToken('write', 180);
+        const credential = await effect('issue',()=>repo.createToken('write', 180));
         try {
           snapshot = current();
-          const head = await this.runtime.git.seedRepository({remote, token: credential.plaintext, name, description,...(template?{files:template.files}:{}),
+          const head = await effect('push',()=>this.runtime!.git.seedRepository({remote, token: credential.plaintext, name, description,...(template?{files:template.files}:{}),
             timestamp: snapshot.operations[key].timestamp!, beforePush: async (head: string) => {
               const fresh = await beforeEffect(), operation = fresh.operations[key];
               commitId(head);
               if (operation.pendingCommit && operation.pendingCommit !== head) throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The saved initial commit changed. No code was replaced.');
               operation.pendingCommit = head;
               this.save(fresh);
-            }});
+            }}));
           if (this.store.operation(key)?.pendingCommit !== head) throw new ApiError(502, 'INVALID_REPOSITORY_SEED', 'The initial commit was not confirmed. Retry the same creation request.');
         } finally {await repo.revokeToken(credential.id);}
       }
       snapshot = current();
       const head = snapshot.operations[key].pendingCommit!;
-      await exactCommit(repo, head);
-      await branchHead(repo, 'main', head);
+      await effect('read',()=>exactCommit(repo, head));
+      await effect('read',()=>branchHead(repo, 'main', head));
       // Do not attach code until all credentials from creation, including any
       // uncertain token issuance, have been confirmed inactive.
-      await this.revokeRunTokens(repo, ownsAttempt);
+      await this.revokeRunTokens(repo, ownsAttempt,template?16:1000);
       snapshot = await beforeEffect();
       if (Object.values(snapshot.workspace.projects ?? {}).some(project => project.repositoryName === name))
         throw new ApiError(409, 'REPOSITORY_CONNECTION_CHANGED', 'Another operation connected this repository. Creation is retained for operator review.');
@@ -1285,13 +1294,13 @@ export class HostedController {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(await blob.arrayBuffer());
   }
 
-  private async revokeRunTokens(repo: ArtifactsRepo, assertCurrent: () => unknown): Promise<void> {
+  private async revokeRunTokens(repo: ArtifactsRepo, assertCurrent: () => unknown,limit=1000): Promise<void> {
     const inventory=async()=>{
       const result=await repo.listTokens();assertCurrent();
-      if(!Number.isSafeInteger(result.total)||!Array.isArray(result.tokens)||result.total!==result.tokens.length||result.total>1000
+      if(!Number.isSafeInteger(result.total)||!Array.isArray(result.tokens)||result.total!==result.tokens.length||result.total>limit
         ||result.tokens.some(token=>!token||typeof token.id!=='string'||!token.id||!['active','expired','revoked'].includes(token.state))
         ||new Set(result.tokens.map(token=>token.id)).size!==result.total)
-        throw new ApiError(409,'TOKEN_INVENTORY_INCOMPLETE','Credential inventory is incomplete or exceeds the 1,000-token cleanup budget. No complete revocation is claimed; inspect the retained assignment.');
+        throw new ApiError(409,'TOKEN_INVENTORY_INCOMPLETE','Credential inventory is incomplete or exceeds its cleanup allowance. No complete revocation is claimed; inspect the retained assignment.');
       return result.tokens;
     };
     const tokens = await inventory();
