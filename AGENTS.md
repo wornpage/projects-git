@@ -1,5 +1,15 @@
 # Working agreement
 
+## Frozen public snapshot
+
+This repository is preserved public source, not the active backend development
+home. Keep `challenge-submission` fixed. Future backend and matching application
+changes belong in the private `wornpage/projects-git-backend` repository, locally
+`C:/jkbSoft/projects-git-backend`. Do not implement or push new backend work here.
+Read the private checkout's AGENTS.md before continuing development. Historical
+ignored QA receipts in this checkout remain available for read-only verification.
+Repository archival does not stop or redeploy the existing hosted app.
+
 Use clear headings, short explanations, and practical tables. Use PowerShell 7 for all PowerShell commands; single-quote the `pwsh -Command` payload and use double quotes inside it.
 
 This is a separate, MIT-licensed competition prototype. Projects remains the durable product home. Do not import private Projects source or secrets. Build direct, small modules with explicit errors; no fake provider success or hidden fallbacks.

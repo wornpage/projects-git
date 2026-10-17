@@ -1,5 +1,13 @@
 # Projects Git
 
+> **Frozen public snapshot.** The original competition submission remains at
+> [`challenge-submission`](https://github.com/wornpage/projects-git/tree/challenge-submission).
+> The last public runtime source, including the trial and Turnstile updates, is
+> pinned at [`public-snapshot-2026-10-17`](https://github.com/wornpage/projects-git/tree/public-snapshot-2026-10-17).
+> Future backend development continues privately. This repository remains
+> available for inspection and self-hosting; the existing [live demo](https://git-demo.projectsdemo.org/)
+> and trial continue separately. The inherited MIT license and notices are unchanged.
+
 A private Cloudflare workspace for coordinating coding agents and keeping their
 Git candidates, checks and review history together. Your existing coding host
 runs the agents. Projects Git holds the queue, isolates their work and guards
