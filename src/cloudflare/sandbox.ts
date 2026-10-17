@@ -2,6 +2,12 @@ import { checkoutCases, encodeInput, scoreCheckout } from '../../fixtures/checko
 import type { Evidence } from '../core/workflow.mjs';
 
 const bridge = `
+// Capture the trusted output path before guest module evaluation. No guest-
+// mutable serializer, iterator or prototype method observes the result rows.
+const NativeResponse = Response;
+const finite = Number.isFinite;
+const defineProperty = Object.defineProperty;
+const noThen = Object.freeze(Object.assign(Object.create(null), {value: undefined}));
 function decode(value) {
   if (value && typeof value === 'object' && Object.keys(value).length === 1 && '$special' in value) return { undefined: undefined, NaN: NaN, Infinity: Infinity }[value.$special];
   if (Array.isArray(value)) return value.map(decode);
@@ -12,7 +18,18 @@ function freeze(value) { if (value && typeof value === 'object') { for (const en
 export default { async fetch(request) {
   const inputs = (await request.json()).map(input => freeze(decode(input)));
   const { checkoutTotal } = await import('./candidate.mjs');
-  return Response.json(inputs.map(input => { try { const value = checkoutTotal(input); return { threw: false, value: typeof value === 'number' && Number.isFinite(value) ? value : null }; } catch { return { threw: true }; } }));
+  let output = '[';
+  for (let index = 0; index < inputs.length; index++) {
+    if (index) output += ',';
+    try {
+      const value = checkoutTotal(inputs[index]);
+      output += '{"threw":false,"value":' + (typeof value === 'number' && finite(value) ? value : 'null') + '}';
+    } catch { output += '{"threw":true}'; }
+  }
+  const response = new NativeResponse(output + ']');
+  // Async return must not invoke a guest-installed inherited thenable hook.
+  defineProperty(response, 'then', noThen);
+  return response;
 } };`;
 
 export class WorkerChecks {
