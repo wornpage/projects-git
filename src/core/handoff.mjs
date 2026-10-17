@@ -4,6 +4,8 @@ export const HANDOFF_FORMAT = 'projects-git-handoff/v1';
 export const MAX_HANDOFF_BYTES = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
 const select = (value, fields) => Object.fromEntries(fields.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
+export const portableRepositoryObservation=value=>value?select(value,['eventKey','ref','headCommit','observedAt','eventTimestamp','requiresSubmission']):undefined;
+export const portableRepositoryEvent=value=>value?select(value,['key','state','headCommit','repositoryName','ref','runIds','projectIds']):undefined;
 const taskFields = ['id', 'title', 'purpose', 'criteria', 'status', 'baseCommit', 'baseHistory', 'projectId', 'createdAt', 'acceptedRunId', 'mergedCommit', 'owner', 'ownerVersion', 'origin', 'repositoryName', 'resultBranch', 'dependsOn', 'verificationProfile'];
 const runFields = ['id', 'taskId', 'origin', 'agent', 'label', 'status', 'baseCommit', 'headCommit', 'branch', 'startedAt', 'finishedAt', 'changedFiles', 'diff', 'summary', 'error', 'ownerVersion', 'reconcilesRunId', 'verificationPending', 'checkoutState'];
 const identity = value => value ? select(value, ['provider', 'kind', 'issuer', 'id', 'workspaceId', 'displayName']) : undefined;
@@ -86,6 +88,7 @@ export async function buildTaskHandoff(state, taskId, exportedAt = new Date().to
     ownerHistory: (original.ownerHistory ?? []).map(item => select(item, ['owner', 'version', 'at'])),
     revisions: (original.revisions ?? []).map(item => select(item, ['revision', 'purpose', 'criteria', 'reason', 'at'])) };
   const runs = state.runs.filter(run => run.taskId === taskId).map(run => ({ ...select(run, runFields),
+    ...(run.repositoryObservation?{repositoryObservation:portableRepositoryObservation(run.repositoryObservation)}:{}),
     ...(run.agentIdentity ? {agentIdentity: identity(run.agentIdentity)} : {}),
     assignedRevision: run.assignedRevision ?? 1, evidence: evidence(run.evidence),
     reviewAssignments: (run.reviewAssignments ?? []).map(reviewAssignment),
@@ -97,7 +100,8 @@ export async function buildTaskHandoff(state, taskId, exportedAt = new Date().to
     execution: execution(run.execution), ...(run.publication ? {publication:publication(run.publication)} : {}) }));
   const payload = structuredClone({ exportedAt,
     workspace: select(state, ['id', 'name', 'provider', 'version']), task, runs,
-    events: state.events.filter(event => event.taskId === taskId).map(event => select(event, ['id', 'at', 'type', 'taskId', 'runId', 'message'])),
+    events: state.events.filter(event => event.taskId === taskId).map(event => ({...select(event, ['id', 'at', 'type', 'taskId', 'runId', 'message']),
+      ...(event.repositoryEvent?{repositoryEvent:portableRepositoryEvent(event.repositoryEvent)}:{})})),
     recordedMetrics: metrics({ ...state, tasks: [task], runs }),
     nextAction: nextAction(state, task, runs),
     boundaries: ['Saved record only: refresh the live workspace and exact Git heads before taking action.',

@@ -1,12 +1,12 @@
 import {WorkflowError} from './workflow.mjs';
-import {buildTaskHandoff} from './handoff.mjs';
+import {buildTaskHandoff,portableRepositoryObservation,portableRepositoryEvent} from './handoff.mjs';
 import {archiveCommits} from './project-archive.mjs';
 import {operationTimings,timestamp} from './operation-timing.mjs';
-import {validateBackupHandoff,validateBackupCheckPolicy,portableBackupEvidence,validBackupEvidence} from './backup-records.mjs';
+import {validateBackupHandoff,validateBackupCheckPolicy,portableBackupEvidence,validBackupEvidence,validBackupObservation,validBackupRepositoryEvent} from './backup-records.mjs';
 
 export const WORKSPACE_BACKUP_FORMAT='projects-git-workspace-backup/v1';
 export const MAX_WORKSPACE_BACKUP_BYTES=1024*1024;
-export const BACKUP_LIMITS=Object.freeze({projects:16,resources:64,tasks:256,runs:512,operations:2000,events:10000,policies:512,gitMappings:1024,jobs:512});
+export const BACKUP_LIMITS=Object.freeze({projects:80,currentProjects:16,historicalProjects:64,resources:64,tasks:256,runs:512,operations:2000,events:10000,policies:512,gitMappings:1024,jobs:512});
 const encoder=new TextEncoder(),hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const commit=value=>typeof value==='string'&&/^[a-f0-9]{40}$/.test(value);
 const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -15,10 +15,10 @@ const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f
 const fields=(value,names)=>record(value)&&Object.keys(value).sort().join(',')===[...names].sort().join(',');
 const select=(value,names)=>Object.fromEntries(names.filter(name=>value[name]!==undefined).map(name=>[name,value[name]]));
 const refuse=message=>{throw new WorkflowError('WORKSPACE_BACKUP_INVALID',message,422);};
-const kinds=['task','assign','claim','model','merge','checks','base-update','model-check','review-inference','restore','repository-create','project-access'];
+const kinds=['task','assign','claim','model','merge','checks','base-update','model-check','review-inference','restore','repository-create','project-access','workspace-restore'];
 const operationFields=['fingerprint','kind','state','itemId','taskId','taskIds','projectId','resourceName','repositoryId','attemptId','executorAttemptId',
   'baseCommit','pendingCommit','sourceRunId','errorCode','leaseUntil','timestamp','contextId','assignmentId','reviewerId','reviewerIssuer','model','startedAt',
-  'reservesExecution','cancelled','accessVersion','revokeRunIds','revokedRunIds','timings','report','idleResult'];
+  'reservesExecution','cancelled','accessVersion','revokeRunIds','revokedRunIds','timings','report','idleResult','recoveryImportId'];
 const boundary='Historical recovery data only. No credentials, access grants, runnable jobs, current approval or automatic retry authority are restored. Pending effects remain unresolved.';
 
 function canonical(value,depth=0){
@@ -50,27 +50,32 @@ function operationValid(operation){
   if(operation.startedAt!==undefined&&timestamp(operation.startedAt)===null)refuse('Invalid operation timestamp.');
   for(const name of ['reviewerIssuer','model','contextId'])if(operation[name]!==undefined&&(typeof operation[name]!=='string'||operation[name].length>300||/[\0\r\n]/.test(operation[name])))refuse('Invalid operation observation.');
   if(operation.report!==undefined&&!validBackupEvidence(operation.report))refuse('Invalid retained operation verifier report.');
+  if(operation.recoveryImportId!==undefined&&(!hash(operation.recoveryImportId)||operation.kind!=='workspace-restore'))refuse('Invalid recovery import receipt.');
   if(operation.idleResult!==undefined&&(!fields(operation.idleResult,['idle','reason','waitingTaskIds'])||typeof operation.idleResult.idle!=='boolean'
     ||typeof operation.idleResult.reason!=='string'||!Array.isArray(operation.idleResult.waitingTaskIds)||operation.idleResult.waitingTaskIds.some(id=>!identifier(id))))refuse('Invalid retained idle result.');
   operationTimings(operation);
 }
-function referencedCommits(project,operations,handoffs,jobs){
+function referencedCommits(project,operations,handoffs,jobs,events){
   const commits=new Set(archiveCommits([...project.history,...handoffs],project.mainCommit));
-  for(const handoff of [...project.history,...handoffs])for(const run of handoff.payload.runs)if(run.execution?.pendingCommit){
-    if(!commit(run.execution.pendingCommit))refuse('Invalid uncertain execution commit.');commits.add(run.execution.pendingCommit);
-  }
+  if(project.repositoryObservation?.headCommit)commits.add(project.repositoryObservation.headCommit);
+  for(const handoff of [...project.history,...handoffs])for(const run of handoff.payload.runs)
+    for(const head of [run.execution?.pendingCommit,run.repositoryObservation?.headCommit].filter(Boolean)){
+      if(!commit(head))refuse('Invalid uncertain execution/observation commit.');commits.add(head);
+    }
   const taskIds=new Set(handoffs.map(item=>item.payload.task.id)),runIds=new Set(handoffs.flatMap(item=>item.payload.runs.map(run=>run.id)));
   for(const {receipt} of operations)if(receipt.projectId===project.id||taskIds.has(receipt.taskId)||taskIds.has(receipt.itemId)||runIds.has(receipt.itemId)||runIds.has(receipt.sourceRunId))
     for(const value of [receipt.baseCommit,receipt.pendingCommit,receipt.report?.commit])if(value)commits.add(value);
   for(const job of jobs)if(runIds.has(job.runId)&&job.pendingCommit)commits.add(job.pendingCommit);
+  for(const event of [...events,...project.history.flatMap(item=>item.payload.events)])if(event.projectId===project.id||taskIds.has(event.taskId)||runIds.has(event.runId))
+    if(event.repositoryEvent?.headCommit)commits.add(event.repositoryEvent.headCommit);
   if(commits.size>128)refuse('A backup project exceeds 128 referenced commits; nothing was truncated.');
   return [...commits].sort();
 }
-function recoveryResources(projects,handoffs,operations,jobs){
+function recoveryResources(projects,handoffs,operations,jobs,events,priorImports){
   const taskProjects=new Map(handoffs.map(item=>[item.payload.task.id,item.payload.task.projectId]));
   const runProjects=new Map(handoffs.flatMap(item=>item.payload.runs.map(run=>[run.id,item.payload.task.projectId])));
   const resources=projects.map(project=>({id:project.id,kind:'project',projectId:project.id,repositoryName:project.repositoryName,anchorCommit:project.mainCommit,
-    defaultBranch:project.defaultBranch,commits:referencedCommits(project,operations,handoffs.filter(item=>item.payload.task.projectId===project.id),jobs)}));
+    defaultBranch:project.defaultBranch,commits:referencedCommits(project,operations,handoffs.filter(item=>item.payload.task.projectId===project.id),jobs,events)}));
   for(const {key,receipt} of operations){
     const owners=new Set([receipt.projectId,taskProjects.get(receipt.taskId),taskProjects.get(receipt.itemId),runProjects.get(receipt.itemId),runProjects.get(receipt.sourceRunId)].filter(Boolean));
     if(owners.size>1)refuse('An operation contradicts its repository/task/candidate ownership.');
@@ -79,19 +84,61 @@ function recoveryResources(projects,handoffs,operations,jobs){
     resources.push({id:'operation:'+key,kind:'unattached-operation',projectId,repositoryName:receipt.resourceName??null,
       anchorCommit:receipt.pendingCommit??receipt.report?.commit??receipt.baseCommit,defaultBranch:null,commits});
   }
+  for(const prior of priorImports)for(const resource of prior.archive.payload.resources)
+    resources.push({id:'import:'+prior.id+':'+resource.id,kind:'historical-import',projectId:null,repositoryName:resource.repositoryName,
+      anchorCommit:resource.anchorCommit,defaultBranch:resource.defaultBranch,commits:[...resource.commits]});
   return resources;
 }
 function counts(payload){
+  const prior=payload.priorImports.map(item=>counts(item.archive.payload)),sum=key=>prior.reduce((n,value)=>n+value[key],0);
   const history=payload.projects.flatMap(project=>project.history),runs=items=>items.reduce((n,item)=>n+item.payload.runs.length,0);
-  const currentTasks=payload.handoffs.length,historicalTasks=history.length,currentRuns=runs(payload.handoffs),historicalRuns=runs(history);
-  const currentEvents=payload.events.length,historicalEvents=history.reduce((n,item)=>n+item.payload.events.length,0);
-  const currentPolicies=payload.checkPolicies.length,historicalPolicies=payload.projects.reduce((n,project)=>n+project.historicalCheckPolicies.length,0);
-  return {projects:payload.projects.length,resources:payload.resources.length,currentTasks,historicalTasks,tasks:currentTasks+historicalTasks,
+  const currentTasks=payload.handoffs.length,historicalTasks=history.length+sum('tasks'),currentRuns=runs(payload.handoffs),historicalRuns=runs(history)+sum('runs');
+  const currentEvents=payload.events.length,historicalEvents=history.reduce((n,item)=>n+item.payload.events.length,0)+sum('events');
+  const currentPolicies=payload.checkPolicies.length,historicalPolicies=payload.projects.reduce((n,project)=>n+project.historicalCheckPolicies.length,0)+sum('policies');
+  const currentProjects=payload.projects.length,historicalProjects=sum('projects'),currentOperations=payload.operations.length,historicalOperations=sum('operations');
+  return {projects:currentProjects+historicalProjects,currentProjects,historicalProjects,resources:payload.resources.length,currentTasks,historicalTasks,tasks:currentTasks+historicalTasks,
     currentRuns,historicalRuns,runs:currentRuns+historicalRuns,currentEvents,historicalEvents,events:currentEvents+historicalEvents,
-    currentPolicies,historicalPolicies,policies:currentPolicies+historicalPolicies,repositoryMappings:payload.repositories.length,forkMappings:payload.forks.length,
-    gitMappings:payload.repositories.length+payload.forks.length,operations:payload.operations.length,operationReports:payload.operations.filter(row=>row.receipt.report).length,
-    jobs:payload.jobs.length,pendingOperations:payload.operations.filter(row=>row.receipt.state==='pending').length,
-    unsettledJobs:payload.jobs.filter(job=>['queued','running'].includes(job.status)).length};
+    currentPolicies,historicalPolicies,policies:currentPolicies+historicalPolicies,repositoryMappings:payload.repositories.length+sum('repositoryMappings'),forkMappings:payload.forks.length+sum('forkMappings'),
+    gitMappings:payload.repositories.length+payload.forks.length+sum('gitMappings'),currentOperations,historicalOperations,operations:currentOperations+historicalOperations,
+    operationReports:payload.operations.filter(row=>row.receipt.report).length+sum('operationReports'),jobs:payload.jobs.length+sum('jobs'),
+    pendingOperations:payload.operations.filter(row=>row.receipt.state==='pending').length+sum('pendingOperations'),
+    unsettledJobs:payload.jobs.filter(job=>['queued','running'].includes(job.status)).length+sum('unsettledJobs'),priorImports:payload.priorImports.length+sum('priorImports')};
+}
+function operationReferences(payload,importIds){
+  const projects=new Set(payload.projects.map(project=>project.id)),tasks=new Map(payload.handoffs.map(item=>[item.payload.task.id,item.payload.task]));
+  const runs=new Map(payload.handoffs.flatMap(item=>item.payload.runs.map(run=>[run.id,run])));
+  const taskForRun=id=>tasks.get(runs.get(id)?.taskId);
+  for(const {receipt:op} of payload.operations){
+    const owners=new Set(),addTask=id=>{
+      const task=tasks.get(id);if(!task)refuse('An operation references an unknown task.');owners.add(task.projectId);return task;
+    },addRun=id=>{const run=runs.get(id);if(!run)refuse('An operation references an unknown candidate.');addTask(run.taskId);return run;};
+    if(op.projectId!==undefined){
+      if(!projects.has(op.projectId)&&!(op.kind==='repository-create'&&op.state!=='complete'))refuse('An operation references an unknown project.');owners.add(op.projectId);
+    }
+    if(op.taskId!==undefined)addTask(op.taskId);
+    if(op.sourceRunId!==undefined){const run=addRun(op.sourceRunId);if(op.kind!=='base-update'||op.taskId!==undefined&&run.taskId!==op.taskId)refuse('Invalid source candidate role.');}
+    if(op.itemId!==undefined){
+      if(['task','model'].includes(op.kind))addTask(op.itemId);
+      else if(['assign','claim','checks','model-check','merge','base-update','review-inference'].includes(op.kind)){
+        const run=addRun(op.itemId);if(op.taskId!==undefined&&run.taskId!==op.taskId)refuse('Operation candidate/task linkage differs.');
+      }else refuse('Invalid operation item role.');
+    }
+    for(const key of ['taskIds','revokeRunIds','revokedRunIds'])if(op[key]!==undefined){
+      if(new Set(op[key]).size!==op[key].length)refuse('Duplicate operation reference.');
+      if(key==='taskIds'){if(op.kind!=='task')refuse('Invalid task-list operation role.');for(const id of op[key])addTask(id);}
+      else{if(op.kind!=='project-access')refuse('Invalid credential-cleanup operation role.');for(const id of op[key])addRun(id);}
+    }
+    if(op.revokedRunIds?.some(id=>!op.revokeRunIds?.includes(id)))refuse('Revoked candidates are not a subset of the retained cleanup list.');
+    for(const id of op.idleResult?.waitingTaskIds??[])addTask(id);
+    if(owners.size>1)refuse('An operation mixes repository ownership.');
+    if(op.kind==='task'&&op.state==='complete'&&(!op.itemId||!op.taskIds?.includes(op.itemId)))refuse('Completed task operation lacks its created tasks.');
+    if(op.kind==='model'&&op.state==='complete'&&!op.itemId)refuse('Completed model operation lacks its task.');
+    if(['assign','checks','model-check','merge','review-inference'].includes(op.kind)&&!op.itemId)refuse('Candidate operation lacks its retained candidate.');
+    if(op.kind==='claim'&&!op.itemId&&!(op.state==='complete'&&op.idleResult?.idle))refuse('Claim has neither a retained candidate nor an idle result.');
+    if(op.kind==='base-update'&&(!op.sourceRunId||!taskForRun(op.sourceRunId)))refuse('Base-update source candidate is missing.');
+    if(['project-access','restore','repository-create'].includes(op.kind)&&!op.projectId)refuse('Repository operation lacks its project identity.');
+    if(op.kind==='workspace-restore'&&(!op.recoveryImportId||!importIds.has(op.recoveryImportId)))refuse('Workspace recovery receipt lacks its immutable import.');
+  }
 }
 
 /** Capture a complete revision. Raw coordinator state and provider responses are never selected. */
@@ -110,11 +157,18 @@ export async function buildWorkspaceBackup(snapshot,exportedAt=new Date().toISOS
   });
   const projects=Object.values(state.projects).map(project=>({id:project.id,name:project.name,repositoryName:project.repositoryName,
     mainCommit:project.mainCommit,defaultBranch:project.defaultBranch??null,history:structuredClone(project.restoredHistory??[]),
-    historicalCheckPolicies:structuredClone(project.restoredCheckPolicies??[])}));
+    historicalCheckPolicies:structuredClone(project.restoredCheckPolicies??[]),
+    ...(project.repositoryObservation?{repositoryObservation:portableRepositoryObservation(project.repositoryObservation)}:{}),
+    ...(project.restoredFrom?{restoredFrom:select(project.restoredFrom,['archiveSha256','workspaceId','projectId','at'])}:{})}));
   const jobs=Object.entries(source.jobs??{}).map(([runId,job])=>({runId,...select(job,['status','phase','attemptId','pendingCommit'])}));
-  const resources=recoveryResources(projects,handoffs,operations,jobs);
-  const payload={exportedAt,sourceRevision:source.revision,workspace:select(state,['id','name','version','createdAt','provider']),projects,resources,handoffs,operations,
-    events:state.events.map(event=>select(event,['id','at','type','projectId','taskId','runId','message'])),
+  const priorImports=Object.entries(source.recoveryImports??{}).map(([id,value])=>({id,...select(value,['archive','importedAt','importedBy'])}));
+  canonical(priorImports);
+  for(const prior of priorImports)await readWorkspaceBackup(JSON.stringify(prior.archive),prior.id);
+  const events=state.events.map(event=>({...select(event,['id','at','type','projectId','taskId','runId','message']),
+    ...(event.repositoryEvent?{repositoryEvent:portableRepositoryEvent(event.repositoryEvent)}:{})}));
+  const resources=recoveryResources(projects,handoffs,operations,jobs,events,priorImports);
+  const payload={exportedAt,sourceRevision:source.revision,workspace:select(state,['id','name','version','createdAt','provider']),projects,resources,handoffs,operations,priorImports,
+    events,
     jobs,
     repositories:Object.entries(source.repositories??{}).map(([taskId,name])=>({taskId,name})),
     forks:Object.entries(source.forks??{}).map(([runId,fork])=>({runId,name:fork.name})),
@@ -131,23 +185,40 @@ export async function readWorkspaceBackup(text,expectedSha256){
   if(!fields(archive,['format','sha256','payload'])||archive.format!==WORKSPACE_BACKUP_FORMAT||!hash(expectedSha256)
     ||archive.sha256!==expectedSha256||await checksum(archive.payload)!==expectedSha256)refuse('Workspace backup checksum differs from the expected digest.');
   const p=archive.payload;
-  if(!fields(p,['exportedAt','sourceRevision','workspace','projects','resources','handoffs','operations','events','jobs','repositories','forks','checkPolicies','boundary'])
+  if(!fields(p,['exportedAt','sourceRevision','workspace','projects','resources','handoffs','operations','events','jobs','repositories','forks','checkPolicies','priorImports','boundary'])
     ||timestamp(p.exportedAt)===null||!Number.isSafeInteger(p.sourceRevision)||p.sourceRevision<0
     ||!fields(p.workspace,['id','name','version','createdAt','provider'])||!identifier(p.workspace.id)||typeof p.workspace.name!=='string'||p.workspace.name.length>200
     ||!Number.isSafeInteger(p.workspace.version)||p.workspace.version<0||timestamp(p.workspace.createdAt)===null||p.workspace.provider!=='cloudflare-artifacts'
     ||p.boundary!==boundary)refuse('Invalid workspace backup header.');
-  for(const name of ['projects','resources','handoffs','operations','events','jobs','repositories','forks','checkPolicies'])if(!Array.isArray(p[name]))refuse('Complete backup collections are required.');
+  for(const name of ['projects','resources','handoffs','operations','events','jobs','repositories','forks','checkPolicies','priorImports'])if(!Array.isArray(p[name]))refuse('Complete backup collections are required.');
+  const imports=new Set();
+  for(const prior of p.priorImports){
+    if(!fields(prior,['id','archive','importedAt','importedBy'])||!hash(prior.id)||imports.has(prior.id)||timestamp(prior.importedAt)===null||!identifier(prior.importedBy))refuse('Invalid prior recovery import.');
+    imports.add(prior.id);await readWorkspaceBackup(JSON.stringify(prior.archive),prior.id);
+  }
   if(p.handoffs.some(item=>!Array.isArray(item?.payload?.runs)))refuse('Complete candidate collections are required.');
   if(p.jobs.length>BACKUP_LIMITS.runs||p.repositories.length>BACKUP_LIMITS.tasks||p.forks.length>BACKUP_LIMITS.runs||p.checkPolicies.length>BACKUP_LIMITS.runs)refuse('Workspace backup exceeds its related-record limits.');
   const projects=new Set(),tasks=new Set(),runs=new Set(),operationKeys=new Set();
   for(const project of p.projects){
-    if(!fields(project,['id','name','repositoryName','mainCommit','defaultBranch','history','historicalCheckPolicies'])
+    if(!fields(project,['id','name','repositoryName','mainCommit','defaultBranch','history','historicalCheckPolicies',
+      ...(project.repositoryObservation===undefined?[]:['repositoryObservation']),...(project.restoredFrom===undefined?[]:['restoredFrom'])])
       ||!identifier(project.id)||projects.has(project.id)||!identifier(project.repositoryName)||typeof project.name!=='string'||project.name.length>120
       ||!commit(project.mainCommit)||project.defaultBranch!==null&&(typeof project.defaultBranch!=='string'||!project.defaultBranch||project.defaultBranch.length>200)
       ||!Array.isArray(project.history)||project.history.length>64||!Array.isArray(project.historicalCheckPolicies)||project.historicalCheckPolicies.length>128)refuse('Invalid or duplicate backup project.');
     projects.add(project.id);
-    for(const item of project.history)await validateBackupHandoff(item);
-    for(const policy of project.historicalCheckPolicies)await validateBackupCheckPolicy(policy,true);
+    if(project.repositoryObservation!==undefined&&!validBackupObservation(project.repositoryObservation))refuse('Invalid retained project observation.');
+    if(project.restoredFrom!==undefined&&(!fields(project.restoredFrom,['archiveSha256','workspaceId','projectId','at'])||!hash(project.restoredFrom.archiveSha256)
+      ||!identifier(project.restoredFrom.workspaceId)||!identifier(project.restoredFrom.projectId)||timestamp(project.restoredFrom.at)===null))refuse('Invalid historical restore provenance.');
+    const historyTasks=new Set(),historyRuns=new Set(),historyPolicies=new Set();
+    for(const item of project.history){
+      await validateBackupHandoff(item);const taskKey=JSON.stringify([item.payload.workspace.id,item.payload.task.id]);
+      if(historyTasks.has(taskKey))refuse('Duplicate historical task identity.');historyTasks.add(taskKey);
+      for(const run of item.payload.runs){const key=JSON.stringify([item.payload.workspace.id,run.id]);if(historyRuns.has(key))refuse('Duplicate historical candidate identity.');historyRuns.add(key);}
+    }
+    for(const policy of project.historicalCheckPolicies){
+      await validateBackupCheckPolicy(policy,true);const key=JSON.stringify([policy.workspaceId,policy.runId]);
+      if(!historyRuns.has(key)||historyPolicies.has(key))refuse('Duplicate or orphan historical check policy.');historyPolicies.add(key);
+    }
   }
   for(const item of p.handoffs){
     await validateBackupHandoff(item);const task=item.payload.task;
@@ -178,10 +249,12 @@ export async function readWorkspaceBackup(text,expectedSha256){
       ||policy.image!==undefined&&(typeof policy.image!=='string'||policy.image.length>300))refuse('Invalid historical check definition.');unique.add(key);
     await validateBackupCheckPolicy(policy);
   }
-  for(const event of p.events)if(!record(event)||Object.keys(event).some(key=>!['id','at','type','projectId','taskId','runId','message'].includes(key))
+  for(const event of p.events)if(!record(event)||Object.keys(event).some(key=>!['id','at','type','projectId','taskId','runId','message','repositoryEvent'].includes(key))
     ||!identifier(event.id)||timestamp(event.at)===null||typeof event.type!=='string'||event.type.length>100||typeof event.message!=='string'||event.message.length>10000
-    ||event.projectId!=null&&!projects.has(event.projectId)||event.taskId!=null&&!tasks.has(event.taskId)||event.runId!=null&&!runs.has(event.runId))refuse('Invalid retained workspace event.');
-  const expectedResources=recoveryResources(p.projects,p.handoffs,p.operations,p.jobs);
+    ||event.projectId!=null&&!projects.has(event.projectId)||event.taskId!=null&&!tasks.has(event.taskId)||event.runId!=null&&!runs.has(event.runId)
+    ||event.repositoryEvent!==undefined&&(!validBackupRepositoryEvent(event.repositoryEvent)||event.repositoryEvent.projectIds.some(id=>!projects.has(id))||event.repositoryEvent.runIds.some(id=>!runs.has(id))))refuse('Invalid retained workspace event.');
+  operationReferences(p,imports);
+  const expectedResources=recoveryResources(p.projects,p.handoffs,p.operations,p.jobs,p.events,p.priorImports);
   if(canonical(p.resources)!==canonical(expectedResources))refuse('Recovery resource inventory differs from all retained Git roots.');
   const observed=counts(p);for(const [name,limit] of Object.entries(BACKUP_LIMITS))if(observed[name]>limit)refuse('Workspace backup exceeds its '+name+' limit; no records were truncated.');
   return archive;
@@ -191,6 +264,7 @@ export function workspaceBackupPreview(archive){
   const p=archive.payload;
   return {format:WORKSPACE_BACKUP_FORMAT,archiveSha256:archive.sha256,sourceWorkspaceId:p.workspace.id,sourceRevision:p.sourceRevision,exportedAt:p.exportedAt,
     counts:counts(p),projects:p.projects.map(project=>({id:project.id,name:project.name,mainCommit:project.mainCommit,commits:p.resources.find(resource=>resource.kind==='project'&&resource.projectId===project.id).commits.length})),
+    priorImports:p.priorImports.map(prior=>({id:prior.id,importedAt:prior.importedAt,importedBy:prior.importedBy,workspaceId:prior.archive.payload.workspace.id,counts:counts(prior.archive.payload)})),
     resources:p.resources.map(resource=>({...resource,commits:resource.commits.length})),
     pendingReceipts:p.operations.filter(row=>row.receipt.state==='pending').map(({key,receipt})=>({key,kind:receipt.kind,projectId:receipt.projectId??null})),
     historical:true,restoresAuthority:false,resumesWork:false,boundary};

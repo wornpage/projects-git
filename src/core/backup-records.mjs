@@ -37,20 +37,21 @@ const execution=shape({kind:text,model:text,startedAt:date,finishedAt:nil(date),
   usageComplete:bool,error:nil(text),elapsedMs:number,pendingCommit:commit,limits,
   requests:list(shape({number:number,inputBytes:number,outputTokenLimit:number,status:text,usage:nil(usage)},['number','inputBytes','outputTokenLimit','status','usage']))});
 const publicationPR=shape({number:number,url:text,headCommit:commit,status:text,mergedAt:nil(date),mergeCommit:nil(commit)});
-const publication=shape({id:text,previewId:text,createdAt:date,lastCheckedAt:date,status:text,stage:text,pushStartedAt:date,prStartedAt:date,branchHead:nil(commit),
+const publication=shape({id:text,previewId:text,createdAt:date,lastCheckedAt:date,status:text,stage:text,pushStartedAt:nil(date),prStartedAt:nil(date),branchHead:nil(commit),
   binding:shape({repository:text,repositoryId:number,baseBranch:text,headBranch:text,
     local:shape({workspaceId:text,taskId:text,runId:text,headCommit:commit,baseCommit:commit,taskRevision:number,ownerVersion:number,requirementsSha256:hash,reviewSha256:hash})}),
   pr:nil(publicationPR),error:nil(shape({code:text,message:text})),
   observations:list(shape({at:date,status:text,stage:text,message:text,pr:nil(publicationPR)}))});
-const event=shape({id:text,at:date,type:text,projectId:text,taskId:nil(text),runId:nil(text),message:text},['id','at','type','taskId','runId','message']);
-const observation=shape({eventKey:text,ref:text,headCommit:nil(commit),observedAt:date,eventTimestamp:date,requiresSubmission:bool});
+export const validBackupRepositoryEvent=shape({key:hash,state:text,headCommit:nil(commit),repositoryName:text,ref:text,runIds:list(text),projectIds:list(text)},['key','state','headCommit','repositoryName','ref','runIds','projectIds']);
+const event=shape({id:text,at:date,type:text,projectId:text,taskId:nil(text),runId:nil(text),message:text,repositoryEvent:validBackupRepositoryEvent},['id','at','type','taskId','runId','message']);
+export const validBackupObservation=shape({eventKey:hash,ref:text,headCommit:nil(commit),observedAt:date,eventTimestamp:date,requiresSubmission:bool},['eventKey','ref','headCommit','observedAt','eventTimestamp','requiresSubmission']);
 const task=shape({id:text,title:text,purpose:text,criteria:list(text),status:text,baseCommit:commit,
   baseHistory:list(shape({baseCommit:commit,revision:number,acceptedRunId:nil(text),sourceRunId:text,at:date})),projectId:text,createdAt:date,
   acceptedRunId:nil(text),mergedCommit:nil(commit),owner:nil(text),ownerVersion:number,origin:text,repositoryName:text,resultBranch:text,dependsOn:list(text),revision:number,
   verificationProfile:text,ownerHistory:list(shape({owner:nil(text),version:number,at:date})),revisions:list(shape({revision:number,purpose:text,criteria:list(text),reason:text,at:date}))},
   ['id','title','purpose','criteria','status','baseCommit','createdAt','revision']);
 const run=shape({id:text,taskId:text,origin:text,agent:text,label:text,status:text,baseCommit:commit,headCommit:nil(commit),branch:text,startedAt:nil(date),finishedAt:nil(date),
-  changedFiles:list(text),diff:text,summary:text,error:nil(text),ownerVersion:number,reconcilesRunId:text,verificationPending:bool,checkoutState:text,repositoryObservation:observation,
+  changedFiles:list(text),diff:text,summary:text,error:nil(text),ownerVersion:number,reconcilesRunId:text,verificationPending:bool,checkoutState:text,repositoryObservation:validBackupObservation,
   agentIdentity:identity,assignedRevision:number,evidence:nil(validBackupEvidence),
   reviewAssignments:list(shape({id:text,at:date,sourceContextId:hash,contextId:hash,reviewerIds:list(text),identity})),
   codeReview:nil(codeReview),codeReviewHistory:list(codeReview),findingDecisions:list(shape({id:text,at:date,assessmentId:text,findingId:text,decision:text,note:text,identity})),

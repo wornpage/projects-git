@@ -102,3 +102,61 @@ test('real operation key grammars and sole durable model-check reports survive b
   const corrupted=structuredClone(backup);corrupted.payload.operations.find(op=>op.key===modelKey).receipt.report.rawCredentials={token:'forbidden'};seal(corrupted);
   await assert.rejects(readWorkspaceBackup(JSON.stringify(corrupted),corrupted.sha256),{code:'WORKSPACE_BACKUP_INVALID'});
 });
+
+test('project, candidate and event observations plus restore provenance survive without raw replies',async()=>{
+  const source=fixture(),project=Object.values(source.workspace.projects)[0],run=source.workspace.runs[0],now=new Date().toISOString();
+  const observation={eventKey:'e'.repeat(64),ref:'refs/heads/main',headCommit:'d'.repeat(40),observedAt:now,eventTimestamp:now,requiresSubmission:true};
+  project.repositoryObservation={...observation,rawCredentials:'SECRET_PROJECT_OBSERVATION'};run.repositoryObservation={...observation,rawReply:'SECRET_RUN_OBSERVATION'};
+  project.restoredFrom={archiveSha256:'f'.repeat(64),workspaceId:'previous-workspace',projectId:'previous-project',at:now,token:'SECRET_RESTORE'};
+  source.workspace.events.push({id:crypto.randomUUID(),at:now,type:'repository.push_observed',taskId:null,runId:run.id,projectId:project.id,message:'Source head changed',
+    repositoryEvent:{key:observation.eventKey,state:'observed',headCommit:observation.headCommit,repositoryName:project.repositoryName,ref:observation.ref,
+      runIds:[run.id],projectIds:[project.id],rawReply:'SECRET_EVENT'}});
+  const backup=await buildWorkspaceBackup(source);assert.deepEqual(backup.payload.projects[0].repositoryObservation,observation);
+  assert.deepEqual(backup.payload.handoffs[0].payload.runs[0].repositoryObservation,observation);
+  assert.equal(backup.payload.projects[0].restoredFrom.workspaceId,'previous-workspace');
+  assert.equal(backup.payload.events.at(-1).repositoryEvent.key,observation.eventKey);
+  assert.ok(backup.payload.resources[0].commits.includes(observation.headCommit));assert.ok(!JSON.stringify(backup).includes('SECRET_'));
+});
+
+test('reserved, partially started and finished publication timestamps round-trip as uncertainty',async()=>{
+  for(const [pushStartedAt,prStartedAt] of [[null,null],[new Date().toISOString(),null],[new Date().toISOString(),new Date().toISOString()]]){
+    const source=fixture(),task=source.workspace.tasks[0],run=source.workspace.runs[0];
+    run.publication={id:crypto.randomUUID(),previewId:crypto.randomUUID(),createdAt:new Date().toISOString(),status:'pending',stage:'reserved',pushStartedAt,prStartedAt,branchHead:null,pr:null,error:null,observations:[],
+      binding:{repository:'fixture/repository',repositoryId:1,baseBranch:'main',headBranch:'projects/fixture',local:{workspaceId:source.workspace.id,taskId:task.id,runId:run.id,
+        headCommit:PENDING,baseCommit:BASE,taskRevision:1,ownerVersion:1,requirementsSha256:'e'.repeat(64),reviewSha256:'f'.repeat(64)}}};
+    const backup=await buildWorkspaceBackup(source),record=backup.payload.handoffs[0].payload.runs[0].publication;
+    assert.equal(record.pushStartedAt,pushStartedAt);assert.equal(record.prStartedAt,prStartedAt);
+  }
+});
+
+test('historical identities and policy references cannot be duplicated or orphaned',async()=>{
+  const source=fixture(),old=(await buildWorkspaceBackup(fixture())).payload.handoffs[0],project=Object.values(source.workspace.projects)[0];
+  project.restoredHistory=[old,structuredClone(old)];await assert.rejects(buildWorkspaceBackup(source),/Duplicate historical task identity/);
+  project.restoredHistory=[old];const definition=JSON.stringify({format:'repository-command-checks/v1',commit:BASE,taskRevision:1,requirementsSha256:'e'.repeat(64),timeoutMs:1000,checks:[]});
+  const policy={workspaceId:old.payload.workspace.id,runId:old.payload.runs[0].id,definition,definitionSha256:createHash('sha256').update(definition).digest('hex')};
+  project.restoredCheckPolicies=[policy,structuredClone(policy)];await assert.rejects(buildWorkspaceBackup(source),/Duplicate or orphan/);
+  project.restoredCheckPolicies=[{...policy,runId:crypto.randomUUID()}];await assert.rejects(buildWorkspaceBackup(source),/Duplicate or orphan/);
+  project.restoredCheckPolicies=[{...policy,workspaceId:'foreign-workspace'}];await assert.rejects(buildWorkspaceBackup(source),/Duplicate or orphan/);
+});
+
+test('operation role references reject unknown identities, duplicates and cleanup supersets',async()=>{
+  for(const change of [
+    (s,op)=>{op.taskId='unknown-task';},(s,op)=>{op.itemId='unknown-run';},(s,op)=>{op.sourceRunId='unknown-run';},
+    (s,op)=>{op.kind='task';op.itemId=s.workspace.tasks[0].id;op.taskIds=[op.itemId,'unknown-task'];},
+    (s,op)=>{op.kind='project-access';delete op.itemId;op.revokeRunIds=[s.workspace.runs[0].id];op.revokedRunIds=['unknown-run'];},
+    (s,op)=>{op.kind='project-access';delete op.itemId;op.revokeRunIds=[s.workspace.runs[0].id,s.workspace.runs[0].id];},
+  ]){const source=fixture();change(source,source.operations[OP]);await assert.rejects(buildWorkspaceBackup(source),{code:'WORKSPACE_BACKUP_INVALID'});}
+});
+
+test('restored whole-workspace journals and their uncertain Git roots survive re-export as historical records',async()=>{
+  const previous=await buildWorkspaceBackup(fixture()),source=fixture();source.workspace.projects={};source.workspace.tasks=[];source.workspace.runs=[];source.workspace.events=[];
+  source.repositories={};source.forks={};source.jobs={};source.checkPolicies={};
+  source.recoveryImports={[previous.sha256]:{archive:previous,importedAt:new Date().toISOString(),importedBy:'new-owner'}};
+  source.operations={['e'.repeat(64)]:{kind:'workspace-restore',state:'complete',fingerprint:'f'.repeat(64),recoveryImportId:previous.sha256}};
+  const backup=await buildWorkspaceBackup(source),preview=workspaceBackupPreview(backup);
+  assert.deepEqual(backup.payload.priorImports[0].archive,previous);
+  assert.equal(preview.counts.currentTasks,0);assert.equal(preview.counts.historicalTasks,1);assert.equal(preview.counts.priorImports,1);
+  assert.equal(preview.counts.currentOperations,1);assert.equal(preview.counts.historicalOperations,1);assert.equal(preview.counts.pendingOperations,1);
+  assert.equal(backup.payload.resources[0].kind,'historical-import');assert.deepEqual(backup.payload.resources[0].commits,[BASE,PENDING]);
+  assert.equal(backup.payload.operations.length,1);assert.equal(backup.payload.handoffs.length,0);
+});
