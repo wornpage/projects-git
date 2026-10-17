@@ -1,5 +1,9 @@
 # Local trial admission and isolation
 
+This document records the original metadata/sample-only mode, where `workflowReady`
+is false. The [bounded full workflow](trial-workflow.md) extends its admission and
+isolation boundary with scoped agent credentials, checks, review, merge and export.
+
 ## Implemented scope
 
 The separate `src/cloudflare/trial-worker.ts` entry point admits authenticated

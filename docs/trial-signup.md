@@ -1,5 +1,9 @@
 # Local trial signup UI
 
+This document describes the original metadata/sample-only mode. The same UI now
+supports the [bounded full workflow](trial-workflow.md) when its dedicated bindings
+are configured. Hosted signup and email delivery remain unqualified.
+
 ## Scope
 
 Built on `f4c9c51`, the separate trial entry point now serves a no-invitation signup

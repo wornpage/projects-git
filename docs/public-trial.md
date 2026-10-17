@@ -1,5 +1,9 @@
 # Open trial: follow-up release proposal
 
+This is the original staged release proposal. The bounded coding workflow is now
+implemented locally; see [current capabilities, limits and launch status](trial-workflow.md).
+Statements below about pending workflow implementation describe the earlier stage.
+
 Status: admission, signup UI and isolated metadata reads are implemented locally; this is
 not an available hosted trial. Based on main
 `f8f0eb001a5e3f1d69512b64587f4ef374678533`. No new resources, identity changes,

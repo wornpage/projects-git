@@ -1,5 +1,9 @@
 # Trial sample repository setup
 
+The read-only limitations below describe the sample-only deployment. In the
+[full workflow](trial-workflow.md), explicit preparation also creates the first
+task; configured capabilities determine what the visitor can do next.
+
 Status: source/local implementation only. This is not a provisioned or available
 hosted trial. Spending remains unapproved. No signup automatically provisions a
 repository, runs code, or starts an agent. The signup UI now offers explicit sample
