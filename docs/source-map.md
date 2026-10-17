@@ -34,6 +34,8 @@ server endpoints.
 | [`public/review-handoff.js`](../public/review-handoff.js) | Reviewer display labels, request-status text and assignment-specific human links; grants no authority |
 | [`public/ui/retained-search.js`](../public/ui/retained-search.js) | Scoped asynchronous history queries and explicit index rebuild requests |
 | [`public/workbench-state.js`](../public/workbench-state.js) | Pure task/candidate outcomes, project counts and navigation entries shared with the CLI |
+| [`public/ui/project-metrics.js`](../public/ui/project-metrics.js) | Read-only repository timing and usage view; [definitions and missing-data denominators](operational-metrics.md) |
+| [`public/ui/workspace-backup.js`](../public/ui/workspace-backup.js) | Owner-only metadata download and non-applying archive preview; [offline recovery boundary](workspace-backup.md) |
 
 The entrypoint constructs the UI owners once. Each receives current state through
 `getContext` and explicit operations such as `api`, `refresh` and `switchView`.

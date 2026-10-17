@@ -1,4 +1,5 @@
 import {createWorkbenchParts, mergeStatusNotice} from './ui/workbench-parts.js';
+import {downloadJson} from './ui/json-download.js';
 import {createRetainedSearch} from './ui/retained-search.js';
 import {createTaskViews} from './ui/views/queue.js';
 import {createWorkView} from './ui/views/work.js';
@@ -25,6 +26,10 @@ import {createPublicationView} from './ui/publication.js';
 import {createProjectControls, automaticMergeControls} from './ui/project-controls.js';
 import {createProjectsView} from './ui/views/projects.js';
 import {canInspectInstallation, createInstallationPanel} from './ui/installation.js';
+import {canInspectWorkspaceBackup,createWorkspaceBackupPanel} from './ui/workspace-backup.js';
+import {canManageProjectAccess, createProjectAccessPanel} from './ui/project-access.js';
+import {canInspectProjectMetrics,createProjectMetricsPanel} from './ui/project-metrics.js';
+import {createProjectsGitWebMcp} from './webmcp.js';
 import "./vendor/wornpage-button-0.2.3/worn-button.js";
 import { independentlyVerified as verifiedAtCurrentHead, connectionLabel, mergeState, workspacePresentationKey, taskOutcome, projectContext, dependencyState, readLocation, locationSearch } from './workbench-state.js';
 import { localAgentInstructions, hostedAgentInstructions } from './agent-instructions.js';
@@ -55,6 +60,7 @@ let selectedProject = initialLocation.projectId;
 let selectedRun = initialLocation.runId;
 let projectOffset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
 let pageRevision = null;
+let browserTools = null;
 function workspacePath() {
   if (['queue','history'].includes(view) && selectedProject) return '/api/workspace?limit=1&project='+encodeURIComponent(selectedProject);
   if (view !== 'projects' && selectedTask) return '/api/workspace?limit=1&task='+encodeURIComponent(selectedTask);
@@ -66,6 +72,7 @@ let lastError = "";
 // Compose UI owners here; they receive current state and explicit operations.
 function getContext() { return {workspace, view, selectedProject, selectedTask, selectedRun, demo:Boolean(demo), busy: actions.busy, sessionWarning: browserSession.warning}; }
 const api = demo ? demo.createDemoApi() : createApiClient({captureSession: () => connection.captureSession(), onAuthRequired: () => {
+  browserTools?.disable('Browser tools stopped because this session needs sign-in.');
   for(const dialog of document.querySelectorAll('dialog[open]')) { dialogs.skipFocusRestore(dialog.id); dialog.close(); }
   $('#auth-panel').hidden = false;
   $('#auth-panel').querySelector('a').focus();
@@ -81,6 +88,8 @@ const actions = createWorkbenchActions({getContext, captureSession: connection.c
   api, actionFeedback, operationRequests, saveSession, render, clearError, showError, announce,
   captureActionFocus:()=>captureFocus(document.body), restoreActionFocus:restoreFocus});
 const {mutate, runOperation, actionKey} = actions;
+browserTools=createProjectsGitWebMcp({document,getContext,captureSession:connection.captureSession,api,
+  isConnected:()=>Boolean(workspace&&!connection.state.error),onStatus:status=>{$('#browser-tools-status').textContent=status.message;}});
 const dialogs = createDialogManager(document);
 dialogs.register('project-connection-dialog');
 dialogs.register('inspector-dialog',()=>!actions.busy);
@@ -89,7 +98,8 @@ $('#close-inspector').addEventListener('click',()=>{if(!actions.busy)$('#inspect
 $('#inspector-dialog').addEventListener('close',()=>document.querySelector('#installation-settings')?.remove());
 $('#open-installation').addEventListener('click',()=>{
   if (!actions.busy && canInspectInstallation(getContext())) openInspector('Installation readiness',
-    createInstallationPanel({getContext, captureSession:connection.captureSession}));
+    createInstallationPanel({getContext, captureSession:connection.captureSession,
+      backupPanel:()=>canInspectWorkspaceBackup(getContext())?createWorkspaceBackupPanel({getContext,captureSession:connection.captureSession,api,downloadJson}):null}));
 });
 $('#close-task-composer').addEventListener('click',()=>{if(!taskCreation.starting)$('#task-launcher').close();});
 const projectDiscovery=createProjectDiscovery({getContext,api,captureSession:()=>connection.captureSession(),onChange:()=>updateChrome()});
@@ -111,7 +121,7 @@ const {loadIndexedSearch, rebuildSearch} = createRetainedSearch({getContext, ret
 const {reviewPanel} = createReviewForm({getContext, drafts, api, mutate, refresh, saveSession, showError,
   getReviewerName: browserSession.getReviewerName, rememberReviewerName: browserSession.rememberReviewerName,
   runCoordination, comparisonKey, comparisonHeads, acceptanceReady, disclosure, evidenceChecks: parts.evidenceChecks, diffPanel: parts.diffPanel, switchView});
-const publicationPanel = createPublicationView({getContext, captureSession:connection.captureSession, api, mutate, refresh, openInspector});
+const publicationPanel = createPublicationView({getContext, captureSession:connection.captureSession, api, mutate, refresh, openInspector, downloadHandoff});
 
 const taskViews = createTaskViews({getContext, parts, disclosure, currentProject, currentTask, tasksInProject, taskRuns, taskNumber,
   switchView, selectProject, openTaskComposer, openRevision, openInspector, downloadHandoff, collections, openAgentConnection});
@@ -430,6 +440,10 @@ function updateProjectHeader() {
   projectHeaderKey = key;
   const controlsId = 'project-controls-' + project.id;
   const controls = createProjectControls({id: controlsId, onOpen: (body,opener)=>openInspector('Project settings · '+project.name,body)},
+    canInspectProjectMetrics(getContext(),project.id)?el('button',{class:'button button-small',onclick:()=>openInspector('Operational metrics · '+project.name,
+      createProjectMetricsPanel({projectId:project.id,getContext,captureSession:connection.captureSession,api}))},'Operational metrics'):null,
+    canManageProjectAccess(getContext())?el('button',{class:'button button-small',onclick:()=>openInspector('People and access · '+project.name,
+      createProjectAccessPanel({projectId:project.id,getContext,captureSession:connection.captureSession,api,refresh}))},'People and access'):null,
     demo || workspace.personalWorkspace?.agentConnections === false ? null : el('button', { id: 'shell-connect-agent', class: 'button button-small', onclick: () => openAgentConnection(project.id, $('#shell-project-controls')) }, 'Connect agent'), admissionSwitch(project),
     automaticMergeControls({project, hosted:!demo && workspace.authentication?.mode === 'cloudflare-access', canManage:workspace.authentication?.permissions.manage,
       busy:actions.busy, onChange:(enabled, expectedVersion) => mutate(() => api('/api/projects/' + project.id + '/automatic-merge', {enabled, expectedVersion}),
@@ -610,16 +624,6 @@ async function downloadHandoff(task) {
   if (!handoff) return;
   downloadJson(handoff,`projects-git-${task.id}-r${handoff.payload.task.revision}.json`);
 }
-function downloadJson(data, filename) {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2) + '\n'], { type: 'application/json;charset=utf-8' }));
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 async function downloadReviewContext(run) {
   const packet=await mutate(()=>api(`/api/runs/${encodeURIComponent(run.id)}/review-context`),'Read-only review context prepared.');
   if(packet)downloadJson(packet,`review-context-${run.id}.json`);
@@ -664,6 +668,7 @@ function workspaceReceived(data, previous, {force, recoveredError}) {
   identity.title = identity.textContent;
   $('#workspace-access-controls').hidden = !workspace.authentication?.permissions.manage;
   $('#adopt-owner').hidden = !workspace.authentication?.adoptionRequired;
+  void browserTools.sync();
   for (const run of data.runs) {
     const prior = previous?.runs.find(entry => entry.id === run.id);
     if (prior && prior.status !== run.status && ['awaiting_review','failed'].includes(run.status))
@@ -674,6 +679,7 @@ function workspaceReceived(data, previous, {force, recoveredError}) {
   if ($('#revision-dialog').open) renderRevisionPreview();
 }
 function connectionFailed(error) {
+  browserTools.disable('Browser tools stopped while this workspace connection is unavailable.');
   showError(error.message); updateConnectionStatus();
   $('#provider-dot').classList.remove('connected');
   content.setAttribute('aria-busy', 'false');

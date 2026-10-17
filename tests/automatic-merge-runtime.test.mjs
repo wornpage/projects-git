@@ -8,6 +8,7 @@ import {createTask,assignRun,startRun,completeRun,verifyRun,assignReviewers,code
 import {testAuthority,testReviewerAuthority,REVIEWER_CLIENT} from './helpers/hosted-authority.mjs';
 import {ownerBinding} from '../src/cloudflare/access.ts';
 import {setAutomaticMergePolicy} from '../src/core/project-work.mjs';
+import {setRepositoryAccess} from '../src/core/repository-access.mjs';
 const {Miniflare,convertV4MiniflareOptions}=createRequire(new URL('../node_modules/wrangler/package.json',import.meta.url))('miniflare');
 
 for (const trigger of ['owner policy switch','independent reviewer submission','crash after failure write','revoked reviewer after forwarded policy',
@@ -18,13 +19,14 @@ for (const trigger of ['owner policy switch','independent reviewer submission','
   const task=createTask(state,{title:'Alarm fixture',purpose:'Exercise scheduled policy approval',criteria:['Keep the policy receipt'],owner:'Fixture owner',baseCommit:'a'.repeat(40)});
   Object.assign(task,{projectId,repositoryKey:projectId,verificationProfile:'checkout'});
   state.projects[projectId]={id:projectId,name:'Fixture',repositoryName:'target',mainCommit:task.baseCommit,acceptingWork:true,policyVersion:1};
+  setRepositoryAccess(state.projects[projectId],{expectedVersion:0,grants:[{kind:'reviewer',id:REVIEWER_CLIENT,role:'review'}]},authority.principal,authority.policy);
   const run=assignRun(state,task.id,{agent:'fixture',label:'Scripted builder',branch:'work'});
   startRun(state,run.id);completeRun(state,run.id,{headCommit:'b'.repeat(40),changedFiles:['checkout.mjs'],diff:'',summary:'Synthetic transport fixture'});
   verifyRun(state,run.id,{verified:true,source:'independent-sandbox-checks',commit:run.headCommit,taskRevision:1,passed:1,total:1,exitCode:0,
     checks:[{name:'Fixture',passed:true,detail:'Scripted observation'}],command:'fixture',output:'',verifiedAt:new Date().toISOString()});
   assignReviewers(state,run.id,{contextId:codeReviewContext(state,run.id).contextId,expectedVersion:state.version,reviewerIds:[REVIEWER_CLIENT]},authority.principal,[REVIEWER_CLIENT],'assignment');
   const assessment={format:'projects-code-review-assessment/v2',contextId:codeReviewContext(state,run.id).contextId,verdict:'pass',summary:'Scripted assessment',findings:[],resolvedPriorFindingIds:[]};
-  if(trigger!=='independent reviewer submission') recordCodeReview(state,run.id,assessment,testReviewerAuthority().principal,'assessment');
+  if(trigger!=='independent reviewer submission') {recordCodeReview(state,run.id,assessment,testReviewerAuthority().principal,'assessment');run.codeReview.repositoryAccessVersion=1;}
   else setAutomaticMergePolicy(state,projectId,{enabled:true,expectedVersion:0},authority.principal);
   const explicitAlarm=!['owner policy switch','independent reviewer submission','crash after failure write'].includes(trigger);
   if(explicitAlarm)setAutomaticMergePolicy(state,projectId,{enabled:true,expectedVersion:0},authority.principal);

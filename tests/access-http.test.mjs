@@ -4,8 +4,16 @@ import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {transformSync} from 'esbuild';
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
-import {AccessVerifier} from '../src/cloudflare/access.ts';
+import {AccessVerifier,ownerBinding} from '../src/cloudflare/access.ts';
+import {HostedController} from '../src/cloudflare/controller.ts';
+import {WorkspaceStore} from '../src/cloudflare/workspace-store.ts';
+import {ArtifactEventReceipts} from '../src/cloudflare/artifact-events.ts';
+import {ArtifactSubscriptions} from '../src/cloudflare/artifact-subscriptions.ts';
+import {sqliteStorage} from './helpers/sqlite-store.mjs';
 import {testAuthority,AGENT_CLIENT,REVIEWER_CLIENT} from './helpers/hosted-authority.mjs';
+import {createWorkspace} from '../src/core/workflow.mjs';
+import {buildWorkspaceBackup} from '../src/core/workspace-backup.mjs';
+import {WORKSPACE_BACKUP_REQUEST_BYTES} from '../public/workspace-backup-limits.js';
 
 const file=new URL('../src/cloudflare/index.ts',import.meta.url),require=createRequire(file),module={exports:{}};
 const compiled=transformSync(readFileSync(file,'utf8'),{loader:'ts',format:'cjs',target:'es2022'}).code;
@@ -16,6 +24,20 @@ const handler=module.exports.createAuthenticatedFetch(new AccessVerifier(async()
 function fixture(){const calls=[],assets=[];return{calls,assets,env:{ACCESS_TEAM_DOMAIN:policy.issuer,ACCESS_AUD:policy.audience,ACCESS_OWNER_SUB:policy.ownerSubject,ACCESS_AGENT_CLIENT_IDS:JSON.stringify(policy.agentClientIds),WORKSPACE_ID:policy.workspaceId,
   WORKSPACES:{getByName:id=>{calls.push({id});return{api:call=>{calls.push({call});return Response.json({ok:true});}};}},ASSETS:{fetch:request=>{assets.push(request.url);return new Response('static');}}}};}
 async function request(path,token,body,headers={}){return new Request('https://workspace.example.test'+path,{method:body===undefined?'GET':'POST',headers:{...(token?{'Cf-Access-Jwt-Assertion':token}:{}),...(body!==undefined?{'Content-Type':'application/json','Idempotency-Key':'http-contract-request'}:{}),...headers},body:body===undefined?undefined:JSON.stringify(body)});}
+
+test('valid larger workspace archives cross the owner HTTP tier intact while oversized requests never dispatch',async()=>{
+  const workspace={...createWorkspace({id:policy.workspaceId,provider:'cloudflare-artifacts'}),projects:{}};
+  workspace.events=Array.from({length:4000},()=>({id:crypto.randomUUID(),at:'2026-10-16T12:00:00.000Z',type:'workspace.observed',message:'x'.repeat(300)}));
+  const archive=await buildWorkspaceBackup({workspace,revision:1,repositories:{},forks:{},operations:{},jobs:{},checkPolicies:{}},undefined,
+    {capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
+  const body={archive,expectedSha256:archive.sha256};assert.ok(Buffer.byteLength(JSON.stringify(body))>1100*1024);
+  const f=fixture(),token=await jwt();
+  assert.equal((await handler(await request('/api/workspace/backup-preview',token,body),f.env)).status,200);
+  assert.deepEqual(f.calls[1].call.body,body);
+  const refused=fixture();
+  assert.equal((await handler(await request('/api/workspace/backup-preview',token,{padding:'x'.repeat(WORKSPACE_BACKUP_REQUEST_BYTES)}),refused.env)).status,413);
+  assert.deepEqual(refused.calls,[]);
+});
 
 test('display-name writes retain the owner-only Worker boundary for agents and both reviewer kinds',async()=>{
   const f=fixture();f.env.ACCESS_REVIEWER_CLIENT_IDS=JSON.stringify([REVIEWER_CLIENT]);f.env.ACCESS_REVIEWER_SUBJECTS=JSON.stringify(['human-reviewer']);
@@ -63,6 +85,103 @@ test('repository creation requires an owner and preserves distinct creation keys
     ['/api/repositories','first-private-repo','create-first-private','owner'],
     ['/api/repositories','second-private-repo','create-second-private','owner'],
   ]);
+});
+
+test('repository access requires owner authority and an explicit mutation key before durable dispatch',async()=>{
+  const f=fixture(),owner=await jwt(),id=crypto.randomUUID(),path='/api/projects/'+id+'/access';
+  f.env.ACCESS_MEMBER_SUBJECTS='["member-person"]';
+  for(const token of [await jwt('agent'),await jwt('owner',{sub:'member-person',email:'member@example.test'})])
+    assert.equal((await handler(await request(path,token,{expectedVersion:0,grants:[]}),f.env)).status,403);
+  for(const key of [null,'','short','bad key','x'.repeat(129)]){
+    const req=await request(path,owner,{expectedVersion:0,grants:[]});if(key===null)req.headers.delete('Idempotency-Key');else req.headers.set('Idempotency-Key',key);
+    assert.equal((await handler(req,f.env)).status,400);
+  }
+  assert.deepEqual(f.calls,[]);const key=crypto.randomUUID();
+  assert.equal((await handler(await request(path,owner,{expectedVersion:0,grants:[]},{'Idempotency-Key':key}),f.env)).status,200);
+  assert.equal(f.calls[1].call.key,key);assert.equal(f.calls[1].call.path,path);
+});
+
+test('access HTTP admission accepts the largest configured grant set and rejects bodies above 128 KiB',async()=>{
+  const f=fixture(),owner=await jwt(),path='/api/projects/'+crypto.randomUUID()+'/access';
+  const members=Array.from({length:100},(_,i)=>('member-'+i+'-').padEnd(200,'m'));
+  const reviewers=Array.from({length:100},(_,i)=>('reviewer-'+i+'-').padEnd(200,'r'));
+  const agents=Array.from({length:100},(_,i)=>(i+1).toString(16).padStart(32,'0')+'.access');
+  Object.assign(f.env,{ACCESS_MEMBER_SUBJECTS:JSON.stringify(members),ACCESS_REVIEWER_SUBJECTS:JSON.stringify(reviewers),ACCESS_AGENT_CLIENT_IDS:JSON.stringify(agents)});
+  const grants=[...members.map(id=>({kind:'member',id,role:'read'})),...reviewers.map(id=>({kind:'reviewer',id,role:'review'})),...agents.map(id=>({kind:'agent',id,role:'build'}))];
+  assert.equal(grants.length,300);assert.ok(Buffer.byteLength(JSON.stringify({expectedVersion:0,grants}))>32768);
+  assert.equal((await handler(await request(path,owner,{expectedVersion:0,grants}),f.env)).status,200);
+  assert.equal(f.calls[1].call.body.grants.length,300);const before=f.calls.length;
+  const response=await handler(await request(path,owner,{padding:'x'.repeat(128*1024)}),f.env);
+  assert.equal(response.status,413);assert.equal(f.calls.length,before);
+});
+
+test('authenticated access save, replay and readback traverse the real Coordinator and SQLite store',async t=>{
+  const f=fixture(),{db,storage}=sqliteStorage();t.after(()=>db.close());
+  const store=new WorkspaceStore(storage,policy.workspaceId),snapshot=store.read(),projectId=crypto.randomUUID();
+  snapshot.workspace.projects[projectId]={id:projectId,name:'Owned fixture',repositoryName:'owned',kind:'artifacts',mainCommit:'a'.repeat(40),acceptingWork:true,policyVersion:1};
+  snapshot.revision++;store.write(snapshot,0);
+  const coordinator=Object.create(module.exports.WorkspaceCoordinator.prototype);
+  Object.assign(coordinator,{env:{WORKSPACE_ID:policy.workspaceId},store,schedule:async()=>{},
+    controller:authority=>new HostedController(store,{get:()=>assert.fail('No provider work for a new read grant')},authority)});
+  f.env.WORKSPACES={getByName:id=>{assert.equal(id,policy.workspaceId);return coordinator;}};
+  f.env.ACCESS_MEMBER_SUBJECTS='["member-person"]';const owner=await jwt(),key=crypto.randomUUID(),path='/api/projects/'+projectId+'/access';
+  const input={expectedVersion:0,grants:[{kind:'member',id:'member-person',role:'read'}]};
+  for(const replay of [false,true]){
+    const response=await handler(await request(path,owner,input,{'Idempotency-Key':key}),f.env);assert.equal(response.status,200);
+    const result=await response.json();assert.equal(result.accessVersion,1);assert.equal(result.credentialCleanup,'confirmed');assert.equal(result.replayed,replay);
+  }
+  const response=await handler(await request(path,owner),f.env);assert.equal(response.status,200);
+  const result=await response.json();assert.equal(result.access.version,1);assert.equal(result.access.grants[0].id,'member-person');
+  assert.equal(result.recovery,null);assert.equal(Object.values(store.read().operations).filter(op=>op.kind==='project-access').length,1);
+});
+
+test('repository metrics traverse signed HTTP and SQLite without writes or provider work, and grants scope every read',async t=>{
+  const f=fixture(),{db,storage}=sqliteStorage();t.after(()=>db.close());
+  const store=new WorkspaceStore(storage,policy.workspaceId),snapshot=store.read(),projectId=crypto.randomUUID(),foreignId=crypto.randomUUID();
+  snapshot.workspace.authentication=ownerBinding(policy);
+  for(const id of [projectId,foreignId])snapshot.workspace.projects[id]={id,name:id===projectId?'Shared fixture':'Hidden fixture',repositoryName:'fixture',kind:'artifacts',
+    mainCommit:'a'.repeat(40),acceptingWork:true,policyVersion:1,access:{version:1,updatedAt:new Date().toISOString(),updatedBy:policy.ownerSubject,
+      grants:id===projectId?[{issuer:policy.issuer,kind:'member',id:'member-person',role:'read'}]:[]}};
+  snapshot.revision++;store.write(snapshot,0);const before=store.read();
+  const coordinator=Object.create(module.exports.WorkspaceCoordinator.prototype);
+  Object.assign(coordinator,{env:{WORKSPACE_ID:policy.workspaceId},store,schedule:async()=>{},controller:authority=>new HostedController(store,
+    {get:()=>assert.fail('A metrics read cannot use a provider')},authority)});
+  f.env.WORKSPACES={getByName:()=>coordinator};f.env.ACCESS_MEMBER_SUBJECTS='["member-person"]';f.env.ACCESS_REVIEWER_CLIENT_IDS=JSON.stringify([REVIEWER_CLIENT]);
+  const member=await jwt('owner',{sub:'member-person',email:'member@example.test'}),path='/api/projects/'+projectId+'/metrics';
+  for(const token of [await jwt(),member]){
+    const response=await handler(await request(path,token),f.env),result=await response.json();assert.equal(response.status,200,JSON.stringify(result));
+    assert.equal(result.projectId,projectId);assert.equal(result.scope,'complete-repository-history');
+    assert.equal(result.cost.actual,null);assert.equal(result.counts.tasks,0);assert.ok(!JSON.stringify(result).includes('Hidden fixture'));
+  }
+  assert.equal((await handler(await request('/api/projects/'+foreignId+'/metrics',member),f.env)).status,403);
+  for(const token of [undefined,await jwt('agent'),await jwt('agent',{common_name:REVIEWER_CLIENT})])
+    assert.ok([401,403].includes((await handler(await request(path,token),f.env)).status));
+  assert.deepEqual(store.read(),before);
+});
+
+test('owner-only backup export and preview preserve the SQLite revision and reject stale captures',async t=>{
+  const f=fixture(),{db,storage}=sqliteStorage();t.after(()=>db.close());
+  const store=new WorkspaceStore(storage,policy.workspaceId),snapshot=store.read();new ArtifactEventReceipts(storage);new ArtifactSubscriptions(storage);snapshot.workspace.authentication=ownerBinding(policy);
+  const projectId=crypto.randomUUID();snapshot.workspace.projects[projectId]={id:projectId,name:'Backup fixture',repositoryName:'fixture',mainCommit:'a'.repeat(40),
+    defaultBranch:'main',kind:'artifacts',acceptingWork:true,policyVersion:1};snapshot.revision++;store.write(snapshot,0);
+  const before=store.read(),artifacts={get:()=>assert.fail('Backup export and preview cannot use providers')};
+  const coordinator=Object.create(module.exports.WorkspaceCoordinator.prototype);
+  Object.assign(coordinator,{env:{WORKSPACE_ID:policy.workspaceId},store,schedule:async()=>{},controller:authority=>new HostedController(store,artifacts,authority)});
+  f.env.WORKSPACES={getByName:()=>coordinator};f.env.ACCESS_MEMBER_SUBJECTS='["member-person"]';f.env.ACCESS_REVIEWER_CLIENT_IDS=JSON.stringify([REVIEWER_CLIENT]);
+  const owner=await jwt();
+  for(const token of [undefined,await jwt('agent'),await jwt('owner',{sub:'member-person'}),await jwt('agent',{common_name:REVIEWER_CLIENT})]){
+    assert.ok([401,403].includes((await handler(await request('/api/workspace/backup',token),f.env)).status));
+    assert.ok([401,403].includes((await handler(await request('/api/workspace/backup-preview',token,{}),f.env)).status));
+  }
+  const response=await handler(await request('/api/workspace/backup',owner),f.env);assert.equal(response.status,200);
+  const archive=await response.json();assert.equal(archive.payload.projects.length,1);assert.equal(archive.payload.sourceRevision,before.revision);
+  assert.ok(!Object.hasOwn(archive.payload.workspace,'authentication'));assert.equal(archive.payload.ledgers.capture,'coherent-sqlite-transaction');
+  assert.deepEqual(archive.payload.ledgers.artifactSubscriptions,[]);
+  const preview=await handler(await request('/api/workspace/backup-preview',owner,{archive,expectedSha256:archive.sha256}),f.env);
+  assert.equal(preview.status,200);assert.equal((await preview.json()).resumesWork,false);assert.deepEqual(store.read(),before);
+  const bad=await handler(await request('/api/workspace/backup-preview',owner,{archive,expectedSha256:'0'.repeat(64)}),f.env);assert.equal(bad.status,422);
+  const capture=new HostedController(store,artifacts,testAuthority()).workspaceBackup(),changed=store.read();changed.workspace.version++;changed.revision++;
+  store.write(changed,before.revision);await assert.rejects(capture,{code:'STALE_WORKSPACE_BACKUP'});assert.deepEqual(store.read(),changed);
 });
 
 test('Worker binds the verified principal, excludes body impersonation, and protects static assets',async()=>{

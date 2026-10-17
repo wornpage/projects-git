@@ -7,6 +7,7 @@ import { gitHttp } from '../cloudflare/git-transport.mjs';
 import { readBounded, parseJson } from './cli-input.mjs';
 import { projectSummary, projectStatus, taskDetail, candidateSummary } from './repository-cli-view.mjs';
 import {parseWorkspacePage} from '../../public/workspace-page.js';
+import {HostedClientLocks} from './hosted-client-locks.mjs';
 
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const oid = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
@@ -69,6 +70,15 @@ export class HostedAgentClient {
     this.scope = { origin: connection.origin, workspaceId: connection.workspaceId, clientId: connection.clientId };
   }
 
+  get locks() {
+    if(!this.localLocks){
+      if(typeof this.connection.stateDirectory!=='string'||!path.isAbsolute(this.connection.stateDirectory))
+        throw new Error('Local recovery requires an absolute private connection state directory. Load a private hosted connection file first.');
+      this.localLocks=new HostedClientLocks(this.connection.stateDirectory,this.scope,{now:this.now});
+    }
+    return this.localLocks;
+  }
+
   sanitize(value) {
     let text = typeof value === 'string' ? value : JSON.stringify(value);
     for (const secret of this.secrets) if (secret) text = text.replaceAll(secret, '[redacted]');
@@ -96,6 +106,8 @@ export class HostedAgentClient {
         : command === 'status' ? projectStatus(workspace, options.project, url) : taskDetail(workspace, options.task, url);
     }
     if (command === 'receipt') return this.receipt(options.requestId);
+    if (command === 'locks') return {...await this.locks.inspect(), remoteState: 'not-read'};
+    if (command === 'release-lock') return this.releaseLock(options.requestId, options.lockId);
     if (!['claim', 'checkout', 'push', 'start', 'submit', 'fail'].includes(command)) throw new Error('Unsupported hosted builder command.');
     const output = command === 'claim' ? await this.claim(options.project, options.label, options.requestId)
       : command === 'checkout' ? await this.checkout(options.run, options.directory, options.requestId, options.assignment, options.startRequestId)
@@ -191,34 +203,88 @@ export class HostedAgentClient {
   async receipt(requestId) {
     id(requestId, 'Request ID');
     const manifest = await readPrivate(path.join(this.connection.stateDirectory, 'requests', requestId + '.json'));
-    if (JSON.stringify(manifest.scope) !== JSON.stringify(this.scope)) throw new Error('Receipt belongs to another connection.');
+    if (!manifest || JSON.stringify(manifest.scope) !== JSON.stringify(this.scope)) throw new Error('Receipt belongs to another connection.');
+    if (!manifest.payload || typeof manifest.payload !== 'object' || Array.isArray(manifest.payload)
+      || Object.keys(manifest).sort().join(',') !== 'command,payload,requestId,scope') throw new Error('Invalid retained request. Preserve it for inspection.');
     const files = (await readdir(path.join(this.connection.stateDirectory, 'attempts'))).filter(name => name.startsWith(requestId + '.') && name.endsWith('.json'));
     const attempts = await Promise.all(files.map(name => readPrivate(path.join(this.connection.stateDirectory, 'attempts', name))));
-    return { ...manifest, attempts, next: 'Read current status. For an explicit claim retry, repeat the original claim with the same request ID and inputs. Issued-once Git credentials cannot be recovered from the server. No mutation was sent by receipt.' };
+    if (manifest.requestId !== requestId || !['claim', 'checkout', 'push', 'start', 'submit', 'fail'].includes(manifest.command)
+      || attempts.some(attempt => !attempt || typeof attempt !== 'object' || Array.isArray(attempt) || JSON.stringify({scope: attempt.scope, command: attempt.command, requestId: attempt.requestId, payload: attempt.payload}) !== JSON.stringify(manifest)
+        || !['complete', 'outcome-unknown'].includes(attempt.state) || typeof attempt.startedAt !== 'string' || !Number.isFinite(Date.parse(attempt.startedAt))
+        || attempt.state === 'complete' && (typeof attempt.finishedAt !== 'string' || !Number.isFinite(Date.parse(attempt.finishedAt)) || !attempt.result || typeof attempt.result !== 'object' || Array.isArray(attempt.result))))
+      throw new Error('Receipt history does not match its original operation. Preserve it for inspection.');
+    attempts.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || (a.finishedAt ?? '').localeCompare(b.finishedAt ?? ''));
+    const inventory = await this.locks.inspect();
+    const locks = inventory.locks.filter(lock => lock.requestId === requestId || lock.resource === 'request-' + requestId
+      || manifest.payload.runId && lock.resource === 'run-' + manifest.payload.runId);
+    const completed = attempts.filter(attempt => attempt.state === 'complete');
+    const advice = {
+      claim: 'An explicit claim retry must reuse the original UUID and inputs. Issued-once Git credentials cannot be recovered from the server.',
+      checkout: completed.length && manifest.payload.startRequestId
+        ? 'Checkout has a recorded result. Inspect the separate start receipt and use its original start UUID if needed; do not repeat checkout.'
+        : 'Inspect the retained directory. Partial checkouts are preserved; a replacement checkout needs a new directory and request ID.',
+      push: 'An explicit same-input push retry observes the remote head first and avoids another write when the exact commit is already present.',
+      start: 'An explicit same-input start retry reconciles a currently running assignment without another POST.',
+      submit: 'An explicit same-input submit retry checks the retained remote outcome and can finish credential cleanup without another POST.',
+      fail: 'An explicit same-input fail retry checks the retained remote outcome before another POST.'
+    }[manifest.command];
+    return {...manifest, attempts, recovery: {recordedResults: completed.length,
+      unconfirmedAttempts: attempts.length - completed.length, totalAttempts: attempts.length, localLocks: locks,
+      remoteState: 'not-read', historicalResultsOnly: true},
+      next: (locks.length ? 'Inspect local locks first. A stopped process requires an explicit release-lock with its original request ID and lock ID. ' : '')
+        + 'Read current status. ' + advice + ' This receipt read made no provider request or mutation.'};
+  }
+
+  async releaseLock(requestId, lockId) {
+    id(requestId, 'Request ID'); id(lockId, 'Local lock ID');
+    let manifest;
+    try { manifest = await readPrivate(path.join(this.connection.stateDirectory, 'requests', requestId + '.json')); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const matches = value => value?.requestId && JSON.stringify(value.scope) === JSON.stringify(this.scope);
+    if (manifest && (!matches(manifest) || manifest.requestId !== requestId)) throw new Error('Local release belongs to another connection or request.');
+    let checkoutDirectory = null;
+    if (manifest?.command === 'push') checkoutDirectory = manifest.payload?.directory;
+    if (manifest?.command === 'submit' && manifest.payload?.pushRequestId) {
+      const childId = id(manifest.payload.pushRequestId, 'Child push request ID');
+      let child;
+      try { child = await readPrivate(path.join(this.connection.stateDirectory, 'requests', childId + '.json')); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (child) {
+        if (!matches(child) || child.requestId !== childId || child.command !== 'push' || child.payload?.runId !== manifest.payload.runId
+          || child.payload.head !== manifest.payload.headCommit) throw new Error('Child push receipt does not match the original submission.');
+        checkoutDirectory = child.payload.directory;
+      }
+    }
+    if (checkoutDirectory !== null && (typeof checkoutDirectory !== 'string' || !path.isAbsolute(checkoutDirectory))) throw new Error('Local release has no valid retained checkout path.');
+    return this.locks.release(requestId, lockId, checkoutDirectory);
   }
 
   async claim(projectId, label, requestId) {
-    id(projectId, 'Project ID'); safeText(label, 160, 'Agent label');
-    const workspace = await this.workspace({project:projectId});
-    if (!Object.hasOwn(workspace.projects, projectId)) throw new Error('Project does not belong to this workspace.');
-    return this.attempt('claim', requestId, { projectId, label }, async () => {
-      const result = await this.request('/api/projects/' + projectId + '/claim', { label }, requestId);
-      if (result.idle === true) return { idle: true, reason: typeof result.reason === 'string' ? this.sanitize(result.reason) : 'No eligible work.', replayed: result.replayed === true };
-      id(result.runId, 'Returned run ID');
-      const state = this.assertWorkspace(result.workspace ?? await this.workspace({project:projectId}));
-      const run = this.ownRun(state, result.runId);
-      if (result.projectId !== projectId || state.tasks.find(task => task.id === run.taskId)?.projectId !== projectId) throw new Error('Claim returned work outside the requested project.');
-      const file = path.join(this.connection.stateDirectory, 'runs', run.id + '.json');
-      if (result.credentials) {
-        const credential = this.validateCredential(run, result.credentials);
-        await privateJson(file, { scope: this.scope, runId: run.id, taskId: run.taskId, projectId, credentials: credential });
-      }
-      let retained = false;
-      try { const saved = await readPrivate(file); retained = JSON.stringify(saved.scope) === JSON.stringify(this.scope) && saved.runId === run.id && Date.parse(saved.credentials?.expiresAt) > this.now(); }
-      catch (error) { if (error.code !== 'ENOENT') throw error; }
-      return { runId: run.id, taskId: run.taskId, projectId, replayed: result.replayed === true,
-        credentialStatus: retained ? 'saved-privately' : 'unavailable',
-        next: retained ? 'Use checkout with this run ID and a new directory. Git credentials are temporary and never printed.' : 'The server returns Git credentials once. Inspect the retained assignment; explicitly close it and agree new work if its credential response was lost.' };
+    return this.locks.run('claim', requestId, null, async () => {
+      id(projectId, 'Project ID'); safeText(label, 160, 'Agent label');
+      const workspace = await this.workspace({project:projectId});
+      if (!Object.hasOwn(workspace.projects, projectId)) throw new Error('Project does not belong to this workspace.');
+      return this.attempt('claim', requestId, { projectId, label }, async () => {
+        const result = await this.request('/api/projects/' + projectId + '/claim', { label }, requestId);
+        if (result.idle === true) return { idle: true, reason: typeof result.reason === 'string' ? this.sanitize(result.reason) : 'No eligible work.', replayed: result.replayed === true };
+        id(result.runId, 'Returned run ID');
+        const state = this.assertWorkspace(result.workspace ?? await this.workspace({project:projectId}));
+        const run = this.ownRun(state, result.runId);
+        if (result.projectId !== projectId || state.tasks.find(task => task.id === run.taskId)?.projectId !== projectId) throw new Error('Claim returned work outside the requested project.');
+        return this.locks.retainClaim(run.id, async () => {
+          const file = path.join(this.connection.stateDirectory, 'runs', run.id + '.json');
+          if (result.credentials) {
+            const credential = this.validateCredential(run, result.credentials);
+            await privateJson(file, { scope: this.scope, runId: run.id, taskId: run.taskId, projectId, credentials: credential });
+          }
+          let retained = false;
+          try { const saved = await readPrivate(file); retained = JSON.stringify(saved.scope) === JSON.stringify(this.scope) && saved.runId === run.id && Date.parse(saved.credentials?.expiresAt) > this.now(); }
+          catch (error) { if (error.code !== 'ENOENT') throw error; }
+          return { runId: run.id, taskId: run.taskId, projectId, replayed: result.replayed === true,
+            credentialStatus: retained ? 'saved-privately' : 'unavailable',
+            next: retained ? 'Use checkout with this run ID and a new directory. Git credentials are temporary and never printed.' : 'The server returns Git credentials once. Inspect the retained assignment; explicitly close it and agree new work if its credential response was lost.' };
+        });
+      });
     });
   }
 
@@ -252,37 +318,39 @@ export class HostedAgentClient {
   }
 
   async mutate(command, runId, input, requestId) {
-    if (!['start', 'submit', 'fail'].includes(command)) throw new Error('Hosted agents may only start, submit or fail their own work.');
-    const state = await this.workspace({run:id(runId,'Run ID')}), before = this.ownRun(state, runId);
-    const body = command === 'submit' ? { headCommit: input.headCommit, summary: safeText(input.summary, 2000, 'Summary') }
-      : command === 'fail' ? { message: safeText(input.message, 2000, 'Failure reason') } : {};
-    if (command === 'submit' && !oid(body.headCommit)) throw new Error('Submission requires the full SHA-1 commit ID.');
-    if (input.directory !== undefined && (command !== 'submit' || typeof input.directory !== 'string' || !path.isAbsolute(input.directory))) throw new Error('Submission directory must be an absolute assigned checkout.');
-    const directory = input.directory === undefined ? undefined : path.normalize(input.directory);
-    const digest = directory === undefined ? null : hash(JSON.stringify([this.scope, id(requestId,'Request ID'), 'submit-push']));
-    // A stable child UUID retains the exact Git effect across explicit retries.
-    const pushRequestId = digest && `${digest.slice(0,8)}-${digest.slice(8,12)}-8${digest.slice(13,16)}-a${digest.slice(17,20)}-${digest.slice(20,32)}`;
-    return this.attempt(command, requestId, { runId, ...body, ...(directory === undefined ? {} : {directory,pushRequestId}) }, async () => {
-      if (command === 'start' && before.status === 'running') {
-        return {runId,taskId:before.taskId,status:before.status,headCommit:before.headCommit??null,reconciled:true,remoteMutation:false};
-      }
-      // Submit has no server idempotency receipt. An explicit retry of a closed
-      // run must reconcile its retained outcome instead of sending another POST.
-      const terminal = ['awaiting_review', 'accepted', 'rejected', 'merged', 'superseded', 'failed'].includes(before.status);
-      if (terminal && ['submit', 'fail'].includes(command)) {
-        await this.retireCredential(runId);
-        const matches = command === 'submit' ? before.headCommit === body.headCommit && before.summary === body.summary.trim()
-          && before.status !== 'failed' : before.status === 'failed';
-        if (!matches) throw new Error('The assignment is closed with a different retained outcome. Its private credential was retired; no mutation was repeated.');
-        return {runId,taskId:before.taskId,status:before.status,headCommit:before.headCommit??null,reconciled:true,remoteMutation:false,
-          observation:'Confirmed from the current authenticated workspace. Earlier unknown attempts remain in receipt history.'};
-      }
-      const pushed = directory === undefined ? undefined : await this.push(runId, directory, body.headCommit, pushRequestId);
-      const after = this.assertWorkspace(await this.request('/api/runs/' + runId + '/' + command, body, requestId));
-      const run = this.ownRun(after, runId);
-      if (['submit', 'fail'].includes(command)) await this.retireCredential(runId);
-      return { runId, taskId: run.taskId, status: run.status, headCommit: run.headCommit ?? null,
-        ...(pushed ? {push:{requestId:pushRequestId,...pushed}} : {}) };
+    return this.locks.run(command, requestId, runId, async () => {
+      if (!['start', 'submit', 'fail'].includes(command)) throw new Error('Hosted agents may only start, submit or fail their own work.');
+      const state = await this.workspace({run:id(runId,'Run ID')}), before = this.ownRun(state, runId);
+      const body = command === 'submit' ? { headCommit: input.headCommit, summary: safeText(input.summary, 2000, 'Summary') }
+        : command === 'fail' ? { message: safeText(input.message, 2000, 'Failure reason') } : {};
+      if (command === 'submit' && !oid(body.headCommit)) throw new Error('Submission requires the full SHA-1 commit ID.');
+      if (input.directory !== undefined && (command !== 'submit' || typeof input.directory !== 'string' || !path.isAbsolute(input.directory))) throw new Error('Submission directory must be an absolute assigned checkout.');
+      const directory = input.directory === undefined ? undefined : path.normalize(input.directory);
+      const digest = directory === undefined ? null : hash(JSON.stringify([this.scope, id(requestId,'Request ID'), 'submit-push']));
+      // A stable child UUID retains the exact Git effect across explicit retries.
+      const pushRequestId = digest && `${digest.slice(0,8)}-${digest.slice(8,12)}-8${digest.slice(13,16)}-a${digest.slice(17,20)}-${digest.slice(20,32)}`;
+      return this.attempt(command, requestId, { runId, ...body, ...(directory === undefined ? {} : {directory,pushRequestId}) }, async () => {
+        if (command === 'start' && before.status === 'running') {
+          return {runId,taskId:before.taskId,status:before.status,headCommit:before.headCommit??null,reconciled:true,remoteMutation:false};
+        }
+        // Submit has no server idempotency receipt. An explicit retry of a closed
+        // run must reconcile its retained outcome instead of sending another POST.
+        const terminal = ['awaiting_review', 'accepted', 'rejected', 'merged', 'superseded', 'failed'].includes(before.status);
+        if (terminal && ['submit', 'fail'].includes(command)) {
+          await this.retireCredential(runId);
+          const matches = command === 'submit' ? before.headCommit === body.headCommit && before.summary === body.summary.trim()
+            && before.status !== 'failed' : before.status === 'failed';
+          if (!matches) throw new Error('The assignment is closed with a different retained outcome. Its private credential was retired; no mutation was repeated.');
+          return {runId,taskId:before.taskId,status:before.status,headCommit:before.headCommit??null,reconciled:true,remoteMutation:false,
+            observation:'Confirmed from the current authenticated workspace. Earlier unknown attempts remain in receipt history.'};
+        }
+        const pushed = directory === undefined ? undefined : await this.push(runId, directory, body.headCommit, pushRequestId);
+        const after = this.assertWorkspace(await this.request('/api/runs/' + runId + '/' + command, body, requestId));
+        const run = this.ownRun(after, runId);
+        if (['submit', 'fail'].includes(command)) await this.retireCredential(runId);
+        return { runId, taskId: run.taskId, status: run.status, headCommit: run.headCommit ?? null,
+          ...(pushed ? {push:{requestId:pushRequestId,...pushed}} : {}) };
+      });
     });
   }
 
@@ -304,75 +372,81 @@ export class HostedAgentClient {
   }
 
   async checkout(runId, directory, requestId, assignmentFile, startRequestId) {
-    id(requestId,'Request ID');
-    if (startRequestId !== undefined) {
-      id(startRequestId,'Start request ID');
-      if (startRequestId === requestId) throw new Error('Checkout and start require distinct request IDs.');
-    }
-    if (!path.isAbsolute(directory)) throw new Error('Checkout directory must be absolute and new.');
-    const imported = assignmentFile === undefined ? null : await this.resolutionInput(runId, assignmentFile);
-    const { saved } = imported ?? await this.assignment(runId);
-    const dir = path.join(await realpath(path.dirname(directory)), path.basename(directory));
-    const checkedOut = await this.attempt('checkout', requestId, { runId, directory: dir,
-      ...(startRequestId === undefined ? {} : {startRequestId}),
-      ...(imported ? {assignmentFile:imported.assignmentFile,assignmentSha256:imported.assignmentSha256} : {}) }, async () => {
-      if (imported) {
-        const file = path.join(this.connection.stateDirectory,'runs',runId+'.json');
-        try { await privateJson(file,saved,true); }
-        catch (error) {
-          if (error.code !== 'EEXIST') throw error;
-          const retained = await readPrivate(file);
-          if (JSON.stringify({...retained,directory:undefined}) !== JSON.stringify(saved)) throw new Error('This assignment already has a different retained credential. It was not replaced.');
-        }
+    return this.locks.run('checkout', requestId, runId, async () => {
+      id(requestId,'Request ID');
+      if (startRequestId !== undefined) {
+        id(startRequestId,'Start request ID');
+        if (startRequestId === requestId) throw new Error('Checkout and start require distinct request IDs.');
       }
-      await mkdir(dir); // Existing or partial work is never reset or removed.
-      const { remote, token, baseCommit, branch: ref } = saved.credentials;
-      const http = gitHttp([{ remote, token }], { fetchImpl: this.fetchImpl, timeoutMs: 120000, maxBytes: 64 * 1024 * 1024 });
+      if (!path.isAbsolute(directory)) throw new Error('Checkout directory must be absolute and new.');
+      const imported = assignmentFile === undefined ? null : await this.resolutionInput(runId, assignmentFile);
+      const { saved } = imported ?? await this.assignment(runId);
+      const dir = path.join(await realpath(path.dirname(directory)), path.basename(directory));
+      const checkedOut = await this.attempt('checkout', requestId, { runId, directory: dir,
+        ...(startRequestId === undefined ? {} : {startRequestId}),
+        ...(imported ? {assignmentFile:imported.assignmentFile,assignmentSha256:imported.assignmentSha256} : {}) }, async () => {
+        if (imported) {
+          const file = path.join(this.connection.stateDirectory,'runs',runId+'.json');
+          try { await privateJson(file,saved,true); }
+          catch (error) {
+            if (error.code !== 'EEXIST') throw error;
+            const retained = await readPrivate(file);
+            if (JSON.stringify({...retained,directory:undefined}) !== JSON.stringify(saved)) throw new Error('This assignment already has a different retained credential. It was not replaced.');
+          }
+        }
+        await mkdir(dir); // Existing or partial work is never reset or removed.
+        const { remote, token, baseCommit, branch: ref } = saved.credentials;
+        const http = gitHttp([{ remote, token }], { fetchImpl: this.fetchImpl, timeoutMs: 120000, maxBytes: 64 * 1024 * 1024 });
+        try {
+          await git.clone({ fs, http, dir, url: remote, noCheckout: true });
+          const refs = await git.listBranches({ fs, dir, remote: 'origin' });
+          const head = refs.includes(ref) ? await git.resolveRef({ fs, dir, ref: 'refs/remotes/origin/' + ref }) : baseCommit;
+          if (head !== baseCommit && !await git.isDescendent({ fs, dir, oid: head, ancestor: baseCommit })) throw new Error('Assigned branch does not descend from its pinned base.');
+          await git.writeRef({ fs, dir, ref: 'refs/heads/' + ref, value: head });
+          await git.checkout({ fs, dir, ref });
+          // A created child can resolve differently from its parent under Windows
+          // filesystem redirection. Pin the completed checkout, as push does.
+          const completedDirectory = await realpath(dir);
+          await privateJson(path.join(this.connection.stateDirectory, 'runs', runId + '.json'), { ...saved, directory: completedDirectory });
+          return { runId, directory: completedDirectory, branch: ref, headCommit: head, baseCommit,
+            ...(imported ? {assignmentImported:true,credentialStatus:'saved-privately'} : {}) };
+        } catch (error) { throw new Error('Checkout did not finish; its directory is retained. ' + this.sanitize(error.message)); }
+      });
+      if (startRequestId === undefined) return checkedOut;
+      // The completed checkout and start keep separate durable receipts. A start
+      // failure must never cause another clone or an automatic mutation retry.
       try {
-        await git.clone({ fs, http, dir, url: remote, noCheckout: true });
-        const refs = await git.listBranches({ fs, dir, remote: 'origin' });
-        const head = refs.includes(ref) ? await git.resolveRef({ fs, dir, ref: 'refs/remotes/origin/' + ref }) : baseCommit;
-        if (head !== baseCommit && !await git.isDescendent({ fs, dir, oid: head, ancestor: baseCommit })) throw new Error('Assigned branch does not descend from its pinned base.');
-        await git.writeRef({ fs, dir, ref: 'refs/heads/' + ref, value: head });
-        await git.checkout({ fs, dir, ref });
-        // A created child can resolve differently from its parent under Windows
-        // filesystem redirection. Pin the completed checkout, as push does.
-        const completedDirectory = await realpath(dir);
-        await privateJson(path.join(this.connection.stateDirectory, 'runs', runId + '.json'), { ...saved, directory: completedDirectory });
-        return { runId, directory: completedDirectory, branch: ref, headCommit: head, baseCommit,
-          ...(imported ? {assignmentImported:true,credentialStatus:'saved-privately'} : {}) };
-      } catch (error) { throw new Error('Checkout did not finish; its directory is retained. ' + this.sanitize(error.message)); }
+        const started = await this.mutate('start', runId, {}, startRequestId);
+        if (started.status !== 'running') throw new Error('Start did not confirm a running assignment.');
+        return {...checkedOut,start:{requestId:startRequestId,...started}};
+      } catch (error) {
+        throw new Error('Checkout completed; its receipt is ' + checkedOut.receipt + '. Start is unconfirmed. Inspect status and the start receipt, then explicitly use start with request ID ' + startRequestId + '; do not repeat checkout.\n' + this.sanitize(error.message));
+      }
     });
-    if (startRequestId === undefined) return checkedOut;
-    // The completed checkout and start keep separate durable receipts. A start
-    // failure must never cause another clone or an automatic mutation retry.
-    try {
-      const started = await this.mutate('start', runId, {}, startRequestId);
-      if (started.status !== 'running') throw new Error('Start did not confirm a running assignment.');
-      return {...checkedOut,start:{requestId:startRequestId,...started}};
-    } catch (error) {
-      throw new Error('Checkout completed; its receipt is ' + checkedOut.receipt + '. Start is unconfirmed. Inspect status and the start receipt, then explicitly use start with request ID ' + startRequestId + '; do not repeat checkout.\n' + this.sanitize(error.message));
-    }
   }
 
   async push(runId, directory, head, requestId) {
-    if (!oid(head)) throw new Error('Push requires the exact full commit ID.');
-    const { saved } = await this.assignment(runId);
-    const dir = await realpath(directory);
-    if (dir !== saved.directory) throw new Error('Push directory differs from the retained assignment checkout.');
-    const { remote, token, baseCommit, branch: ref } = saved.credentials;
-    if (await git.currentBranch({ fs, dir }) !== ref || await git.resolveRef({ fs, dir, ref: 'HEAD' }) !== head
-      || head !== baseCommit && !await git.isDescendent({ fs, dir, oid: head, ancestor: baseCommit })) throw new Error('Checkout branch or head differs from this assignment.');
-    return this.attempt('push', requestId, { runId, directory: dir, head }, async () => {
-      const http = gitHttp([{ remote, token }], { fetchImpl: this.fetchImpl, timeoutMs: 120000, maxBytes: 64 * 1024 * 1024 });
-      const readHead = async () => (await git.listServerRefs({ http, url: remote })).find(item => item.ref === 'refs/heads/' + ref)?.oid;
-      const observed = await readHead();
-      if (observed === head) return { runId, headCommit: head, outcome: 'already-present', gitWrite: false };
-      if (observed && observed !== baseCommit && !await git.isDescendent({ fs, dir, oid: head, ancestor: observed })) throw new Error('Remote branch advanced outside this checkout; inspect it before pushing.');
-      const result = await git.push({ fs, http, dir, url: remote, ref, remoteRef: ref, force: false,
-        onPrePush: ({ localRef, remoteRef }) => localRef.oid === head && remoteRef.oid === (observed ?? '0'.repeat(40)) });
-      if (!result.ok || !result.refs?.['refs/heads/' + ref]?.ok || await readHead() !== head) throw new Error('Git did not confirm the exact assignment branch. Its outcome is uncertain; inspect before an explicit retry.');
-      return { runId, headCommit: head, outcome: 'pushed', gitWrite: true, next: 'Submit this exact head separately; a push is not verification or acceptance.' };
+    return this.locks.run('push', requestId, runId, async () => {
+      if (!oid(head)) throw new Error('Push requires the exact full commit ID.');
+      const { saved } = await this.assignment(runId);
+      const dir = await realpath(directory);
+      if (dir !== saved.directory) throw new Error('Push directory differs from the retained assignment checkout.');
+      return this.attempt('push', requestId, { runId, directory: dir, head }, async () => {
+        return this.locks.checkout(dir, async () => {
+          const { remote, token, baseCommit, branch: ref } = saved.credentials;
+          if (await git.currentBranch({ fs, dir }) !== ref || await git.resolveRef({ fs, dir, ref: 'HEAD' }) !== head
+            || head !== baseCommit && !await git.isDescendent({ fs, dir, oid: head, ancestor: baseCommit })) throw new Error('Checkout branch or head differs from this assignment.');
+          const http = gitHttp([{ remote, token }], { fetchImpl: this.fetchImpl, timeoutMs: 120000, maxBytes: 64 * 1024 * 1024 });
+          const readHead = async () => (await git.listServerRefs({ http, url: remote })).find(item => item.ref === 'refs/heads/' + ref)?.oid;
+          const observed = await readHead();
+          if (observed === head) return { runId, headCommit: head, outcome: 'already-present', gitWrite: false };
+          if (observed && observed !== baseCommit && !await git.isDescendent({ fs, dir, oid: head, ancestor: observed })) throw new Error('Remote branch advanced outside this checkout; inspect it before pushing.');
+          const result = await git.push({ fs, http, dir, url: remote, ref, remoteRef: ref, force: false,
+            onPrePush: ({ localRef, remoteRef }) => localRef.oid === head && remoteRef.oid === (observed ?? '0'.repeat(40)) });
+          if (!result.ok || !result.refs?.['refs/heads/' + ref]?.ok || await readHead() !== head) throw new Error('Git did not confirm the exact assignment branch. Its outcome is uncertain; inspect before an explicit retry.');
+          return { runId, headCommit: head, outcome: 'pushed', gitWrite: true, next: 'Submit this exact head separately; a push is not verification or acceptance.' };
+        });
+      });
     });
   }
 }

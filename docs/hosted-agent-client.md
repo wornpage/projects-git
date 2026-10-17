@@ -49,6 +49,9 @@ node scripts/repository-work.mjs status --connection $connection --project $proj
 
 The read verifies the expected workspace and authenticated service identity.
 Project settings → Connect agent supplies project-specific instructions.
+The owner must also grant this identity read/build access in **Project settings →
+People and access**. An allowlisted service identity without repository grants
+cannot read or claim that repository. See [repository access](repository-access.md).
 
 ## Work on an agreed task
 
@@ -157,6 +160,59 @@ Read `status` or `show` before deciding to repeat a command. There is no automat
 mutation retry. An explicit push retry reads the remote first; if the exact commit
 is already present it returns without another push. Failed attempts remain recorded.
 
+The receipt's `recovery` section shows recorded results, unconfirmed attempts and
+the total attempt count. A later recorded result does not erase an earlier unknown
+outcome. `historicalResultsOnly: true` and `remoteState: "not-read"` mean this is
+local history, not confirmation of the current hosted state. Corrupt or mismatched
+attempts stop the read rather than silently reducing its denominator.
+
+### Overlapping commands and stopped processes
+
+CLI and MCP instances using the **same private connection file on one machine**
+coordinate request and assignment effects with local filesystem locks. Conflicting
+commands refuse immediately; they do not queue or retry. Different assignment runs
+can proceed concurrently across clients. A claim temporarily blocks assignment
+mutations in that connection until its issued-once credential has been retained.
+The optional checkout/start and push/submit steps retain one local owner throughout
+their combined operation and preserve their separate request receipts.
+
+A push also holds a lock in the actual checkout's `.git` directory, coordinating
+clients with different connection files that point to that checkout. These are
+cooperative locks for the updated client, not locks on ordinary Git commands or
+older clients. Use a local filesystem; this is not distributed coordination across
+machines or duplicate profiles. The hosted controller remains the authority.
+
+```powershell
+node scripts/repository-work.mjs locks --connection $connection
+node scripts/repository-work.mjs receipt --connection $connection --request-id $originalRequestId
+```
+
+Both commands only read local state. `locks` reports every entry, including an
+explicit unreadable count; it refuses inventories over 256 entries rather than
+returning a partial list. A normal completion or caught error releases owned locks.
+Process termination can leave locks behind. There is no timeout-based takeover.
+After confirming the original process stopped, use the original request UUID and
+the **exact lock UUID returned by inspection**:
+
+```powershell
+node scripts/repository-work.mjs release-lock --connection $connection --request-id $originalRequestId --lock-id $lockId
+```
+
+Release refuses an active or unverifiable process and leaves newer owners alone.
+It removes only matching lock metadata, including a retained push's checkout lock;
+it never deletes work, retires credentials, changes receipts, retries an operation
+or contacts a provider. A reused process ID conservatively blocks release. Partial
+initialization, missing metadata, unexpected files or an interrupted release guard
+can require manual inspection; the client does not guess ownership or recursively
+delete those directories. Release can report an error after some local locks were
+removed: inspect again before continuing. A cleanup error retains the root request
+lock so its owner remains discoverable.
+
+After release, read current hosted status and inspect the original receipt before
+an explicit retry with unchanged inputs and its original UUID. Local release does
+not establish what happened remotely. Missing issued-once credentials still require
+the existing owner-led recovery decision.
+
 If a successful submit response was lost, repeating its original command and UUID
 reads the authenticated run first. A terminal run with the same head and summary
 is reconciled without another POST, and its private credential is removed. A different
@@ -175,8 +231,8 @@ node scripts/repository-work.mjs fail --connection $connection --run $run --mess
 ```
 
 The existing `--url` mode still serves the local loopback controller and local owner
-operations. Hosted mode exposes only builder reads, claim, checkout, start, push,
-submit, fail and receipt. Local transport fixtures and real local Git objects do
+operations. Hosted mode exposes builder reads, claim, checkout, start, push,
+submit and fail, plus local receipt/lock inspection and explicit lock release. Local transport fixtures and real local Git objects do
 not establish Cloudflare-hosted acceptance; retain hosted qualification separately.
 ## Project pagination
 

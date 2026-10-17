@@ -84,7 +84,7 @@ async function fixture(t) {
 test('MCP discovers exactly the hosted builder tools with strict schemas and explicit mutation IDs', async t => {
   const f = await fixture(t);
   const { tools } = await f.protocol.listTools();
-  assert.deepEqual(tools.map(tool => tool.name).sort(), ['list_projects', 'project_status', 'get_task', 'claim', 'checkout', 'start', 'push', 'submit', 'fail', 'receipt'].map(name => 'projects_git_' + name).sort());
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ['list_projects', 'project_status', 'get_task', 'claim', 'checkout', 'start', 'push', 'submit', 'fail', 'receipt', 'locks', 'release_lock'].map(name => 'projects_git_' + name).sort());
   for (const tool of tools) {
     assert.equal(tool.inputSchema.additionalProperties, false);
     for (const key of ['connection', 'origin', 'workspaceId', 'clientSecret', 'principal', 'reviewer']) assert.ok(!Object.hasOwn(tool.inputSchema.properties, key));
@@ -142,7 +142,20 @@ test('MCP owner, wrong-workspace and foreign-client sessions refuse claims befor
   f.state.id = 'foreign';
   assert.equal((await f.call('claim', { project, label: 'Builder', requestId: randomUUID() })).isError, true);
   assert.equal(f.requests.filter(request => request.method === 'POST').length, 0);
-  await assert.rejects(stat(f.connection.stateDirectory), { code: 'ENOENT' });
+  await assert.rejects(stat(path.join(f.connection.stateDirectory, 'requests')), { code: 'ENOENT' });
+  assert.equal((await f.client.execute('locks')).total, 0);
+});
+
+test('MCP lock inspection and explicit local release expose no provider authority', async t => {
+  const f = await fixture(t), {tools} = await f.protocol.listTools();
+  for (const name of ['locks', 'receipt', 'release_lock']) {
+    assert.equal(tools.find(tool => tool.name === 'projects_git_' + name).annotations.openWorldHint, false);
+  }
+  assert.equal(data(await f.call('locks')).total, 0);
+  assert.equal(data(await f.call('release_lock', {requestId: randomUUID(), lockId: randomUUID()})).releasedLocalLocks, 0);
+  assert.equal((await f.call('release_lock', {requestId: randomUUID()})).isError, true);
+  assert.equal(f.requests.length, 0);
+  await assert.rejects(stat(f.connection.stateDirectory), {code: 'ENOENT'});
 });
 
 test('MCP claims share durable CLI receipts; identical replay is safe and changed payload conflicts', async t => {
@@ -271,7 +284,7 @@ test('real stdio entry point serves modern and legacy hosts from another directo
     let stderr = ''; transport.stderr.on('data', chunk => { stderr += chunk; });
     try {
       await protocol.connect(transport);
-      assert.equal((await protocol.listTools()).tools.length, 10);
+      assert.equal((await protocol.listTools()).tools.length, 12);
       const refused = await protocol.callTool({ name: 'projects_git_start', arguments: { run, principal: 'owner' } });
       assert.equal(refused.isError, true);
     } finally { await protocol.close(); await transport.close(); }

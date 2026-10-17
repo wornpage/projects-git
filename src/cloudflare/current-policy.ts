@@ -19,7 +19,7 @@ export async function currentPolicy(source: PolicySource | undefined, workspaceI
     if (!reply || reply.nonce !== nonce || reply.policy?.workspaceId !== workspaceId) throw new Error('Policy response does not match this request');
     const value = reply.policy;
     return accessPolicy({WORKSPACE_ID:value.workspaceId,ACCESS_TEAM_DOMAIN:value.issuer,ACCESS_AUD:value.audience,
-      ACCESS_OWNER_SUB:value.ownerSubject,ACCESS_AGENT_CLIENT_IDS:JSON.stringify(value.agentClientIds),
+      ACCESS_OWNER_SUB:value.ownerSubject,ACCESS_AGENT_CLIENT_IDS:JSON.stringify(value.agentClientIds),ACCESS_MEMBER_SUBJECTS:JSON.stringify(value.memberSubjects),
       ACCESS_REVIEWER_CLIENT_IDS:JSON.stringify(value.reviewerClientIds),ACCESS_REVIEWER_SUBJECTS:JSON.stringify(value.reviewerSubjects)});
   } catch {
     throw new ApiError(503, 'CURRENT_POLICY_UNAVAILABLE', 'Current workspace authority could not be established. Automatic integration is stopped.');

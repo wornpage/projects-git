@@ -40,10 +40,22 @@ const NEW_BLOB = "2".repeat(40);
 const CONTROL_TOKEN = "test-control-token-" + "x".repeat(40);
 const LONG_TOKEN = "initial-provider-credential-sensitive";
 const SHORT_TOKEN = "short-provider-credential-sensitive";
+const emptyBackupLedgers=()=>({capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
 const reviewInput=(contextId,summary='Inspected the exact source and trusted checks.',verdict='pass',findings=[])=>({
   format:'projects-code-review-assessment/v2',contextId,summary,verdict,findings,resolvedPriorFindingIds:[]});
 async function assignTestReview(c,runId,reviewerIds=[REVIEWER_CLIENT],controller=c.controller){
-  const workspace=c.store.read().workspace;
+  let workspace=c.store.read().workspace;
+  const projectId=workspace.tasks.find(task=>task.id===workspace.runs.find(run=>run.id===runId)?.taskId)?.projectId;
+  const access=workspace.projects[projectId].access;
+  if(!access||reviewerIds.some(id=>!access.grants.some(grant=>grant.kind==='reviewer'&&grant.id===id))){
+    const authority=testAuthority(workspace.id);authority.policy.reviewerClientIds=[...new Set([...authority.policy.reviewerClientIds,...reviewerIds])];
+    const owner=new HostedController(c.store,c.artifacts,authority);
+    await owner.changeProjectAccess(projectId,{expectedVersion:access?.version??0,grants:[
+      ...(access?.grants.map(({issuer,...grant})=>grant)??authority.policy.agentClientIds.map(id=>({kind:'agent',id,role:'build'}))),
+      ...reviewerIds.filter(id=>!access?.grants.some(grant=>grant.kind==='reviewer'&&grant.id===id)).map(id=>({kind:'reviewer',id,role:'review'}))
+    ]},crypto.randomUUID());
+    workspace=c.store.read().workspace;
+  }
   return controller.assignReviewers(runId,{contextId:codeReviewContext(workspace,runId).contextId,expectedVersion:workspace.version,reviewerIds},crypto.randomUUID());
 }
 function bindValidBaseBlob(c) {
@@ -514,7 +526,7 @@ test('a reviewer cannot bootstrap an unbound workspace through a read',()=>{
 });
 
 test('revocation during credential issuance suppresses delivery and revokes the undelivered credential',async()=>{
-  const c=setup(),task=await c.controller.createTasks(taskInput(),'revocation-task');
+  const c=setup(),task=await sharedTasks(c,taskInput(),'revocation-task');
   let entered,release;const issued=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
   const original=c.source.fork;let fork;
   c.source.fork=async(...args)=>{const result=await original(...args);fork=c.repositories.get(args[0]);const create=fork.createToken.bind(fork);
@@ -527,7 +539,7 @@ test('revocation during credential issuance suppresses delivery and revokes the 
 });
 
 test('revocation before a reserved fork prevents provider mutation and retains the reservation',async()=>{
-  const c=setup(),task=await c.controller.createTasks(taskInput(),'revoke-before-fork');
+  const c=setup(),task=await sharedTasks(c,taskInput(),'revoke-before-fork');
   let entered,release;const reading=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
   const read=c.source.readCommit.bind(c.source);c.source.readCommit=async(...args)=>{entered();await gate;return read(...args);};
   const request=c.controller.assign(task.taskId,{agentClientId:AGENT_CLIENT,label:'Reserved'},'revocation-reserved').then(value=>({value}),error=>({error}));
@@ -570,16 +582,16 @@ function mockRepo(name = "starter", description = null) {
 test('subscription registration failure retains a connected project and idempotent task request',async()=>{
   let calls=0;const runtime={ensureSubscription:async(name,validate)=>{validate();assert.equal(name,'starter');calls++;if(calls===1)throw Error('subscription unavailable');}};
   const c=setup(runtime),input=taskInput();
-  await assert.rejects(c.controller.createTasks(input,'subscription-project'),/subscription unavailable/);
+  await assert.rejects(sharedTasks(c,input,'subscription-project'),/subscription unavailable/);
   assert.equal(c.store.read().workspace.tasks.length,1);assert.equal(Object.keys(c.store.read().workspace.projects).length,1);
-  const result=await c.controller.createTasks(input,'subscription-project');assert.equal(result.replayed,true);
+  const result=await sharedTasks(c,input,'subscription-project');assert.equal(result.replayed,true);
   assert.equal(calls,2);assert.equal(c.store.read().workspace.tasks.length,1);assert.equal(c.forks(),0);
 });
 test('assignment registration blocks credential issuance, preserves its slot and recovers the same fork',async()=>{
   let fail=true;const names=[];const runtime={ensureSubscription:async(name,validate)=>{
     validate();names.push(name);if(name.startsWith('agent-')&&fail)throw Error('subscription unavailable');
   }};
-  const c=setup(runtime),task=await c.controller.createTasks(taskInput(),'subscription-task');
+  const c=setup(runtime),task=await sharedTasks(c,taskInput(),'subscription-task');
   const input={agentClientId:AGENT_CLIENT,label:'Registered builder'};
   await assert.rejects(c.controller.assign(task.taskId,input,'subscription-assignment'),/subscription unavailable/);
   const pending=c.store.read(),run=pending.workspace.runs[0];assert.equal(run.checkoutState,'preparing');assert.equal(c.controller.workspace().capacity.occupied,1);
@@ -601,9 +613,15 @@ function setup(runtime, workspaceId = 'mock-workspace') {
   let snapshot = initialSnapshot(workspaceId);
   const receipts = [];
   const waiters = new Set();
+  const accessWriters = new Set();
   const store = {
+    lockProjectAccess:projectId=>{
+      if(accessWriters.has(projectId))throw new ApiError(409,'PROJECT_ACCESS_IN_PROGRESS','Fixture access writer is still active.');
+      accessWriters.add(projectId);return()=>accessWriters.delete(projectId);
+    },
     identity: () => ({...snapshot.workspace,revision:snapshot.revision,empty:!snapshot.workspace.tasks.length&&!snapshot.workspace.runs.length&&!Object.keys(snapshot.operations).length}),
     read: () => structuredClone(snapshot),
+    captureBackup:()=>({snapshot:structuredClone(snapshot),backupLedgers:emptyBackupLedgers()}),
     operation: key => structuredClone(snapshot.operations[key]),
     project: id => structuredClone(snapshot.workspace.projects?.[id]),
     readPage: request => snapshotPage(snapshot,request),
@@ -645,7 +663,7 @@ function setup(runtime, workspaceId = 'mock-workspace') {
 
 for (const kind of ['assignment', 'resolution']) test(`superseded ${kind} token cleanup preserves its successor's delivered credential`, {timeout:5000}, async () => {
   const c = kind === 'assignment' ? setup() : await commandContext();
-  const task = kind === 'assignment' ? await c.controller.createTasks(taskInput(), 'cleanup-race-task') : c.task;
+  const task = kind === 'assignment' ? await sharedTasks(c,taskInput(), 'cleanup-race-task') : c.task;
   if (kind === 'resolution') advanceMain(c);
   const key = 'cleanup-race-' + kind;
   const start = () => kind === 'assignment'
@@ -739,7 +757,7 @@ test('four model executors share two verification reservations and retain waitin
 });
 
 test('external reservations and queued models share four execution slots', {timeout:5000}, async()=>{
-  const c=executable(),task=await c.controller.createTasks(taskInput(),'mixed-external-task');
+  const c=executable(),task=await sharedTasks(c,taskInput(),'mixed-external-task');
   await c.controller.assign(task.taskId,{agentClientId:AGENT_CLIENT,label:'External one'},'mixed-external-one');
   await c.controller.assign(task.taskId,{agentClientId:AGENT_CLIENT,label:'External two'},'mixed-external-two');
   await c.controller.queueModels({...modelInput(),candidates:4},'mixed-models');
@@ -770,7 +788,7 @@ test('recovery fences delayed model checks before releasing their two slots and 
 
 test('resolution preparation reserves capacity before provider work and binds the chosen agent', {timeout:5000}, async()=>{
   const c=await commandContext(),id=c.assignment.runId;advanceMain(c);
-  const batch=await c.controller.createTasks({source:'project',projectId:c.task.projectId,tasks:Array.from({length:3},taskBrief)},'resolution-competitors');
+  const batch=await sharedTasks(c,{source:'project',projectId:c.task.projectId,tasks:Array.from({length:3},taskBrief)},'resolution-competitors');
   const original=c.source.fork;let entered,release;const started=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
   c.source.fork=async(...args)=>{if(args[0].startsWith('update-')){entered();await gate;}return original(...args);};
   const input={headCommit:HEAD,taskRevision:1,mode:'resolve',agentClientId:AGENT_CLIENT};
@@ -863,7 +881,7 @@ test('changed queued requirements fail before inference and external assignments
   assert.equal(c.calls(), 0);
   assert.ok(c.controller.workspace().runs.every(run => run.status === 'failed'));
   const context = setup();
-  const task = await context.controller.createTasks(taskInput(), 'external-capacity-task');
+  const task = await sharedTasks(context,taskInput(), 'external-capacity-task');
   for (let i = 0; i < 4; i++) await context.controller.assign(task.taskId, { agent: `agent-${i}`, agentClientId: AGENT_CLIENT, label: `Worker ${i}` }, `external-capacity-${i}`);
   const forks = context.forks();
   await assert.rejects(context.controller.assign(task.taskId, { agent: 'extra', agentClientId: AGENT_CLIENT, label: 'Extra' }, 'external-capacity-extra'), { code: 'CAPACITY_FULL' });
@@ -918,7 +936,7 @@ test('lost merge acknowledgement locks revisions until exact remote-head reconci
   const retainedReports = interrupted.runs[0].evidenceHistory.length;
   assert.throws(() => c.controller.revise(taskId, { expectedRevision: 1, purpose: 'changed', criteria: ['changed'], reason: 'changed' }), { code: 'MERGE_PENDING' });
   const projectId = c.controller.workspace().tasks[0].projectId;
-  await c.controller.createTasks({ source: 'project', projectId, tasks: [taskBrief()] }, 'queued-during-merge-recovery');
+  await sharedTasks(c,{ source: 'project', projectId, tasks: [taskBrief()] }, 'queued-during-merge-recovery');
   await assert.rejects(c.controller.claim(projectId, { agentClientId: AGENT_CLIENT, label: 'Wait for merge recovery' }, 'claim-during-merge-recovery'), { code: 'MERGE_PENDING' });
   await c.controller.merge(run.id, { headCommit: HEAD });
   assert.equal(c.pushes(), 1);
@@ -961,7 +979,7 @@ const taskBrief = () => ({ title: 'Build an answer', purpose: 'Two candidates fr
 const taskInput = () => ({ source: 'repository', projectName: 'QA project', repo: 'starter', baseCommit: BASE, tasks: [taskBrief()] });
 const report = () => ({ verified: true, source: "independent-local-checks", commit: HEAD, checks: [{ name: "reported test", passed: true, detail: "Agent says it passed" }], passed: 1, total: 1, command: "node --test", exitCode: 0, output: "1 passed" });
 async function assigned(context, key = "assignment-one") {
-  const task = await context.controller.createTasks(taskInput(), "task-request-one");
+  const task = await sharedTasks(context,taskInput(), "task-request-one");
   const assignment = await context.controller.assign(task.taskId, { agent: "agent-a", agentClientId: AGENT_CLIENT, label: "Agent A" }, key);
   context.controller.start(assignment.runId);
   const resource = context.store.read().forks[assignment.runId];
@@ -979,7 +997,7 @@ test('old assignment receipts beyond 500 remain principal-bound and never issue 
   const replay=await restarted.assign(task.taskId,{agent:'agent-a',agentClientId:AGENT_CLIENT,label:'Agent A'},'long-lived-assignment');
   assert.equal(replay.runId,assignment.runId);assert.equal(replay.replayed,true);assert.ok(!replay.credentials);assert.equal(c.forks(),1);
   await assert.rejects(restarted.assign(task.taskId,{agent:'agent-a',agentClientId:AGENT_CLIENT,label:'Changed'},'long-lived-assignment'),{code:'IDEMPOTENCY_CONFLICT'});
-  assert.equal(Object.keys(c.store.read().operations).length,702);assert.equal(c.forks(),1);
+  assert.equal(Object.keys(c.store.read().operations).length,703);assert.equal(c.forks(),1); // Includes the explicit repository-access receipt.
 });
 
 for(const closed of ['accepted','merged'])test(`a ${closed} task replays only its existing assignment outcome under current authority`,async()=>{
@@ -1267,7 +1285,11 @@ test('ordinary hosted projects require explicit checks and replay does not execu
   assert.equal(c.checks(), 0);
   const first = await c.controller.configureChecks(id, c.plan(), 'ordinary-checks');
   assert.equal(first.runs[0].evidence.passed, 1); assert.equal(first.runs[0].evidence.verified, true);
+  const recorded=Object.values(c.store.read().operations).find(op=>op.kind==='checks').timings;
+  assert.equal(recorded.length,1);assert.equal(recorded[0].phase,'verification');assert.equal(recorded[0].outcome,'completed');
+  assert.ok(recorded[0].finishedAt>=recorded[0].startedAt);
   await c.controller.configureChecks(id, c.plan(), 'ordinary-checks'); assert.equal(c.checks(), 1);
+  assert.deepEqual(Object.values(c.store.read().operations).find(op=>op.kind==='checks').timings,recorded);
   await acceptAfterIndependentReview(c, id, c.review());
   await c.controller.merge(id, { headCommit: HEAD });
   assert.equal(c.checks(), 2); assert.equal(c.pushes(), 1);
@@ -1381,6 +1403,11 @@ test('expired hosted verification is closed without starting another container',
   op.leaseUntil = 0; c.store.write({ ...snapshot, revision: snapshot.revision + 1 }, snapshot.revision);
   await c.controller.configureChecks(id, c.plan(), 'expired-checks');
   assert.equal(c.controller.workspace().runs[0].evidence.verified, false);
+  const history=Object.values(c.store.read().operations).find(op=>op.kind==='checks').timings;
+  assert.equal(history.length,2);assert.equal(history[0].phase,'verification');assert.equal(history[0].finishedAt,null);
+  assert.equal(history[1].phase,'recovery');assert.equal(history[1].outcome,'reconciled');assert.ok(history[1].finishedAt);
+  const metrics=c.controller.operationalMetrics(c.store.read().workspace.tasks[0].projectId);
+  assert.equal(metrics.phases.verification.missing,1);assert.equal(metrics.phases.recovery.observed,1);
   await stale;
 });
 
@@ -1497,23 +1524,23 @@ test("empty hosted workspace is valid and exposes unavailable capabilities", () 
 
 test("task verifies exact pinned commit and replay preserves one task", async () => {
   const context = setup();
-  const first = await context.controller.createTasks(taskInput(), "task-create-01");
-  const replay = await context.controller.createTasks(taskInput(), "task-create-01");
+  const first = await sharedTasks(context,taskInput(), "task-create-01");
+  const replay = await sharedTasks(context,taskInput(), "task-create-01");
   assert.equal(replay.taskId, first.taskId);
   assert.equal(context.controller.workspace().tasks.length, 1);
-  await assert.rejects(context.controller.createTasks({ ...taskInput(), tasks: [{ ...taskBrief(), title: "different" }] }, "task-create-01"), { code: "IDEMPOTENCY_CONFLICT" });
+  await assert.rejects(sharedTasks(context,{ ...taskInput(), tasks: [{ ...taskBrief(), title: "different" }] }, "task-create-01"), { code: "IDEMPOTENCY_CONFLICT" });
   await assert.rejects(setup().controller.createTasks({ ...taskInput(), baseCommit: OTHER }, "task-create-02"), { code: "COMMIT_NOT_FOUND" });
-  await assert.rejects(context.controller.createTasks({ ...taskInput(), baseCommit: "a".repeat(64) }, "task-create-03"), { code: "ARTIFACTS_COMMIT_FORMAT" });
+  await assert.rejects(sharedTasks(context,{ ...taskInput(), baseCommit: "a".repeat(64) }, "task-create-03"), { code: "ARTIFACTS_COMMIT_FORMAT" });
   assert.ok(context.source.disposals > 0);
 });
 
 test("concurrent queued task batches preserve both results", async () => {
   const context = setup();
-  const project = await context.controller.createTasks(taskInput(), "connect-initial");
+  const project = await sharedTasks(context,taskInput(), "connect-initial");
   const queued = { source: "project", projectId: project.projectId, tasks: [taskBrief()] };
   const results = await Promise.all([
-    context.controller.createTasks(queued, "task-create-01"),
-    context.controller.createTasks({ ...queued, tasks: [{ ...taskBrief(), title: "second" }] }, "task-create-02"),
+    sharedTasks(context,queued, "task-create-01"),
+    sharedTasks(context,{ ...queued, tasks: [{ ...taskBrief(), title: "second" }] }, "task-create-02"),
   ]);
   assert.equal(new Set(results.map((item) => item.taskId)).size, 2);
   assert.equal(context.controller.workspace().tasks.length, 3);
@@ -1541,7 +1568,7 @@ test("assignment forks once, revokes initial credential, issues 15-minute token 
 
 test("assignment recovers its durably reserved fork without duplicating it", async () => {
   const context = setup();
-  const task = await context.controller.createTasks(taskInput(), "task-request-one");
+  const task = await sharedTasks(context,taskInput(), "task-request-one");
   const original = context.source.fork;
   let failure = true;
   context.source.fork = async (...args) => {
@@ -1559,7 +1586,7 @@ test("assignment recovers its durably reserved fork without duplicating it", asy
 
 test("in-flight same-key assignment is rejected while independent agents can fork", async () => {
   const context = setup();
-  const task = await context.controller.createTasks(taskInput(), "task-request-one");
+  const task = await sharedTasks(context,taskInput(), "task-request-one");
   let began;
   let finish;
   const providerStarted = new Promise((resolve) => { began = resolve; });
@@ -1640,20 +1667,20 @@ test("provider remotes never embed credentials", () => {
 
 test('stack creation is atomic and one Artifacts repository has one project', async () => {
   const c = setup();
-  await assert.rejects(c.controller.createTasks({ ...taskInput(), tasks: [taskBrief(), { ...taskBrief(), criteria: [] }] }, 'bad-stack'), { code: 'invalid_criteria' });
+  await assert.rejects(sharedTasks(c,{ ...taskInput(), tasks: [taskBrief(), { ...taskBrief(), criteria: [] }] }, 'bad-stack'), { code: 'invalid_criteria' });
   assert.equal(c.store.read().workspace.tasks.length, 0);
   const input = { ...taskInput(), tasks: [taskBrief(), { ...taskBrief(), title: 'Next task' }] };
-  const first = await c.controller.createTasks(input, 'two-task-stack');
-  const retry = await c.controller.createTasks(input, 'two-task-stack');
+  const first = await sharedTasks(c,input, 'two-task-stack');
+  const retry = await sharedTasks(c,input, 'two-task-stack');
   assert.deepEqual(retry.taskIds, first.taskIds);
   assert.equal(Object.keys(c.controller.workspace().projects).length, 1);
-  await assert.rejects(c.controller.createTasks(taskInput(), 'duplicate-project'), { code: 'PROJECT_EXISTS' });
+  await assert.rejects(sharedTasks(c,taskInput(), 'duplicate-project'), { code: 'PROJECT_EXISTS' });
   assert.equal(c.forks(), 0);
 });
 
 test('concurrent connections to the same Artifacts repository cannot create two projects', async () => {
   const c = setup();
-  const results = await Promise.allSettled([c.controller.createTasks(taskInput(), 'connect-one'), c.controller.createTasks(taskInput(), 'connect-two')]);
+  const results = await Promise.allSettled([sharedTasks(c,taskInput(), 'connect-one'), sharedTasks(c,taskInput(), 'connect-two')]);
   assert.equal(results.filter(item => item.status === 'fulfilled').length, 1);
   assert.equal(results.find(item => item.status === 'rejected').reason.code, 'PROJECT_EXISTS');
   assert.equal(c.controller.workspace().tasks.length, 1);
@@ -1661,7 +1688,7 @@ test('concurrent connections to the same Artifacts repository cannot create two 
 
 test('claims reserve different oldest tasks before provider I/O and survive restart', async () => {
   const c = setup();
-  const stack = await c.controller.createTasks({ ...taskInput(), tasks: Array.from({ length: 3 }, (_, index) => ({ ...taskBrief(), title: `Task ${index}` })) }, 'queue-three');
+  const stack = await sharedTasks(c,{ ...taskInput(), tasks: Array.from({ length: 3 }, (_, index) => ({ ...taskBrief(), title: `Task ${index}` })) }, 'queue-three');
   let began, release;
   const started = new Promise(resolve => { began = resolve; }), wait = new Promise(resolve => { release = resolve; });
   const fork = c.source.fork;
@@ -1686,7 +1713,7 @@ test('hosted dependency claims skip waiting work, preserve idle replay and bind 
   const c = executable();
   const original = await c.controller.queueModels({ ...modelInput(), candidates: 1 }, 'dependency-foundation');
   const foundation = c.controller.workspace().tasks.find(task => task.id === original.taskId);
-  const stack = await c.controller.createTasks({ source: 'project', projectId: foundation.projectId,
+  const stack = await sharedTasks(c,{ source: 'project', projectId: foundation.projectId,
     tasks: [{ ...taskBrief(), title: 'Dependent', dependsOn: [foundation.id] }, { ...taskBrief(), title: 'Independent' }] }, 'dependency-stack');
   const independent = await c.controller.claim(foundation.projectId, { agentClientId: AGENT_CLIENT, label: 'Independent agent' }, 'dependency-independent');
   assert.equal(independent.taskId, stack.taskIds[1]);
@@ -1715,7 +1742,7 @@ test('project pause is versioned and permits queueing, submissions and credentia
   const { task, assignment } = await assigned(c);
   c.controller.policy(task.projectId, { acceptingWork: false, expectedVersion: 1 });
   assert.throws(() => c.controller.policy(task.projectId, { acceptingWork: true, expectedVersion: 1 }), { code: 'stale_project_policy' });
-  await c.controller.createTasks({ source: 'project', projectId: task.projectId, tasks: [taskBrief()] }, 'queue-while-paused');
+  await sharedTasks(c,{ source: 'project', projectId: task.projectId, tasks: [taskBrief()] }, 'queue-while-paused');
   await assert.rejects(c.controller.claim(task.projectId, { agentClientId: AGENT_CLIENT, label: 'New agent' }, 'paused-claim'), { code: 'project_paused' });
   await c.controller.complete(assignment.runId, { headCommit: HEAD, summary: 'Existing work can finish' });
   const completed = c.controller.workspace().runs[0];
@@ -1726,7 +1753,7 @@ test('project pause is versioned and permits queueing, submissions and credentia
 });
 
 test('pause during fork preparation prevents credentials from escaping and retry recovers one fork', async () => {
-  const c = setup(), project = await c.controller.createTasks(taskInput(), 'pause-race-stack');
+  const c = setup(), project = await sharedTasks(c,taskInput(), 'pause-race-stack');
   const fork = c.source.fork;
   c.source.fork = async (...args) => { const result = await fork(...args); c.controller.policy(project.projectId, { acceptingWork: false, expectedVersion: 1 }); return result; };
   await assert.rejects(c.controller.claim(project.projectId, { agentClientId: AGENT_CLIENT, label: 'Agent' }, 'pause-race-claim'), { code: 'project_paused' });
@@ -1740,7 +1767,7 @@ test('pause during fork preparation prevents credentials from escaping and retry
 });
 
 test('an abandoned preparation can be closed and reclaimed without reviving its old key', async () => {
-  const c = setup(), project = await c.controller.createTasks(taskInput(), 'failed-prep-stack');
+  const c = setup(), project = await sharedTasks(c,taskInput(), 'failed-prep-stack');
   const fork = c.source.fork;
   c.source.fork = async () => { throw new Error('fixture provider unavailable'); };
   await assert.rejects(c.controller.claim(project.projectId, { agentClientId: AGENT_CLIENT, label: 'Agent' }, 'failed-prep-claim'));
@@ -1753,7 +1780,7 @@ test('an abandoned preparation can be closed and reclaimed without reviving its 
 });
 
 test('unstarted tasks bind the real default branch when claimed, even after outside changes', async () => {
-  const c = setup(), project = await c.controller.createTasks(taskInput(), 'fresh-head-stack');
+  const c = setup(), project = await sharedTasks(c,taskInput(), 'fresh-head-stack');
   c.source.branches.set('refs/heads/main', HEAD);
   const result = await c.controller.claim(project.projectId, { agentClientId: AGENT_CLIENT, label: 'Agent' }, 'fresh-head-claim');
   assert.equal(result.credentials.baseCommit, HEAD);
@@ -1769,15 +1796,15 @@ test('unstarted tasks bind the real default branch when claimed, even after outs
 });
 
 test('all external reservations occupy slots, idle claims remain idempotent, and no tokens persist', async () => {
-  const c = setup(), project = await c.controller.createTasks({ ...taskInput(), tasks: Array.from({ length: 5 }, taskBrief) }, 'capacity-stack');
+  const c = setup(), project = await sharedTasks(c,{ ...taskInput(), tasks: Array.from({ length: 5 }, taskBrief) }, 'capacity-stack');
   await Promise.all(Array.from({ length: 4 }, (_, index) => c.controller.claim(project.projectId, { agentClientId: AGENT_CLIENT, label: `Agent ${index}` }, `capacity-claim-${index}`)));
   await assert.rejects(c.controller.claim(project.projectId, { agentClientId: AGENT_CLIENT, label: 'Agent 5' }, 'capacity-claim-five'), { code: 'CAPACITY_FULL' });
   assert.equal(c.forks(), 4); assert.equal(c.controller.workspace().runs.length, 4);
   assert.ok(c.receipts.every(value => !value.includes(SHORT_TOKEN) && !value.includes(LONG_TOKEN)));
-  const empty = setup(), single = await empty.controller.createTasks(taskInput(), 'single-stack');
+  const empty = setup(), single = await sharedTasks(empty,taskInput(), 'single-stack');
   await empty.controller.claim(single.projectId, { agentClientId: AGENT_CLIENT, label: 'First' }, 'single-claim');
   assert.equal((await empty.controller.claim(single.projectId, { agentClientId: AGENT_CLIENT, label: 'Idle' }, 'idle-claim')).idle, true);
-  await empty.controller.createTasks({ source: 'project', projectId: single.projectId, tasks: [taskBrief()] }, 'later-stack');
+  await sharedTasks(empty,{ source: 'project', projectId: single.projectId, tasks: [taskBrief()] }, 'later-stack');
   assert.equal((await empty.controller.claim(single.projectId, { agentClientId: AGENT_CLIENT, label: 'Idle' }, 'idle-claim')).idle, true);
 });
 
@@ -1787,19 +1814,19 @@ test('releasing an uncertain task request prevents a late provider response from
   const started = new Promise(resolve => { began = resolve; }), wait = new Promise(resolve => { release = resolve; });
   const info = c.source.info;
   c.source.info = async () => { began(); await wait; return info.call(c.source); };
-  const pending = c.controller.createTasks(taskInput(), 'release-late-task');
+  const pending = sharedTasks(c,taskInput(), 'release-late-task');
   await started;
   await c.controller.releaseTaskRequest('release-late-task');
   release();
   await assert.rejects(pending, { code: 'REQUEST_CANCELLED' });
   assert.equal(c.controller.workspace().tasks.length, 0);
-  const result = await c.controller.createTasks(taskInput(), 'next-task-request');
+  const result = await sharedTasks(c,taskInput(), 'next-task-request');
   assert.equal((await c.controller.releaseTaskRequest('next-task-request')).result.taskId, result.taskId);
 });
 
 test('legacy hosted task snapshots migrate once into one project per repository', async () => {
-  const c = setup(), project = await c.controller.createTasks(taskInput(), 'legacy-project');
-  await c.controller.createTasks({ source: 'project', projectId: project.projectId, tasks: [taskBrief()] }, 'legacy-task-two');
+  const c = setup(), project = await sharedTasks(c,taskInput(), 'legacy-project');
+  await sharedTasks(c,{ source: 'project', projectId: project.projectId, tasks: [taskBrief()] }, 'legacy-task-two');
   const snapshot = c.store.read(); delete snapshot.workspace.projects;
   for (const task of snapshot.workspace.tasks) { delete task.projectId; delete task.origin; task.repositoryKey = 'starter'; }
   assert.equal(migrateSnapshot(snapshot), true);
@@ -1821,7 +1848,7 @@ test('paused model projects stop alarms and resume without a repeated allowance'
 });
 
 test('eight authenticated clients share four durable reservations across delayed fork calls', {timeout:5000}, async () => {
-  const c=setup(), stack=await c.controller.createTasks({...taskInput(),tasks:Array.from({length:8},taskBrief)},'identity-eight-tasks');
+  const c=setup(), stack=await sharedTasks(c,{...taskInput(),tasks:Array.from({length:8},taskBrief)},'identity-eight-tasks');
   const pending=[],fork=c.source.fork;let active=0,peak=0,reachedFour;
   const four=new Promise(resolve=>reachedFour=resolve);
   c.source.fork=async(...args)=>{active++;peak=Math.max(peak,active);await new Promise(resolve=>{pending.push(resolve);if(pending.length===4)reachedFour();});try{return await fork(...args);}finally{active--;}};
@@ -1854,7 +1881,7 @@ test('agent clients cannot operate another assignment, select another identity o
 });
 
 test('idempotency results and credentials cannot be replayed by another principal',async()=>{
-  const c=setup(), stack=await c.controller.createTasks(taskInput(),'principal-scoped-task');
+  const c=setup(), stack=await sharedTasks(c,taskInput(),'principal-scoped-task');
   const a=new HostedController(c.store,c.artifacts,testAuthority('mock-workspace',AGENT_CLIENT));
   const b=new HostedController(c.store,c.artifacts,testAuthority('mock-workspace','2'.repeat(32)+'.access'));
   const first=await a.claim(stack.projectId,{label:'Agent'},'shared-request-key');
@@ -1865,9 +1892,9 @@ test('idempotency results and credentials cannot be replayed by another principa
 
 test('workspace capacity is independent and foreign resource identities are refused before provider work',async()=>{
   const a=setup(),b=setup(undefined,'second-workspace');
-  const stack=await a.controller.createTasks({...taskInput(),tasks:Array.from({length:4},taskBrief)},'first-workspace-stack');
+  const stack=await sharedTasks(a,{...taskInput(),tasks:Array.from({length:4},taskBrief)},'first-workspace-stack');
   for(let index=0;index<4;index++)await a.controller.claim(stack.projectId,{agentClientId:AGENT_CLIENT,label:'A'+index},'first-claim-'+index);
-  const second=await b.controller.createTasks(taskInput(),'second-workspace-task');
+  const second=await sharedTasks(b,taskInput(),'second-workspace-task');
   await b.controller.claim(second.projectId,{agentClientId:AGENT_CLIENT,label:'B'},'second-claim');
   assert.equal(a.controller.workspace().capacity.occupied,4);assert.equal(b.controller.workspace().capacity.occupied,1);
   const before=b.store.read(),forks=b.forks();
@@ -1915,7 +1942,7 @@ test('pending operations and owner rebinding refuse adoption without changing re
 
 test('expired delayed checks retain two-slot occupancy until cancellation settles, then late results stay fenced', {timeout:5000}, async()=>{
   const c=await commandContext(), firstId=c.assignment.runId;
-  const batch=await c.controller.createTasks({source:'project',projectId:c.task.projectId,tasks:[taskBrief(),taskBrief()]},'delayed-checks-tasks');
+  const batch=await sharedTasks(c,{source:'project',projectId:c.task.projectId,tasks:[taskBrief(),taskBrief()]},'delayed-checks-tasks');
   const ids=[firstId];
   for(const [index,taskId]of batch.taskIds.entries()){
     const assignment=await c.controller.assign(taskId,{agentClientId:AGENT_CLIENT,label:'Verifier candidate '+index},'delayed-checks-agent-'+index);
@@ -1943,4 +1970,103 @@ test('expired delayed checks retain two-slot occupancy until cancellation settle
   assert.equal(c.controller.workspace().runs.find(run=>run.id===ids[0]).evidence.verified,false);
   const third=c.controller.configureChecks(ids[2],c.plan(ids[2]),'held-third');await entered(3);assert.equal(active,2);
   for(const entry of entries)entry.release();await Promise.all([second,third]);assert.equal(active,0);assert.equal(peak,2);assert.equal(c.controller.workspace().capacity.verification.occupied,0);
+});
+
+// Workflow fixtures explicitly share each new repository before exercising builders
+// and reviewers. Access-denial tests use the unshared SQL fixture separately.
+async function sharedTasks(context,input,key) {
+  const result=await context.controller.createTasks(input,key);
+  const project=context.store.project(result.projectId);
+  if(project && project.access===undefined) {
+    const authority=testAuthority(context.store.identity().id);
+    const controller=new HostedController(context.store,context.artifacts,authority);
+    await controller.changeProjectAccess(project.id,{expectedVersion:0,grants:[
+      ...authority.policy.agentClientIds.map(id=>({kind:'agent',id,role:'build'})),
+      ...authority.policy.reviewerClientIds.map(id=>({kind:'reviewer',id,role:'review'}))
+    ]},crypto.randomUUID());
+  }
+  return result;
+}
+
+for(const asOwner of [false,true])test(`repository revocation fences a delayed ${asOwner?'owner-delegated':'self-claimed'} fork before credential issuance`,async()=>{
+  const c=setup(),created=await sharedTasks(c,taskInput(),'access-revoke-task'),entered=Promise.withResolvers(),release=Promise.withResolvers();
+  const fork=c.source.fork.bind(c.source);let prepared;
+  c.source.fork=async(...args)=>{const result=await fork(...args);prepared=c.repositories.get(args[0]);entered.resolve();await release.promise;return result;};
+  const authority=testAuthority('mock-workspace',asOwner?undefined:AGENT_CLIENT),request=new HostedController(c.store,c.artifacts,authority);
+  const active=(asOwner?request.assign(created.taskId,{label:'Owner-selected builder',agentClientId:AGENT_CLIENT},crypto.randomUUID())
+    :request.claim(created.projectId,{label:'Self claim'},crypto.randomUUID())).then(value=>({value}),error=>({error}));
+  await entered.promise;
+  const project=c.store.project(created.projectId),grants=project.access.grants.filter(grant=>grant.id!==AGENT_CLIENT).map(({issuer,...grant})=>grant);
+  const owner=new HostedController(c.store,c.artifacts,testAuthority());
+  const changed=await owner.changeProjectAccess(project.id,{expectedVersion:project.access.version,grants},crypto.randomUUID());
+  assert.equal(changed.credentialCleanup,'pending');release.resolve();const outcome=await active;
+  assert.equal(outcome.value,undefined);assert.equal(outcome.error.code,'PROJECT_FORBIDDEN');
+  assert.equal(prepared.tokenCreates,0);assert.equal([...prepared.tokens.values()].filter(token=>token.state==='active').length,0);
+  assert.equal(new HostedController(c.store,c.artifacts,testAuthority()).projectAccess(project.id).recovery.state,'credential-cleanup-pending');
+});
+
+test('an in-flight credential response is revoked when repository authority changed before retention',async()=>{
+  const c=setup(),created=await sharedTasks(c,taskInput(),'access-token-race-task'),entered=Promise.withResolvers(),release=Promise.withResolvers();
+  const fork=c.source.fork.bind(c.source);let prepared;
+  c.source.fork=async(...args)=>{const result=await fork(...args);prepared=c.repositories.get(args[0]);const create=prepared.createToken.bind(prepared);
+    prepared.createToken=async(...input)=>{const token=await create(...input);entered.resolve();await release.promise;return token;};return result;};
+  const builder=new HostedController(c.store,c.artifacts,testAuthority('mock-workspace',AGENT_CLIENT));
+  const active=builder.claim(created.projectId,{label:'Token race'},crypto.randomUUID()).then(value=>({value}),error=>({error}));await entered.promise;
+  const project=c.store.project(created.projectId),grants=project.access.grants.filter(grant=>grant.id!==AGENT_CLIENT).map(({issuer,...grant})=>grant);
+  await new HostedController(c.store,c.artifacts,testAuthority()).changeProjectAccess(project.id,{expectedVersion:project.access.version,grants},crypto.randomUUID());
+  release.resolve();const result=await active;assert.equal(result.error.code,'PROJECT_FORBIDDEN');assert.equal(result.value,undefined);
+  assert.equal([...prepared.tokens.values()].filter(token=>token.state==='active').length,0);
+});
+
+test('revoking a settled builder grant revokes its retained fork token and records completed cleanup',async()=>{
+  const c=setup(),{task,assignment,fork}=await assigned(c);assert.ok([...fork.tokens.values()].some(token=>token.state==='active'));
+  const project=c.store.project(task.projectId),grants=project.access.grants.filter(grant=>grant.id!==AGENT_CLIENT).map(({issuer,...grant})=>grant);
+  const changed=await new HostedController(c.store,c.artifacts,testAuthority()).changeProjectAccess(project.id,{expectedVersion:project.access.version,grants},crypto.randomUUID());
+  assert.equal(changed.credentialCleanup,'confirmed');assert.equal([...fork.tokens.values()].filter(token=>token.state==='active').length,0);
+  const builder=new HostedController(c.store,c.artifacts,testAuthority('mock-workspace',AGENT_CLIENT));
+  await assert.rejects(builder.complete(assignment.runId,{headCommit:HEAD,summary:'No longer authorized'}),{code:'PROJECT_FORBIDDEN'});
+});
+
+for(const incomplete of [true,false])test(`access cleanup retains its request when token ${incomplete?'inventory is partial':'revocation is unconfirmed'}`,async()=>{
+  const c=setup(),{task,fork}=await assigned(c),project=c.store.project(task.projectId);
+  const input={expectedVersion:project.access.version,grants:project.access.grants.filter(grant=>grant.id!==AGENT_CLIENT).map(({issuer,...grant})=>grant)},id=crypto.randomUUID();
+  const list=fork.listTokens.bind(fork),revoke=fork.revokeToken.bind(fork);
+  if(incomplete)fork.listTokens=async()=>{const result=await list();return {...result,total:result.total+1};};
+  else fork.revokeToken=async()=>false;
+  await assert.rejects(new HostedController(c.store,c.artifacts,testAuthority()).changeProjectAccess(project.id,input,id),
+    {code:incomplete?'TOKEN_INVENTORY_INCOMPLETE':'TOKEN_REVOCATION_UNCONFIRMED'});
+  assert.ok([...fork.tokens.values()].some(token=>token.state==='active'));
+  const recovery=new HostedController(c.store,c.artifacts,testAuthority()).projectAccess(project.id).recovery;
+  assert.equal(recovery.requestId,id);assert.equal(c.store.project(project.id).access.version,2);
+  fork.listTokens=list;fork.revokeToken=revoke;
+  const resumed=await new HostedController(c.store,c.artifacts,testAuthority()).changeProjectAccess(project.id,input,id);
+  assert.equal(resumed.credentialCleanup,'confirmed');assert.equal([...fork.tokens.values()].filter(token=>token.state==='active').length,0);
+});
+
+test('revocation and regrant cannot revive an older independent assessment for acceptance',async()=>{
+  const c=await commandContext(),runId=c.assignment.runId;await c.controller.configureChecks(runId,c.plan(),'access-review-checks');
+  await assignTestReview(c,runId);const reviewer=new HostedController(c.store,c.artifacts,testReviewerAuthority(),c.runtime);
+  await reviewer.codeReview(runId,reviewInput(codeReviewContext(c.store.read().workspace,runId).contextId),'access-review');
+  const decision=c.review();
+  const original=c.store.project(c.task.projectId).access.grants.map(({issuer,...grant})=>grant);
+  for(const grants of [original.filter(grant=>grant.id!==REVIEWER_CLIENT),original]){
+    const owner=new HostedController(c.store,c.artifacts,testAuthority(),c.runtime),project=c.store.project(c.task.projectId);
+    await owner.changeProjectAccess(project.id,{expectedVersion:project.access.version,grants},crypto.randomUUID());
+  }
+  const owner=new HostedController(c.store,c.artifacts,testAuthority(),c.runtime);
+  assert.equal(owner.workspace().reviewRequests[runId],'reviewer-unavailable');
+  await assert.rejects(owner.review(runId,decision),{code:'REVIEWER_ACCESS_CHANGED'});
+  assert.equal(c.store.read().workspace.runs.find(run=>run.id===runId).codeReview.repositoryAccessVersion,1);
+});
+
+
+test('backup preserves actual model-check and automatic-merge receipt identities',async()=>{
+  const c=executable();await c.controller.queueModels(modelInput(),'backup-model-check');await c.controller.drainJobs();
+  const original=Object.entries(c.store.read().operations).filter(([,op])=>op.kind==='model-check');assert.ok(original.length>0);
+  const modelBackup=await c.controller.workspaceBackup();
+  for(const [key,operation] of original){const receipt=modelBackup.payload.operations.find(row=>row.key===key)?.receipt;assert.ok(receipt);assert.equal(receipt.fingerprint,operation.fingerprint);assert.equal(receipt.report.commit,operation.report.commit);}
+  const a=await automaticContext();a.toggle(true);await a.system().drainAutomaticMerges();
+  const expected=Object.keys(a.store.read().operations).filter(key=>key.startsWith('automatic-merge:'));assert.ok(expected.length>0);
+  const owner=new HostedController(a.store,a.artifacts,testAuthority(),a.runtime),automaticBackup=await owner.workspaceBackup();
+  assert.deepEqual(automaticBackup.payload.operations.filter(row=>row.key.startsWith('automatic-merge:')).map(row=>row.key),expected);
 });

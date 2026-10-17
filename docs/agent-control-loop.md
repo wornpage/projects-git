@@ -202,4 +202,4 @@ agent coordinating the work; it does not authenticate them or grant access.
 The API retains `owner` and `ownerVersion`. Changing the coordinator preserves
 the prior name and reviews in history, invalidates earlier acceptance and
 requires a fresh review. Assigned/running and merged work keep their coordinator
-fixed. No team or membership system is implied.
+fixed. This responsibility label grants no [repository access](repository-access.md).

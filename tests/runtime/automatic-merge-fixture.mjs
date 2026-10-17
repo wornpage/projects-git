@@ -70,7 +70,7 @@ export class AutomaticMergeFixture extends WorkspaceCoordinator {
     return {get:async name=>({
       [Symbol.dispose]() {},
       info:async()=>({name,defaultBranch:'main',remote:'https://artifacts.example.test/'+name+'.git'}),
-      listTokens:async()=>({tokens:[]}), revokeToken:async()=>true,
+      listTokens:async()=>({tokens:[],total:0}), revokeToken:async()=>true,
       createToken:async()=>{
         if(coordinator.read().activity.fail_token)throw Error('Controlled credential failure before Git write');
         return {id:'fixture-token',plaintext:'synthetic-transport-fixture'};

@@ -9,6 +9,7 @@ import { HostedController } from "./controller.ts";
 import { WorkspaceStore } from './workspace-store.ts';
 import { parseWorkspacePage, projectMutationResult } from '../../public/workspace-page.js';
 import {parseProjectCatalog} from '../../public/project-catalog.js';
+import {WORKSPACE_BACKUP_REQUEST_BYTES} from '../../public/workspace-backup-limits.js';
 import {ArtifactEventReceipts,artifactEventPolicy,parseArtifactPush,parseArtifactPushEnvelope,reconcileArtifactPush} from './artifact-events.ts';
 import type {ArtifactEventSource} from './artifact-events.ts';
 import {ArtifactSubscriptions,subscriptionPlan,subscriptionDigest} from './artifact-subscriptions.ts';
@@ -263,7 +264,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     const reply = (value:unknown,status=200) => json(call.method==='POST'?projectMutationResult(value,call.path):value,status);
     let controller: HostedController | undefined;
     try {
-    if (!call.principal || !['owner', 'agent', 'reviewer'].includes(call.principal.kind)) return reply({code:'UNAUTHORIZED',error:'Authenticated request context required.'},401);
+    if (!call.principal || !['owner', 'agent', 'reviewer', 'member'].includes(call.principal.kind)) return reply({code:'UNAUTHORIZED',error:'Authenticated request context required.'},401);
     // Only the authenticated Worker supplies this policy over internal RPC.
     // A retained DO environment can predate a settings-only Worker deployment.
     if (!call.policy) throw new ApiError(503, 'AUTH_POLICY_REQUIRED', 'The authenticated Worker must supply its current Access policy.');
@@ -272,6 +273,10 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     authorizeRoute(call.principal, call.method, call.path);
     controller = this.controller(authority);
       if(call.method==='GET'&&call.path==='/api/repositories') return reply(await controller.repositoryCatalog(call.search ?? ''));
+      if(call.method==='GET'&&call.path==='/api/workspace/backup')return reply(await controller.workspaceBackup());
+      if(call.method==='GET'&&call.path==='/api/workspace/recovery-imports')return reply(controller.recoveryHistory());
+      const recoveryImport=/^\/api\/workspace\/recovery-imports\/([a-f0-9]{64})(\/archive)?$/.exec(call.path);
+      if(call.method==='GET'&&recoveryImport)return reply(controller.recoveryHistory(recoveryImport[1],Boolean(recoveryImport[2])));
       if(call.method==='GET'&&call.path==='/api/repositories/head') return reply(await controller.repositoryHead(call.search ?? ''));
       if(call.method==='POST'&&call.path==='/api/repositories') return reply(await controller.createRepository(call.body,call.key),201);
       if(call.method==='GET'&&call.path==='/api/projects/catalog') {
@@ -282,12 +287,16 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
         let pageRequest;
         try { pageRequest = parseWorkspacePage(call.search); }
         catch (error) { throw new ApiError(400,'INVALID_WORKSPACE_PAGE',(error as Error).message); }
-        const page = pageRequest ? this.store.readPage(pageRequest) : null;
-        const snapshot = page ? controller.workspace(page.snapshot,page.capacity) : controller.workspace();
-        return reply({ ...snapshot, ...(page?{page:page.page,operationReceipts:page.operationReceipts}:{}), sourceRevision: this.store.identity().revision, artifactEvents:this.artifactReceipts.summary(), artifactSubscriptions:this.subscriptions.summary(), capabilities: { ...snapshot.capabilities, retainedSearch: Boolean(this.env.SEARCH_DB && this.env.SEARCH_JOBS), semanticSearch: String(this.env.SEARCH_EMBEDDINGS_ENABLED) === 'true' } });
+        const snapshot = controller.workspacePage(pageRequest);
+        return reply({ ...snapshot, sourceRevision: this.store.identity().revision,
+          ...(call.principal.kind==='owner'?{artifactEvents:this.artifactReceipts.summary(),artifactSubscriptions:this.subscriptions.summary()}:{}),
+          capabilities: { ...snapshot.capabilities, retainedSearch: Boolean(this.env.SEARCH_DB && this.env.SEARCH_JOBS), semanticSearch: String(this.env.SEARCH_EMBEDDINGS_ENABLED) === 'true' } });
       }
       const search = /^\/api\/projects\/([a-f0-9-]{36})\/(search|search-index)$/.exec(call.path);
+      const metrics = /^\/api\/projects\/([a-f0-9-]{36})\/metrics$/.exec(call.path);
+      if(metrics&&call.method==='GET')return reply(controller.operationalMetrics(metrics[1]));
       if (search) {
+        controller.requireProjectAccess(search[1]);
         const snapshot = this.store.read();
         if (!Object.hasOwn(snapshot.workspace.projects ?? {}, search[1])) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Project is not in this workspace.');
         if (!this.env.SEARCH_DB || !this.env.SEARCH_JOBS) throw new ApiError(503, 'SEARCH_NOT_CONFIGURED', 'Configure search database and queue bindings.');
@@ -305,17 +314,23 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
             const semantic = this.semantic();
             if (!semantic) throw new ApiError(409, 'SEMANTIC_DISABLED', 'Semantic search is disabled. Literal search is available.');
             const current = await index.generation(snapshot.workspace.id, search[1]);
+            controller.requireProjectAccess(search[1]);
             if (!current) throw new ApiError(409, 'SEMANTIC_INDEX_NOT_CURRENT', 'Build the history index before semantic search.');
             const matches = await semantic.search(snapshot.workspace.id, search[1], current.generation, query);
+            controller.requireProjectAccess(search[1]);
             const items = await index.documents(snapshot.workspace.id, search[1], current.generation, matches.map(match => match.documentId));
+            controller.requireProjectAccess(search[1]);
             return reply({ mode, generation: current.generation, total: current.document_count, matched: null, items: items.map(doc => ({ ...doc, score: matches.find(match => match.documentId === doc.id)!.score })), nextOffset: null, index: this.store.indexState(search[1]), sourceRevision: this.store.read().revision });
           }
           const result = await index.search(snapshot.workspace.id, search[1], query, Number(params.get('offset') ?? '0'));
+          controller.requireProjectAccess(search[1]);
           return reply({ ...result, mode, index: this.store.indexState(search[1]), sourceRevision: this.store.read().revision });
         }
         throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Use GET for search or GET/POST for index status and rebuild.');
       }
       const handoff = /^\/api\/tasks\/([a-f0-9-]{36})\/handoff$/.exec(call.path);
+      const projectAccess = /^\/api\/projects\/([a-f0-9-]{36})\/access$/.exec(call.path);
+      if(projectAccess&&call.method==='GET')return reply(controller.projectAccess(projectAccess[1]));
       if (call.method === 'GET' && call.path === '/api/review-inbox') return reply(controller.reviewInbox());
       const reviewContext = /^\/api\/runs\/([a-f0-9-]{36})\/review-context$/.exec(call.path);
       if (call.method === 'GET' && reviewContext) return reply(await controller.reviewContext(reviewContext[1]));
@@ -323,6 +338,9 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
       const archive = /^\/api\/projects\/([a-f0-9-]{36})\/(export|history)$/.exec(call.path);
       if (call.method === 'GET' && archive) return reply(archive[2] === 'export' ? await controller.exportProject(archive[1]) : controller.projectHistory(archive[1]));
       if (call.method !== "POST") throw new ApiError(404, "NOT_FOUND", "API route not found.");
+      if(call.path==='/api/workspace/backup-preview')return reply(await controller.workspaceBackupPreview(call.body));
+      if(call.path==='/api/workspace/restore')return reply(await controller.restoreWorkspaceHistory(call.body,call.key),201);
+      if(projectAccess)return reply(await controller.changeProjectAccess(projectAccess[1],call.body,call.key));
       if (call.path === '/api/projects/restore') return reply(await controller.restoreProject(call.body, call.key), 201);
       if (call.path === "/api/workspace/adopt-owner") return reply(controller.adoptOwner());
       if (call.path === "/api/workspace/revoke-sessions") return reply(controller.revokeSessions(call.body));
@@ -421,10 +439,10 @@ export function createAuthenticatedFetch(verifier: AccessVerifier) {
       const mutation = request.method !== "GET" && request.method !== "HEAD";
       if (mutation) requireSameOrigin(request);
       const forbiddenSecrets = [request.headers.get('Cf-Access-Jwt-Assertion'), request.headers.get('CF-Access-Client-Secret'), env.MODEL_API_KEY].filter((value): value is string => Boolean(value));
-      const body = mutation ? await bodyJson(request, forbiddenSecrets, url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') ? 128 * 1024 : 32 * 1024) : {};
+      const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? WORKSPACE_BACKUP_REQUEST_BYTES : url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
       const expectedWorkspace = request.headers.get('X-Workspace-Id') ?? body.expectedWorkspaceId;
       if (expectedWorkspace !== undefined && expectedWorkspace !== null && expectedWorkspace !== env.WORKSPACE_ID) throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The request targets a different workspace.');
-      const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/claim$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
+      const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
       const key = needsKey ? idempotencyKey(request) : "";
       const stub = env.WORKSPACES.getByName(env.WORKSPACE_ID);
       return await stub.api({ principal, policy, forbiddenSecrets, method: request.method, path: url.pathname, body, key, search: url.search });

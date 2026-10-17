@@ -11,7 +11,7 @@ export function publicationLink(record) {
     ? el('a', {href:record.pr.url, target:'_blank', rel:'noopener noreferrer'}, 'Open PR #' + record.pr.number + ' ↗') : null;
 }
 
-export function createPublicationView({getContext, captureSession, api, mutate, refresh, openInspector}) {
+export function createPublicationView({getContext, captureSession, api, mutate, refresh, openInspector, downloadHandoff}) {
   function details(binding) {
     return el('dl', {class:'publication-details'}, [
       ['Private repository',binding.repository], ['Target branch',binding.baseBranch], ['GitHub base commit',binding.local.baseCommit],
@@ -90,6 +90,14 @@ export function createPublicationView({getContext, captureSession, api, mutate, 
 
   return function publicationPanel(task,run) {
     const {workspace,busy}=getContext();
+    if(workspace.provider==='cloudflare-artifacts'&&run.status==='merged'&&workspace.authentication?.permissions.manage&&downloadHandoff)
+      return panel('Deliver to GitHub from your machine',el('div',{class:'panel-body publication-panel'},
+        el('p',{},'Export this merged task, then use the operator-local delivery CLI with your exact Git objects and a private GitHub target. GitHub credentials stay on your machine.'),
+        el('p',{class:'small'},'An export is historical evidence. Review its digest, candidate and target before approving local delivery. Creating a PR can run repository workflows; GitHub merge and deployment are separate.'),
+        el('button',{type:'button',class:'button button-small',disabled:busy,onclick:()=>downloadHandoff(task)},'Export task for local delivery'),
+        el('details',{},el('summary',{},'Local delivery instructions'),
+          el('p',{},'In your source checkout, run node scripts/hosted-github-delivery.mjs --help. Follow docs/github-publication.md, including the offline prepare step and explicit preview and approval.'),
+          el('p',{class:'small'},'Use a trusted local clone or verified recovery repository containing the recorded base and head. A rendered diff cannot recreate the original commit.'))));
     if(workspace.provider!=='local-git'||task.origin!=='connected-git'||run.status!=='merged')return null;
     const record=run.publication,configured=workspace.capabilities?.publish===true&&Boolean(workspace.githubPublication);
     const disabled=busy||workspace.repositoryWorkflow?.busyTaskIds?.includes(task.id)||!configured;

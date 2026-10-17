@@ -28,6 +28,16 @@ test('rendering a merged task does not publish; configuration and hosted boundar
   f.context.workspace.provider='cloudflare-artifacts';assert.equal(f.render(f.task,f.run),null);
 });
 
+test('hosted owner receives an export and local instructions, with no GitHub request or credential input',async()=>{
+  const f=fixture(),exports=[];f.context.workspace.provider='cloudflare-artifacts';
+  f.context.workspace.authentication={permissions:{manage:true}};
+  const render=createPublicationView({getContext:()=>f.context,downloadHandoff:async task=>exports.push(task.id)});
+  const view=render(f.task,f.run);assert.match(view.textContent,/credentials stay on your machine/);assert.match(view.textContent,/historical evidence/);
+  assert.match(view.textContent,/hosted-github-delivery.mjs/);assert.equal(f.calls.length,0);
+  assert.equal(button(view,'Publish private PR'),undefined);await button(view,'Export task for local delivery').dispatch('click');assert.deepEqual(exports,[f.task.id]);
+  f.context.workspace.authentication.permissions.manage=false;assert.equal(render(f.task,f.run),null);
+});
+
 test('preview and explicit confirmation are separate; double clicks send one stable publication request',async()=>{
   const f=fixture(),view=f.render(f.task,f.run),pending=button(view,'Preview GitHub PR').dispatch('click');
   assert.equal(f.calls.length,1);assert.ok(f.calls[0].path.endsWith('/preview'));

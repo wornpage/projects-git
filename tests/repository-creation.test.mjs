@@ -6,12 +6,15 @@ import {sqliteStorage} from './helpers/sqlite-store.mjs';
 import {testAuthority,testReviewerAuthority,AGENT_CLIENT} from './helpers/hosted-authority.mjs';
 import {authorizeRoute} from '../src/cloudflare/access.ts';
 import {errorResponse} from '../src/cloudflare/security.ts';
+import {ArtifactEventReceipts} from '../src/cloudflare/artifact-events.ts';
+import {ArtifactSubscriptions} from '../src/cloudflare/artifact-subscriptions.ts';
 
 const HEAD='a'.repeat(40), INITIAL='sensitive-initial-token', WRITE='sensitive-write-token';
 const input={name:'customer-portal',description:'A small customer portal.'};
 function fixture(t) {
   const {db,storage}=sqliteStorage();t.after(()=>db.close());
   const store=new WorkspaceStore(storage,'mock-workspace'), calls=[], repositories=new Map();
+  new ArtifactEventReceipts(storage);new ArtifactSubscriptions(storage);
   const artifacts={
     async get(name) {calls.push(['get',name]);if(!repositories.has(name))throw Object.assign(Error('No repository'),{code:'NOT_FOUND'});return repositories.get(name);},
     async create(name,options) {
@@ -42,6 +45,16 @@ function fixture(t) {
   return {store,artifacts,runtime,controller,calls,repositories,operation,restart};
 }
 const count=(f,kind)=>f.calls.filter(call=>call[0]===kind).length;
+
+test('backup captures the beforePush creation receipt and known commit before a project is attached',async t=>{
+  const f=fixture(t);f.runtime.git.seedRepository=async options=>{await options.beforePush(HEAD);throw Error('Controlled interrupted seed');};
+  await assert.rejects(f.controller.createRepository(input,'backup-before-push'),{code:'REPOSITORY_CREATION_INTERRUPTED'});
+  assert.equal(Object.keys(f.store.read().workspace.projects).length,0);assert.equal(f.operation().pendingCommit,HEAD);
+  const calls=f.calls.length,backup=await f.controller.workspaceBackup();assert.equal(f.calls.length,calls);
+  assert.equal(backup.payload.projects.length,0);assert.equal(backup.payload.resources.length,1);
+  assert.equal(backup.payload.resources[0].repositoryName,input.name);assert.deepEqual(backup.payload.resources[0].commits,[HEAD]);
+  assert.equal(backup.payload.resources[0].projectId,f.operation().projectId);
+});
 
 test('private creation seeds main, cleans credentials and connects one empty project; replay is stable',async t=>{
   const f=fixture(t),result=await f.controller.createRepository(input,'create-repo-01');
@@ -106,7 +119,7 @@ test('credential cleanup failure prevents success and is retried without another
 
 test('a false revocation result cannot masquerade as completed cleanup',async t=>{
   const f=fixture(t);f.artifacts.afterCreate=async repo=>{repo.revokeToken=async()=>false;};
-  await assert.rejects(f.controller.createRepository(input,'create-repo-06'),{code:'REPOSITORY_CREDENTIAL_CLEANUP'});
+  await assert.rejects(f.controller.createRepository(input,'create-repo-06'),{code:'TOKEN_REVOCATION_UNCONFIRMED'});
   assert.equal(Object.keys(f.store.read().workspace.projects).length,0);assert.equal(f.operation().state,'pending');
 });
 
