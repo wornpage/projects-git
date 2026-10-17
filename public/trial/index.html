@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#f5f4ef">
-  <meta name="description" content="Explore Projects Git, verify your email and reserve a separate private trial.">
-  <title>Projects Git — private trial</title>
+  <meta name="description" content="Verify your email to start a private Projects Git trial with your own coding tools.">
+  <title>Start your trial — Projects Git</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%2320382f'/%3E%3Ctext x='24' y='34' text-anchor='middle' font-family='sans-serif' font-size='34' fill='white'%3EP%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="/trial/styles.css">
   <script type="module" src="/trial/app.js"></script>
@@ -12,36 +12,30 @@
 <body>
   <a class="skip" href="#main">Skip to trial signup</a>
   <header class="site-header">
-    <a class="brand" href="/trial/"><span class="brand-mark" aria-hidden="true">P<span>↗</span></span>Projects Git</a>
-    <a href="https://github.com/wornpage/projects-git">Source &amp; setup <span aria-hidden="true">↗</span></a>
+    <a class="brand" href="https://git-demo.projectsdemo.org/" aria-label="Projects Git home"><span class="brand-mark" aria-hidden="true">P<span>↗</span></span>Projects Git</a>
+    <a href="https://git-demo.projectsdemo.org/">About Projects Git</a>
   </header>
   <main id="main" class="trial-layout">
-    <section class="introduction" aria-labelledby="trial-title">
-      <p class="eyebrow">PRIVATE TRIAL · EARLY PREVIEW</p>
-      <h1 id="trial-title">Keep the work.<br>Start with a space<br>of your own.</h1>
-      <p class="lead">Tasks, agent changes, checks and review belong together. Explore the example, then reserve a separate private trial.</p>
-      <a class="button primary intro-continue" href="/trial/signup">Continue with email <span aria-hidden="true">→</span></a>
-      <a class="sample-link" href="https://git-demo.projectsdemo.org/?view=projects">Explore without signing up <span aria-hidden="true">→</span></a>
-      <p class="sample-note">Invented records. Read-only. No agents or checks run.</p>
-      <ol class="journey" aria-label="Trial signup steps">
-        <li><span aria-hidden="true">1</span><div><strong>Verify your email</strong><p>Continue through Cloudflare Access.</p></div></li>
-        <li><span aria-hidden="true">2</span><div><strong>Reserve your trial</strong><p>Your verified identity gets a separate reservation.</p></div></li>
-        <li><span aria-hidden="true">3</span><div><strong>Start with your sample task</strong><p>Prepare the checkout project and connect your coding tool. Checks, independent review and your merge decision follow.</p></div></li>
-      </ol>
-    </section>
-    <section class="signup-panel" aria-labelledby="signup-heading">
-      <div class="preview-note"><strong>Bring your coding tools</strong><p>Limited early-preview capacity. Availability is checked after email verification. Your trial is isolated; no operator-funded model credits are included.</p></div>
+    <section class="signup-panel" aria-labelledby="trial-title">
+      <div class="introduction">
+        <p class="eyebrow">EARLY PREVIEW</p>
+        <h1 id="trial-title">Start your private trial</h1>
+        <p class="lead">Try a checkout task with your coding tool, checks and independent review.</p>
+      </div>
       <div id="trial-state" class="state-content">
-        <p class="badge">No invitation needed</p>
-        <h2 id="signup-heading" tabindex="-1">Reserve a private trial</h2>
-        <p>Verify your email before reserving. Your trial duration is shown after sign-in.</p>
+        <p>Verify your email, then reserve your trial. Limited availability is checked after sign-in.</p>
         <a class="button primary" href="/trial/signup">Continue with email <span aria-hidden="true">→</span></a>
-        <p class="muted small">Email verification happens on Cloudflare Access. No model credits are included.</p>
+        <p class="muted small">Bring your own coding tools. Model credits are not included.</p>
+        <details class="reservation-help">
+          <summary>Trial details</summary>
+          <p>Cloudflare Access verifies your email. Your trial duration is shown before you reserve; signing in alone starts no agent or checks.</p>
+          <p>Use separate coding-agent and reviewer connections. Export your work before closing or expiry. Closing ends access immediately; cleanup follows the retention period.</p>
+        </details>
       </div>
       <p id="trial-announcement" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></p>
       <noscript><p class="no-script">JavaScript is required to inspect and reserve a trial after email verification.</p></noscript>
     </section>
   </main>
-  <footer><span>Projects Git · Work with evidence</span><a href="https://github.com/wornpage/projects-git/blob/main/docs/setup.md">Deploy on your Cloudflare account <span aria-hidden="true">↗</span></a></footer>
+  <footer><a href="https://git-demo.projectsdemo.org/?view=projects">Explore the read-only demo</a><a href="https://github.com/wornpage/projects-git">Source &amp; setup <span aria-hidden="true">↗</span></a></footer>
 </body>
 </html>
