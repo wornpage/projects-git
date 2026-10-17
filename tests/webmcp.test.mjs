@@ -11,7 +11,16 @@ function page(criteria=['Expected result']){return {id:WORKSPACE,provider:'cloud
   tasks:[{id:TASK,projectId:PROJECT,title:'Retained task',purpose:'Inspect status',criteria,status:'review',createdAt:'2026-10-16T00:00:00.000Z',revision:2,baseCommit:BASE,acceptedRunId:null,mergedCommit:null,dependsOn:[]}],
   runs:[{id:RUN,taskId:TASK,label:'Candidate',agent:'external',origin:'external-agent',status:'awaiting_review',baseCommit:BASE,headCommit:HEAD,startedAt:'2026-10-16T00:01:00.000Z',finishedAt:'2026-10-16T00:02:00.000Z',changedFiles:['src/app.js'],diff:'SECRET_DIFF',agentIdentity:{id:'SECRET_IDENTITY'},summary:'Retained candidate summary',evidence:null,review:null,codeReview:null}],events:[{message:'SECRET_EVENT'}],
   page:{offset:0,limit:1,totalProjects:1,revision:7,nextOffset:null,previousOffset:null,taskNumbers:{[TASK]:1},workspaceTotals:{projects:1,tasks:1,runs:1},scope:'loaded-projects'}};}
-function metrics(){return projectOperationalMetrics({revision:7,workspace:{id:WORKSPACE,projects:{[PROJECT]:{id:PROJECT}},tasks:[],runs:[],events:[]},operations:{}},PROJECT,'2026-10-16T00:00:00.000Z');}
+function metrics(){return projectOperationalMetrics({revision:7,workspace:{id:WORKSPACE,projects:{[PROJECT]:{id:PROJECT}},
+  tasks:[{id:TASK,projectId:PROJECT}],runs:[{id:RUN,taskId:TASK,agent:'model',origin:'model',status:'assigned',execution:{model:'fixture-model',requests:[]}}],events:[]},operations:{}},PROJECT,'2026-10-16T00:00:00.000Z');}
+function metricsWithUnknownFields(){
+  const value=metrics(),secret='SECRET_METRICS_DETAIL';value.unexpectedPrivateField=secret;value.counts.unexpectedPrivateField=secret;
+  for(const row of Object.values(value.phases)){row.unexpectedPrivateField=secret;row.outcomes.unexpectedPrivateField=0;
+    if(row.coverage)row.coverage.unexpectedPrivateField=secret;}
+  value.phases.unexpectedPhase={unexpectedPrivateField:secret};
+  value.modelProvenance.unexpectedPrivateField=secret;for(const model of value.modelProvenance.models)model.unexpectedPrivateField=secret;
+  value.usage.unexpectedPrivateField=secret;value.cost.unexpectedPrivateField=secret;value.flags.unexpectedPrivateField=secret;return value;
+}
 class NativeModelContext{
   constructor(){this.tools=new Map([['existing_other_tool',{name:'existing_other_tool'}]]);this.calls=[];this.fail=null;this.wait=null;}
   async registerTool(tool,{signal}){this.calls.push({tool,signal});if(this.wait?.name===tool.name)await this.wait.promise;if(this.fail===tool.name)throw Error('scripted registration failure');
@@ -56,6 +65,19 @@ test('closed schemas and invalid arguments fail before I/O',async()=>{
   const h=harness();await h.manager.sync();for(const [name,args] of [[PROJECTS_GIT_WEBMCP_TOOLS[0],{limit:0}],[PROJECTS_GIT_WEBMCP_TOOLS[0],{url:'https://elsewhere.invalid'}],
     [PROJECTS_GIT_WEBMCP_TOOLS[1],{projectId:'bad'}],[PROJECTS_GIT_WEBMCP_TOOLS[2],{taskId:TASK,command:'git push'}],[PROJECTS_GIT_WEBMCP_TOOLS[3],{}]])
     await assert.rejects(h.modelContext.tools.get(name).execute(args,{}));assert.deepEqual(h.paths,[]);
+});
+
+test('operational metrics recursively omit unknown backend fields and reject unknown outcomes',async()=>{
+  const value=metricsWithUnknownFields();for(const row of Object.values(value.phases))if(row.outcomes)delete row.outcomes.unexpectedPrivateField;
+  const h=harness();h.responses.metrics=value;await h.manager.sync();const result=parsed(await h.modelContext.tools.get(PROJECTS_GIT_WEBMCP_TOOLS[3]).execute({projectId:PROJECT},{}));
+  assert.ok(!JSON.stringify(result).includes('SECRET_METRICS_DETAIL'));assert.ok(!Object.hasOwn(result,'unexpectedPrivateField'));
+  assert.ok(!Object.hasOwn(result.counts,'unexpectedPrivateField'));assert.ok(!Object.hasOwn(result.phases,'unexpectedPhase'));
+  for(const row of Object.values(result.phases)){assert.ok(!Object.hasOwn(row,'unexpectedPrivateField'));if(row.coverage)assert.ok(!Object.hasOwn(row.coverage,'unexpectedPrivateField'));}
+  assert.ok(!Object.hasOwn(result.modelProvenance,'unexpectedPrivateField'));assert.ok(result.modelProvenance.models.every(model=>!Object.hasOwn(model,'unexpectedPrivateField')));
+  for(const section of ['usage','cost','flags'])assert.ok(!Object.hasOwn(result[section],'unexpectedPrivateField'));
+
+  const invalid=metricsWithUnknownFields(),rejected=harness();rejected.responses.metrics=invalid;await rejected.manager.sync();
+  await assert.rejects(rejected.modelContext.tools.get(PROJECTS_GIT_WEBMCP_TOOLS[3]).execute({projectId:PROJECT},{}),/incomplete/);
 });
 
 test('backend ACL denial remains a denial and exposes no fabricated result',async()=>{

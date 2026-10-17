@@ -21,7 +21,7 @@ test('duration units preserve actual zero and reject an invalid measured value',
 test('incomplete or contradictory metrics cannot render as a complete dashboard',()=>{
   for(const change of [d=>{delete d.phases.recovery;},d=>{d.phases.queue.observed=1;},d=>{d.phases.queue.medianMs=0;},
     d=>{d.usage.unknownUsageRequests++;},d=>{d.cost.actual=0;},d=>{d.scope='loaded-page';},d=>{d.modelProvenance.recordedRuns++;},
-    d=>{d.phases.recovery.outcomes={failed:1};},d=>{delete d.usage.totalOverflow;}]){
+    d=>{d.phases.recovery.outcomes={failed:1};},d=>{delete d.usage.totalOverflow;},d=>{d.phases.queue.outcomes.private=0;}]){
     const value=data();change(value);assert.throws(()=>readMetrics(value,'one'),/incomplete/);
   }
 });
