@@ -7,7 +7,7 @@ import {resolve} from 'node:path';
 import {createLocalTrialRuntime} from '../helpers/trial-runtime.mjs';
 
 const evidence=process.argv[2];if(!evidence)throw Error('Pass a local QA evidence directory.');
-const runtime=await createLocalTrialRuntime({durationMs:604800000,dailyAdmissions:100,activeTrials:100,totalAdmissions:1000});
+const runtime=await createLocalTrialRuntime({durationMs:604800000,dailyAdmissions:100,activeTrials:100,totalAdmissions:1000},{turnstileHostname:'127.0.0.1'});
 let scenario='fresh',actor,sequence=0,lost=false;const observations=[];
 async function fresh(){actor=await runtime.token('preview-'+(++sequence),'alex@example.test');lost=false;}
 await fresh();

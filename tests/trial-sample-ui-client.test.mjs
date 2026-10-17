@@ -3,7 +3,7 @@ import test,{afterEach} from 'node:test';
 import assert from 'node:assert/strict';
 import {createTrialClient} from '../public/trial/client.js';
 
-const identity={identityKey:'a'.repeat(64),email:'alex@example.test',policy:{revision:'sample-ui-v1',durationMs:604800000}};
+const identity={identityKey:'a'.repeat(64),email:'alex@example.test',policy:{revision:'sample-ui-v1',durationMs:604800000},turnstile:{siteKey:"fixture-sitekey",action:"turnstile-spin-v2"}};
 const trial={workspaceId:'trial-'+'b'.repeat(64),status:'admitted',createdAt:'2026-10-17T12:00:00Z',expiresAt:'2026-10-24T12:00:00Z',remainingMs:604800000,
   policyRevision:identity.policy.revision,workflowReady:false,capabilities:{workspaceReads:true,repositoryCreation:false,agents:false,checks:false,modelCredits:false},cleanup:'not-due',identityKey:identity.identityKey};
 const repo={name:'sample-'+'b'.repeat(64),repositoryId:'repository-fixture',projectId:'11111111-1111-4111-8111-111111111111',baseCommit:'c'.repeat(40)};
@@ -40,7 +40,7 @@ test('a claimed invoice cap or inconsistent allowance cannot enable resource wor
 
 test('bootstrap inspects sample state with GET only; reservation never automatically prepares it',async()=>{
   const c=fixture(admission());await c.client.refresh();assert.equal(c.client.getState().sample.phase,'not-started');assert.ok(c.calls.every(call=>call.options.method==='GET'));
-  const reserve=fixture([json(identity),error('TRIAL_NOT_ADMITTED',404),json(trial),json(sample())]);await reserve.client.refresh();await reserve.client.reserve();
+  const reserve=fixture([json(identity),error('TRIAL_NOT_ADMITTED',404),json(trial),json(sample())]);await reserve.client.refresh();await reserve.client.reserve('fixture-token');
   assert.deepEqual(reserve.calls.filter(call=>call.options.method==='POST').map(call=>call.path),['/api/trial']);assert.equal(reserve.client.getState().sample.phase,'not-started');
 });
 

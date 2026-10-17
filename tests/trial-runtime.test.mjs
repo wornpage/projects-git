@@ -28,6 +28,6 @@ test('local workerd admission RPC and tenant DOs enforce isolation, replay and c
     assert.equal((await request('/api/workspace',a)).status,403);
     assert.equal((await request('/api/workspace',b)).status,200);
     const resumed=await(await request('/api/trial',a,{})).json();assert.equal(resumed.status,'closed');assert.equal(resumed.workspaceId,ga.workspaceId);
-    assert.ok(outbound.length>0);assert.ok(outbound.every(url=>url===policy.issuer+'/cdn-cgi/access/certs'));
+    assert.ok(outbound.length>0);assert.ok(outbound.every(url=>url===policy.issuer+'/cdn-cgi/access/certs'||url==='https://challenges.cloudflare.com/turnstile/v0/siteverify'));
   }finally{await runtime.dispose();}
 });

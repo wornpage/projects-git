@@ -22,7 +22,7 @@ const index=load('index.ts'),trial=load('trial-worker.ts',index);
 const pair=await generateKeyPair('RS256'),jwk={...await exportJWK(pair.publicKey),kid:'trial-test',alg:'RS256'};
 const policy={revision:'fixture-v1',issuer:'https://fixture.cloudflareaccess.com',audience:'a'.repeat(64),durationMs:60_000,dailyAdmissions:20,activeTrials:50,totalAdmissions:1000,resources:unapprovedTrialResources};
 const verifier=new AccessVerifier(async()=>Response.json({keys:[jwk]}),()=>Date.now());
-const handler=trial.createTrialFetch(verifier);
+const handler=trial.createTrialFetch(verifier,async()=>Response.json({success:true,hostname:'trial.example.test',action:'turnstile-spin-v2'}));
 async function token(subject='person-a',changes={}){
   const now=Math.floor(Date.now()/1000);
   return new SignJWT({type:'app',iss:policy.issuer,aud:[policy.audience],sub:subject,email:'same@example.test',iat:now-1,exp:now+3600,...changes})
@@ -33,6 +33,7 @@ function fixture({artifacts,git,trialPolicy=policy}={}){
   const contexts=new Map(),calls=[],assetCalls=[];
   let registry;
   const env={WORKSPACE_ID:'',ACCESS_OWNER_SUB:'',TRIAL_POLICY:JSON.stringify(trialPolicy),
+    TRIAL_TURNSTILE_SITE_KEY:'fixture-sitekey',TRIAL_TURNSTILE_SECRET:'fixture-secret',TRIAL_TURNSTILE_HOSTNAME:'trial.example.test',
     ...(artifacts?{TRIAL_ARTIFACTS:artifacts}:{}),
     TRIAL_REGISTRY:{getByName:name=>{assert.equal(name,'trial-admissions-v1');return registry;}},
     WORKSPACES:{getByName:name=>{
@@ -44,6 +45,9 @@ function fixture({artifacts,git,trialPolicy=policy}={}){
   return{env,registry,contexts,calls,assetCalls,sql};
 }
 function req(path,jwt,body,extra={}){
+  // Existing admission fixtures use a synthetic successful challenge; dedicated
+  // verification tests construct missing/invalid bodies explicitly.
+  if(path==='/api/trial'&&body&&Object.keys(body).length===0)body={turnstileToken:'fixture-token'};
   const mutation=body!==undefined;
   return new Request('https://trial.example.test'+path,{method:mutation?'POST':'GET',
     headers:{...(jwt?{'Cf-Access-Jwt-Assertion':jwt}:{}),...(mutation?{'Content-Type':'application/json','Idempotency-Key':'trial-test-request','Origin':'https://trial.example.test',...(jwt?{'X-Trial-Identity':identityKey(jwt)}:{})}:{}),...extra},

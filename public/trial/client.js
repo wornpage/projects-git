@@ -4,7 +4,8 @@ export class TrialClientError extends Error {constructor(code){super(code);this.
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',');
 const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 function sessionValue(value) {
-  if(!exact(value,['identityKey','email','policy'])||!hash(value.identityKey)||typeof value.email!=='string'||value.email.length>320||!/^\S+@\S+$/.test(value.email)
+  if(!exact(value,['identityKey','email','policy','turnstile'])||!hash(value.identityKey)||typeof value.email!=='string'||value.email.length>320||!/^\S+@\S+$/.test(value.email)
+    ||!exact(value.turnstile,['siteKey','action'])||!/^[-A-Za-z0-9_]{1,100}$/.test(value.turnstile.siteKey)||value.turnstile.action!=='turnstile-spin-v2'
     ||!exact(value.policy,['revision','durationMs'])||typeof value.policy.revision!=='string'||!/^[a-z0-9-]{1,64}$/.test(value.policy.revision)
     ||!Number.isSafeInteger(value.policy.durationMs)||value.policy.durationMs<60000||value.policy.durationMs>604800000)throw new TrialClientError('INVALID_RESPONSE');
   return value;
@@ -86,8 +87,8 @@ export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.
   };
   const begin=()=>{generation++;abort?.abort();abort=new AbortController();return {generation,signal:abort.signal};};
   const current=operation=>operation.generation===generation&&!operation.signal.aborted;
-  const request=async(path,operation,identity,action)=>readReply(await fetcher(path,{method:action?'POST':'GET',credentials:'same-origin',cache:'no-store',redirect:'manual',signal:operation.signal,
-    headers:action?{'Content-Type':'application/json','Idempotency-Key':keys[action]??=(nonce()),'X-Trial-Identity':identity.identityKey}:{},body:action?'{}':undefined}));
+  const request=async(path,operation,identity,action,body={})=>readReply(await fetcher(path,{method:action?'POST':'GET',credentials:'same-origin',cache:'no-store',redirect:'manual',signal:operation.signal,
+    headers:action?{'Content-Type':'application/json','Idempotency-Key':keys[action]??=(nonce()),'X-Trial-Identity':identity.identityKey}:{},body:action?JSON.stringify(body):undefined}));
   const failed=(error,operation)=>{
     if(!current(operation))return;
     const code=error instanceof TrialClientError?error.code:'NETWORK_UNCERTAIN';
@@ -131,12 +132,13 @@ export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.
       }
     }catch(error){failed(error,operation);}
   }
-  async function mutate(action) {
+  async function mutate(action,turnstileToken) {
     if(action==='reserve'&&state.phase!=='eligible'||action==='close'&&state.phase!=='confirm-close')return;
+    if(action==='reserve'&&(typeof turnstileToken!=='string'||!turnstileToken||turnstileToken.length>2048))return;
     const {identity,trial}=state;if(!identity)return;
     const operation=begin();publish({phase:action==='reserve'?'reserving':'closing',identity,trial,error:null});
     try {
-      const result=statusValue(await request(action==='reserve'?'/api/trial':'/api/trial/close',operation,identity,action),identity);
+      const result=statusValue(await request(action==='reserve'?'/api/trial':'/api/trial/close',operation,identity,action,action==='reserve'?{turnstileToken}:{}),identity);
       if(current(operation)){
         expiryDeadline=now()+result.remainingMs;
         if(result.status==='admitted')await readSample(operation,identity,result);
@@ -154,7 +156,7 @@ export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.
       if(current(operation))publish({phase:'admitted',identity,trial,error:null,sample:{phase:result.phase,result,error:null}});
     }catch(error){sampleFailed(error,operation,identity,trial);}
   }
-  return {refresh,prepareSample,reserve:()=>mutate('reserve'),close:()=>mutate('close'),
+  return {refresh,prepareSample,reserve:token=>mutate('reserve',token),close:()=>mutate('close'),
     confirmClose(){if(state.phase==='admitted'&&!['checking','saving'].includes(state.sample?.phase))publish({...state,phase:'confirm-close'});},
     cancelClose(){if(state.phase==='confirm-close')publish({...state,phase:'admitted'});},
     suspend(){generation++;abort?.abort();publish({phase:'checking',identity:null,trial:null,error:null});},

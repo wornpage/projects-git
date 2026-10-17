@@ -18,7 +18,7 @@ async function clientFixture(t,{loseSampleResponse=false}={}) {
 }
 
 test('the UI client explicitly prepares one real local Git sample through the authenticated HTTP contract',async t=>{
-  const f=await clientFixture(t);await f.client.refresh();assert.equal(f.client.getState().phase,'eligible');await f.client.reserve();
+  const f=await clientFixture(t);await f.client.refresh();assert.equal(f.client.getState().phase,'eligible');await f.client.reserve('fixture-token');
   assert.equal(f.client.getState().sample.phase,'not-started');assert.equal(f.server.count('create'),0);
   await f.client.prepareSample();const state=f.client.getState();assert.equal(state.sample.phase,'ready');assert.equal(state.trial.workflowReady,false);
   assert.equal(f.server.count('create'),1);assert.equal(f.server.count('seed'),1);
@@ -29,7 +29,7 @@ test('the UI client explicitly prepares one real local Git sample through the au
 });
 
 test('a lost real setup response recovers by status read without another creation or push',async t=>{
-  const f=await clientFixture(t,{loseSampleResponse:true});await f.client.refresh();await f.client.reserve();await f.client.prepareSample();
+  const f=await clientFixture(t,{loseSampleResponse:true});await f.client.refresh();await f.client.reserve('fixture-token');await f.client.prepareSample();
   assert.equal(f.client.getState().sample.phase,'unknown');assert.equal(f.client.getState().sample.result,null);
   await f.client.prepareSample();assert.equal(f.calls.filter(call=>call.path==='/api/trial/sample'&&call.method==='POST').length,1);
   await f.client.refresh();assert.equal(f.client.getState().sample.phase,'ready');assert.equal(f.server.count('create'),1);assert.equal(f.server.count('seed'),1);

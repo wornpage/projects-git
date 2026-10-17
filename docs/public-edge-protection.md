@@ -28,6 +28,29 @@ deployment was needed for this configuration.
 
 ## Verification and limits
 
+Trial reservation additionally requires a managed Turnstile check. Only an
+eligible, email-verified visitor loads the widget. `POST /api/trial` accepts a
+`turnstileToken` and verifies it through Cloudflare Siteverify before admission,
+requiring success, the configured hostname and action `turnstile-spin-v2`.
+Missing configuration, failed checks and provider errors refuse admission.
+Closure, existing-trial reads and agent requests do not require Turnstile.
+
+Set `TRIAL_TURNSTILE_SITE_KEY` and `TRIAL_TURNSTILE_HOSTNAME` in the dedicated
+trial deployment configuration, and install `TRIAL_TURNSTILE_SECRET` with
+`wrangler secret put` against that same trial configuration. Never put the secret
+in source or browser configuration. The non-public deployment template leaves
+these values empty and cannot admit new trials until configured.
+
+Tokens stay in page memory, are discarded on use, expiry, identity changes or
+page suspension, and are never retained as workflow data. A lost reservation
+response requires a status read; a genuinely missing reservation needs a new
+Turnstile token and reuses the admission idempotency key. The widget switches to
+its compact size on narrow phones, including after orientation changes.
+
+Automated browser tests use Cloudflare's documented test sitekey and intercepted
+Siteverify responses in a labeled local fixture. They prove layout and request
+handling, not a real human solve. Production uses a separate real widget.
+
 Live probes observed challenges on both public entry pages, JSON 401 for an
 unauthenticated agent request, HTTP 429 for a bounded API burst and HTTP 404 on
 the former demo `workers.dev` address. All eight private-route probes still

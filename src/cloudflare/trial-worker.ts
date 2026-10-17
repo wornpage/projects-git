@@ -9,6 +9,7 @@ import type {TrialCredentialPrincipal,TrialCredentialRole} from './trial-credent
 import {dispatchWorkspaceRequest} from './index.ts';
 import {ApiError,bodyJson,errorResponse,idempotencyKey,json,requireSameOrigin,digest} from './security.ts';
 import {trialUiAsset} from './trial-ui-assets.mjs';
+import {trialTurnstilePublic,verifyTrialTurnstile} from './trial-turnstile.ts';
 export {WorkspaceCoordinator} from './index.ts';
 
 // Only a private binding invokes the registry. No HTTP endpoint accepts an
@@ -91,7 +92,7 @@ export class TrialAdmissions extends DurableObject<Env> implements TrialRegistry
   }
 }
 
-export function createTrialFetch(verifier:AccessVerifier) {
+export function createTrialFetch(verifier:AccessVerifier,turnstileFetch:typeof fetch=fetch) {
   return async(request:Request,env:Env):Promise<Response>=>{
     try {
       const policy=configuredTrialPolicy(env),url=new URL(request.url),workflow=trialWorkflowEnabled(env);
@@ -114,7 +115,7 @@ export function createTrialFetch(verifier:AccessVerifier) {
       if(url.pathname==='/api/trial/session') {
         if(request.method!=='GET')throw new ApiError(405,'METHOD_NOT_ALLOWED','Use GET to inspect the verified trial identity.');
         if(url.search||request.headers.has('X-Workspace-Id'))throw new ApiError(400,'INVALID_TRIAL_REQUEST','The trial session accepts no identity selectors.');
-        return json({identityKey,email:identity.displayName,policy:{revision:policy.revision,durationMs:policy.durationMs}});
+        return json({identityKey,email:identity.displayName,policy:{revision:policy.revision,durationMs:policy.durationMs},turnstile:trialTurnstilePublic(env)});
       }
       const status=async(grant:Parameters<typeof trialStatus>[0])=>{
         const cleanup=await trialRegistry(env).cleanupStatus(identity,policy);
@@ -159,8 +160,11 @@ export function createTrialFetch(verifier:AccessVerifier) {
         if(request.headers.get('X-Trial-Identity')!==identityKey)
           throw new ApiError(409,'TRIAL_IDENTITY_CHANGED','Check the signed-in trial identity again before changing a reservation.');
         const key=idempotencyKey(request);
-        const body=await bodyJson(request,[request.headers.get('Cf-Access-Jwt-Assertion')??''],1024);
-        if(Object.keys(body).length)throw new ApiError(400,'INVALID_TRIAL_REQUEST','Send an empty object; identity and limits are resolved on the server.');
+        const body=await bodyJson(request,[request.headers.get('Cf-Access-Jwt-Assertion')??''],4096);
+        if(url.pathname==='/api/trial') {
+          if(Object.keys(body).some(key=>key!=='turnstileToken'))throw new ApiError(400,'INVALID_TRIAL_REQUEST','Send only the security check; identity and limits are resolved on the server.');
+          await verifyTrialTurnstile(request,env,body.turnstileToken,turnstileFetch);
+        }else if(Object.keys(body).length)throw new ApiError(400,'INVALID_TRIAL_REQUEST','Send an empty object to close your trial.');
         const registry=trialRegistry(env);
         const grant=ownGrant(url.pathname==='/api/trial'?await registry.admit(identity,key,policy):await registry.close(identity,policy));
         return json(await status(grant));

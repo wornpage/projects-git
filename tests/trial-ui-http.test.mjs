@@ -25,7 +25,7 @@ test('signup document needs verified identity but never requires or creates a re
 
 test('session exposes only the verified email, identity precondition and actual trial duration',async()=>{
   const c=fixture(),jwt=await token(),response=await handler(req('/api/trial/session',jwt),c.env);assert.equal(response.status,200);
-  const value=await response.json();assert.deepEqual(Object.keys(value).sort(),['email','identityKey','policy']);
+  const value=await response.json();assert.deepEqual(Object.keys(value).sort(),['email','identityKey','policy','turnstile']);
   assert.equal(value.identityKey,identityKey(jwt));assert.equal(value.email,'same@example.test');assert.equal(value.policy.durationMs,60000);
   assert.doesNotMatch(JSON.stringify(value),/person-a|ownerSubject|audience|workspaceId/);
   for(const path of ['/api/trial/session?subject=other','/api/trial/session?workspaceId=real'])assert.equal((await handler(req(path,jwt),c.env)).status,400);

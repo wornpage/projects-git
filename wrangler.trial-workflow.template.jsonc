@@ -12,6 +12,8 @@
   "worker_loaders":[{"binding":"TRIAL_LOADER"}],
   "limits":{"cpu_ms":1000},
   "vars":{
+    "TRIAL_TURNSTILE_SITE_KEY":"",
+    "TRIAL_TURNSTILE_HOSTNAME":"",
     "WORKSPACE_ID":"",
     "ACCESS_OWNER_SUB":"",
     "TRIAL_POLICY":"{\"revision\":\"trial-workflow-v1\",\"issuer\":\"https://fixture.cloudflareaccess.com\",\"audience\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"durationMs\":604800000,\"dailyAdmissions\":2,\"activeTrials\":5,\"totalAdmissions\":10,\"resources\":{\"approval\":null,\"approvalExpiresAt\":null,\"dailySetups\":0,\"totalSetups\":0,\"setupAttempts\":0,\"providerCalls\":0,\"cleanupDelayMs\":86400000}}"

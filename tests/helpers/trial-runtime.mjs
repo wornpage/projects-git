@@ -10,7 +10,7 @@ import {generateKeyPair,exportJWK,SignJWT,decodeJwt} from 'jose';
 
 const root=fileURLToPath(new URL('../../',import.meta.url)),publicRoot=resolve(root,'public');
 const types={'.html':'text/html;charset=utf-8','.js':'text/javascript;charset=utf-8','.css':'text/css;charset=utf-8','.svg':'image/svg+xml'};
-export async function createLocalTrialRuntime(overrides={}) {
+export async function createLocalTrialRuntime(overrides={}, {turnstileHostname='trial.example.test'}={}) {
   const issuer='https://fixture.cloudflareaccess.com',audience='a'.repeat(64);
   const pair=await generateKeyPair('RS256'),jwk={...await exportJWK(pair.publicKey),kid:'runtime-fixture',alg:'RS256'};
   const policy={revision:'runtime-local-v1',issuer,audience,durationMs:60000,dailyAdmissions:2,activeTrials:2,totalAdmissions:2,resources:unapprovedTrialResources,...overrides};
@@ -22,6 +22,7 @@ export async function createLocalTrialRuntime(overrides={}) {
     config:{name:'trial-fixture',compatibilityDate:'2026-10-08',compatibilityFlags:['nodejs_compat'],
       manifest:{mainModule:'trial.mjs',modules:{'trial.mjs':{type:'esm',contents:result.outputFiles[0].text}}},
       env:{WORKSPACE_ID:{type:'text',value:''},ACCESS_OWNER_SUB:{type:'text',value:''},TRIAL_POLICY:{type:'text',value:JSON.stringify(policy)},
+        TRIAL_TURNSTILE_SITE_KEY:{type:'text',value:'1x00000000000000000000AA'},TRIAL_TURNSTILE_SECRET:{type:'text',value:'fixture-secret'},TRIAL_TURNSTILE_HOSTNAME:{type:'text',value:turnstileHostname},
         TRIAL_REGISTRY:{type:'durable-object',worker:'trial-fixture',exportName:'TrialAdmissions'},
         WORKSPACES:{type:'durable-object',worker:'trial-fixture',exportName:'WorkspaceCoordinator'},
         ASSETS:{type:'fetcher',handler:async request=>{
@@ -32,10 +33,13 @@ export async function createLocalTrialRuntime(overrides={}) {
         }}},
       exports:{TrialAdmissions:{type:'durable-object',storage:'sqlite'},WorkspaceCoordinator:{type:'durable-object',storage:'sqlite'}}},
     dev:{unsafeRegisterWorker:false,outboundService:{type:'fetcher',handler:request=>{
-      outbound.push(request.url);assert.equal(request.url,issuer+'/cdn-cgi/access/certs');return Response.json({keys:[jwk]});}}}}]});
+      outbound.push(request.url);
+      if(request.url==='https://challenges.cloudflare.com/turnstile/v0/siteverify')return Response.json({success:true,hostname:turnstileHostname,action:'turnstile-spin-v2'});
+      assert.equal(request.url,issuer+'/cdn-cgi/access/certs');return Response.json({keys:[jwk]});}}}}]});
   const token=async(sub,email='runtime@example.test')=>{const now=Math.floor(Date.now()/1000);return new SignJWT({type:'app',iss:issuer,aud:[audience],sub,email,iat:now-1,exp:now+3600})
     .setProtectedHeader({alg:'RS256',kid:jwk.kid}).sign(pair.privateKey);};
   const request=async(path,jwt,body,headers={})=>{
+    if(path==='/api/trial'&&body&&Object.keys(body).length===0)body={turnstileToken:'fixture-token'};
     const claims=decodeJwt(jwt),identityKey=createHash('sha256').update(JSON.stringify([issuer,audience,claims.sub])).digest('hex');
     return mf.dispatchFetch('https://trial.example.test'+path,{method:body===undefined?'GET':'POST',
       headers:{'Cf-Access-Jwt-Assertion':jwt,...(body===undefined?{}:{'Content-Type':'application/json','Idempotency-Key':'runtime-admission-key','Origin':'https://trial.example.test','X-Trial-Identity':identityKey}),...headers},

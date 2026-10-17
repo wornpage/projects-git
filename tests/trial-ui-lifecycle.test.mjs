@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import {createTrialClient} from '../public/trial/client.js';
+import {createTrialVerification} from '../public/trial/turnstile.js';
 import {renderTrial} from '../public/trial/view.js';
 import {installFakeDOM} from './helpers/fake-dom.mjs';
 
@@ -11,10 +12,10 @@ test('the real signup tab lifecycle clears A while hidden and checks B on return
   const {$,document}=installFakeDOM(),listeners=new Map(),calls=[];
   document.body={classList:{add(){}}};document.addEventListener=(name,callback)=>listeners.set(name,callback);
   let email='alex@example.test',identityKey='a'.repeat(64),latest,client;
-  const context={document,location:{pathname:'/trial/signup'},renderTrial,addEventListener(){},createTrialClient:options=>{
+  const context={document,matchMedia:()=>({matches:false,addEventListener(){}}),createTrialVerification:options=>createTrialVerification({...options,loadApi:async()=>({render(){return 0;},remove(){}}),compact:()=>false}),location:{pathname:'/trial/signup'},renderTrial,addEventListener(){},createTrialClient:options=>{
     client=createTrialClient({...options,setTimer:()=>0,clearTimer(){},fetcher:async(path,request)=>{
       calls.push({path,method:request.method});
-      return path==='/api/trial/session'?Response.json({identityKey,email,policy:{revision:'test',durationMs:604800000}})
+      return path==='/api/trial/session'?Response.json({identityKey,email,policy:{revision:'test',durationMs:604800000},turnstile:{siteKey:"fixture-sitekey",action:"turnstile-spin-v2"}})
         :Response.json({code:'TRIAL_NOT_ADMITTED'},{status:404});
     }});
     const refresh=client.refresh;client.refresh=()=>latest=refresh();return client;
@@ -32,10 +33,10 @@ test('returning as B cannot retain A’s ready sample link or repository metadat
   const {$,document}=installFakeDOM(),listeners=new Map(),calls=[];document.body={classList:{add(){}}};document.addEventListener=(name,fn)=>listeners.set(name,fn);
   let owner='a',latest,client;
   const workspaceId='trial-'+'b'.repeat(64),projectId='11111111-1111-4111-8111-111111111111';
-  const context={document,location:{pathname:'/trial/signup'},renderTrial,addEventListener(){},createTrialClient:options=>{
+  const context={document,matchMedia:()=>({matches:false,addEventListener(){}}),createTrialVerification:options=>createTrialVerification({...options,loadApi:async()=>({render(){return 0;},remove(){}}),compact:()=>false}),location:{pathname:'/trial/signup'},renderTrial,addEventListener(){},createTrialClient:options=>{
     client=createTrialClient({...options,setTimer:()=>0,clearTimer(){},fetcher:async(path,request)=>{
       calls.push({path,method:request.method});
-      if(path==='/api/trial/session')return Response.json({identityKey:owner.repeat(64),email:owner==='a'?'alex@example.test':'blair@example.test',policy:{revision:'test',durationMs:604800000}});
+      if(path==='/api/trial/session')return Response.json({identityKey:owner.repeat(64),email:owner==='a'?'alex@example.test':'blair@example.test',policy:{revision:'test',durationMs:604800000},turnstile:{siteKey:"fixture-sitekey",action:"turnstile-spin-v2"}});
       if(owner==='b')return Response.json({code:'TRIAL_NOT_ADMITTED'},{status:404});
       if(path==='/api/trial')return Response.json({workspaceId,status:'admitted',createdAt:'2026-10-17T12:00:00Z',expiresAt:'2026-10-24T12:00:00Z',remainingMs:604800000,policyRevision:'test',workflowReady:false,
         capabilities:{workspaceReads:true,repositoryCreation:false,agents:false,checks:false,modelCredits:false},cleanup:'not-due',identityKey:'a'.repeat(64)});

@@ -7,6 +7,9 @@ const titles={checking:'Checking your trial',eligible:'Reserve a private trial',
   'confirm-close':'Your trial is reserved',closing:'Closing your trial',closed:'Trial closed',expired:'Trial access has ended',capacity:'Trial capacity is full',
   failed:'We couldn’t confirm your trial',signedOut:'Verify your email to continue',blocked:'This login can’t start a trial'};
 const errors={TRIAL_POLICY_CHANGED:'Trial settings changed. Check your status again before continuing.',
+  TRIAL_VERIFICATION_REQUIRED:'Complete the security check before reserving. Check your status to try again.',
+  TRIAL_VERIFICATION_FAILED:'The security check expired or failed. Check your status, then complete a new check.',
+  TRIAL_VERIFICATION_UNAVAILABLE:'Security verification is unavailable. Check your reservation status before trying again.',
   TRIAL_IDENTITY_CHANGED:'The signed-in identity changed. Verify your email again to continue.',
   WORKSPACE_FORBIDDEN:'The signed-in identity changed. Verify your email again to continue.',
   INVALID_RESPONSE:'We couldn’t read your trial status. Check it again before taking another action.',
@@ -65,7 +68,11 @@ export function renderTrial(root,announcement,state,actions) {
   if(phase==='eligible'||phase==='reserving')nodes.push(
     el('p',{},'Reserve a separate private space. The trial clock starts when the reservation is saved.'),
     details([['Duration',duration(identity.policy.durationMs)+' from reservation'],['Next','Check sample availability'],['Model credits','Not included']]),
-    button(phase==='reserving'?'Reserving…':'Reserve trial',actions.reserve),
+    phase==='eligible'?el('div',{class:'trial-verification'},
+      el('div',{id:'trial-turnstile',class:'cf-turnstile','data-action':'turnstile-spin-v2'}),
+      el('p',{id:'trial-turnstile-status',class:'small muted',role:'status'},'Loading security check…'),
+      el('button',{id:'trial-turnstile-retry',type:'button',class:'text-button',hidden:true},'Retry security check')):null,
+    button(phase==='reserving'?'Reserving…':'Reserve trial',actions.reserve,{id:'reserve-trial',disabled:true}),
     el('p',{class:'small muted'},'A reservation does not start an agent, create a repository or run checks.'));
   if(['admitted','confirm-close','closing'].includes(phase))nodes.push(
     el('p',{class:'expiry'},'Expires ',expiry(trial.expiresAt)),

@@ -1,4 +1,4 @@
-const paths=new Set(['/trial/styles.css','/trial/app.js','/trial/client.js','/trial/view.js','/ui/dom.js']);
+const paths=new Set(['/trial/styles.css','/trial/app.js','/trial/client.js','/trial/view.js','/trial/turnstile.js','/ui/dom.js']);
 const security={
   'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',
@@ -17,5 +17,6 @@ export async function trialUiAsset(request,assets,verified=false) {
   const response=await assets.fetch(new Request(url.origin+source));
   const headers=new Headers(response.headers);headers.delete('Set-Cookie');headers.delete('WWW-Authenticate');
   for(const [key,value] of Object.entries(security))headers.set(key,value);
+  if(path==='/trial/signup')headers.set('Content-Security-Policy',"default-src 'none'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
   return new Response(request.method==='HEAD'?null:response.body,{status:response.status,headers});
 }
