@@ -67,8 +67,10 @@ the private workspace's Access, deployed version and bindings were preserved.
 The owner approved activation: email-PIN signup is enabled at
 `https://try-git.projectsdemo.org/trial/signup`. Only `/agent/api/*` is exempt from
 browser login; the Worker requires a valid role/workspace-scoped trial token and
-rejects anonymous or invalid credentials. Real email login and the authenticated
-hosted workflow still need qualification. No hosted signup success is claimed here.
+rejects anonymous or invalid credentials. Real email login, trial reservation,
+sample repository/task creation, and connection issuance/revocation have been
+verified on the deployed pilot. Multi-user hosted isolation, checks, review, merge,
+export and scheduled cleanup remain separate from the completed local proof.
 
 ## Local validation
 

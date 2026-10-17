@@ -1,4 +1,5 @@
 import {el} from './dom.js';
+import {downloadJson} from './json-download.js';
 
 export function trialConnectionDownload(result,workspaceId,role,origin) {
   const principal=result?.principal;
@@ -16,8 +17,7 @@ export function createTrialConnections({workspaceId,captureSession,fetcher=fetch
   const role=el('select',{'aria-label':'Connection role'},el('option',{value:'agent'},'Coding agent'),el('option',{value:'reviewer'},'Independent reviewer'));
   const notice=el('p',{role:'status','aria-live':'polite',class:'small'}),download=el('button',{type:'button',class:'button',hidden:true,onclick:()=>{
     if(!secret||!current()||disposed)return;
-    const blob=new Blob([JSON.stringify(secret,null,2)+'\n'],{type:'application/json'}),url=URL.createObjectURL(blob);
-    const link=el('a',{href:url,download:'projects-git-trial-'+secret.role+'.json'});link.click();URL.revokeObjectURL(url);
+    downloadJson(secret,'projects-git-trial-'+secret.role+'.json');
   }},'Download private connection');
   const clear=()=>{secret=null;download.hidden=true;};
   async function call(path,body,key,identityKey) {
