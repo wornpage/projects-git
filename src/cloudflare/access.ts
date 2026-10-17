@@ -1,9 +1,10 @@
 import { createLocalJWKSet, jwtVerify } from 'jose';
 import type { JSONWebKeySet,JWTPayload } from 'jose';
 import { ApiError } from './security.ts';
+import type {TrialCredentialPrincipal} from './trial-credentials.ts';
 
-export interface AccessPolicy { issuer: string; audience: string; workspaceId: string; ownerSubject: string; agentClientIds: string[]; reviewerClientIds?: string[]; reviewerSubjects?: string[]; memberSubjects?: string[] }
-export interface AccessPrincipal { provider: 'cloudflare-access'; kind: 'owner' | 'agent' | 'reviewer' | 'member'; issuer: string; id: string; workspaceId: string; displayName: string; issuedAt: number; expiresAt: number }
+export interface AccessPolicy { issuer: string; audience: string; workspaceId: string; ownerSubject: string; agentClientIds: string[]; reviewerClientIds?: string[]; reviewerSubjects?: string[]; memberSubjects?: string[]; credentialProvider?:'trial-credential' }
+export type AccessPrincipal = { provider: 'cloudflare-access'; kind: 'owner' | 'agent' | 'reviewer' | 'member'; issuer: string; id: string; workspaceId: string; displayName: string; issuedAt: number; expiresAt: number } | TrialCredentialPrincipal;
 export interface SystemPrincipal { provider: 'internal'; kind: 'system'; issuer: string; id: 'workspace-alarm'; workspaceId: string; displayName: 'Workspace alarm' }
 export interface HostedAuthority { policy: AccessPolicy; principal: AccessPrincipal | SystemPrincipal; forbiddenSecrets?: string[] }
 export interface AccessEnvironment { ACCESS_TEAM_DOMAIN?: string; ACCESS_AUD?: string; ACCESS_OWNER_SUB?: string; ACCESS_AGENT_CLIENT_IDS?: string; ACCESS_REVIEWER_CLIENT_IDS?: string; ACCESS_REVIEWER_SUBJECTS?: string; ACCESS_MEMBER_SUBJECTS?: string; WORKSPACE_ID?: string }
@@ -130,8 +131,10 @@ export function assertAuthority(authority: HostedAuthority, workspaceId: string)
   if (!principal || !policy || principal.workspaceId !== workspaceId || policy.workspaceId !== workspaceId || principal.issuer !== policy.issuer) {
     throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The authenticated identity does not belong to this workspace.');
   }
+  const trialCredential=principal.provider==='trial-credential'&&policy.credentialProvider==='trial-credential'
+    &&/^trial-[a-f0-9]{64}$/.test(workspaceId)&&['agent','reviewer'].includes(principal.kind)&&principal.id===principal.kind+'-'+workspaceId;
   const valid = principal.kind === 'system' ? principal.provider === 'internal' && principal.id === 'workspace-alarm'
-    : principal.provider === 'cloudflare-access' && (principal.kind === 'owner' ? principal.id === policy.ownerSubject
+    : (principal.provider === 'cloudflare-access'||trialCredential) && (principal.kind === 'owner' ? principal.id === policy.ownerSubject
       : principal.kind === 'agent' ? policy.agentClientIds.includes(principal.id) && !policy.reviewerClientIds?.includes(principal.id)
       : principal.kind === 'reviewer' ? (Boolean(policy.reviewerClientIds?.includes(principal.id)) || Boolean(policy.reviewerSubjects?.includes(principal.id)))
         && !policy.agentClientIds.includes(principal.id)

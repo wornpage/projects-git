@@ -1,6 +1,6 @@
 import { dependencyState } from '../../public/task-dependencies.js';
 import { createHash } from 'node:crypto';
-import { independentReviewBinding, independentReviewStatus,repositoryObservationCurrent, automaticMergePolicyCurrent } from '../../public/review-boundary.js';
+import { independentReviewBinding, independentReviewStatus,repositoryObservationCurrent, automaticMergePolicyCurrent,authenticatedReviewer } from '../../public/review-boundary.js';
 export { independentReviewStatus } from '../../public/review-boundary.js';
 
 export class WorkflowError extends Error {
@@ -490,8 +490,7 @@ export function validateReviewAssessment(input, changedFiles) {
 }
 
 export function recordCodeReview(state, runId, input, identity, requestKey) {
-  requireThat(identity?.kind === 'reviewer' && identity.provider === 'cloudflare-access'
-    && identity.workspaceId === state.id && typeof identity.id === 'string' && identity.id.length > 0,
+  requireThat(authenticatedReviewer(state,identity),
   'reviewer_required', 'A separately authenticated reviewer is required.', 403);
   requireThat(!input || !['identity', 'reviewer', 'context', 'principal'].some(key => Object.hasOwn(input, key)),
     'identity_forged', 'Reviewer identity and review context are supplied by the server.', 422);

@@ -140,8 +140,9 @@ export class ArtifactGit {
     return newHead;
   }
 
-  async commitCandidate({ remote, token, defaultBranch, branch, baseCommit, files, context, beforePush }) {
+  async commitCandidate({ remote, token, defaultBranch, branch, baseCommit, files, context, beforePush, timestamp = Math.floor(Date.now() / 1000) }) {
     if (!oid(baseCommit) || !branchName(branch) || !branchName(defaultBranch)) throw new Error('Invalid pinned Git base or branch.');
+    if(!Number.isSafeInteger(timestamp)||timestamp<1)throw new Error('Invalid candidate timestamp.');
     if (!Array.isArray(files) || files.length !== 1 || files[0].path !== 'checkout.mjs' || typeof files[0].content !== 'string' || new TextEncoder().encode(files[0].content).byteLength > 65536) throw new Error('Hosted edits must stay inside the bounded checkout implementation.');
     const repo = memoryRepo();
     const http = gitHttp([{ remote, token }], { fetchImpl: this.fetchImpl });
@@ -150,10 +151,13 @@ export class ArtifactGit {
     await git.branch({ ...repo, ref: branch, checkout: true });
     repo.fs.writeFileSync('/repo/checkout.mjs', files[0].content, 'utf8');
     await git.add({ ...repo, filepath: 'checkout.mjs' });
-    const headCommit = await git.commit({ ...repo, message: `Implement task ${context.taskId} revision ${context.revision}\n\nRun: ${context.runId}`, author: { name: 'Projects Git agent', email: 'agent@projects.invalid' } });
-    await beforePush(headCommit);
+    const author={name:'Projects Git agent',email:'agent@projects.invalid',timestamp,timezoneOffset:0};
+    const headCommit = await git.commit({ ...repo, message: `Implement task ${context.taskId} revision ${context.revision}\n\nRun: ${context.runId}`, author,committer:author });
     const result = await git.push({ ...repo, http, url: remote, ref: branch, remoteRef: branch, force: false,
-      onPrePush: ({ localRef, remoteRef }) => localRef.oid === headCommit && remoteRef.oid === zero });
+      onPrePush: async ({ localRef, remoteRef }) => {
+        if(localRef.oid!==headCommit||remoteRef.oid!==zero)return false;
+        await beforePush(headCommit);return true;
+      } });
     assertPush(result, branch);
     return headCommit;
   }

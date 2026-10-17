@@ -1,4 +1,11 @@
 // Shared, deterministic context for the server gate and its read-only UI.
+export function authenticatedReviewer(workspace,identity) {
+  if(identity?.kind!=='reviewer'||identity.workspaceId!==workspace.id||typeof identity.id!=='string'||!identity.id)return false;
+  if(identity.provider==='cloudflare-access')return true;
+  const issuer=workspace.authentication?.issuer??workspace.authentication?.principal?.issuer;
+  return identity.provider==='trial-credential'&&workspace.provider==='cloudflare-artifacts'&&/^trial-[a-f0-9]{64}$/.test(workspace.id)
+    &&identity.id==='reviewer-'+workspace.id&&typeof issuer==='string'&&identity.issuer===issuer;
+}
 export function automaticMergePolicyCurrent(workspace, project) {
   const policy = project?.automaticMergePolicy, owner = workspace.authentication;
   return Boolean(workspace.provider === 'cloudflare-artifacts' && owner && policy?.enabled
@@ -41,8 +48,7 @@ export function independentReviewStatus(workspace, run) {
   if (!assignment || review.assignmentId !== assignment.id || !assignment.reviewerIds.includes(identity?.id)) {
     return {state:'historical',passed:false,label:'A current reviewer assignment and assessment are required'};
   }
-  const independent = identity?.kind === 'reviewer' && identity.workspaceId === workspace.id
-    && identity.provider === 'cloudflare-access'
+  const independent = authenticatedReviewer(workspace,identity)
     && !workspace.runs.some(other => other.taskId === run.taskId && other.agentIdentity?.id === identity.id && other.agentIdentity?.issuer === identity.issuer);
   if (!independent) return { state: 'invalid', passed: false, label: 'Independent reviewer identity required' };
   if (run.verificationPending || !repositoryObservationCurrent(workspace,run)

@@ -36,7 +36,7 @@ async function readPrivate(file, limit = 1048576) {
   return parseJson(await readBounded(file, limit, 'Private client state'), 'Private client state');
 }
 
-async function readPrivateInput(filename, limit, label) {
+export async function readPrivateInput(filename, limit, label) {
   if (typeof filename !== 'string' || !path.isAbsolute(filename)) throw new Error(label + ' must name an absolute private JSON file.');
   const parent = await realpath(path.dirname(filename));
   for (let directory = parent; ; directory = path.dirname(directory)) {

@@ -1,4 +1,6 @@
-export interface AuthenticatedIdentity { provider: 'cloudflare-access'; kind: 'owner' | 'agent' | 'reviewer' | 'member'; issuer: string; id: string; workspaceId: string; displayName: string }
+export type AuthenticatedIdentity = {issuer:string;id:string;workspaceId:string;displayName:string} & (
+  {provider:'cloudflare-access';kind:'owner'|'agent'|'reviewer'|'member'} |
+  {provider:'trial-credential';kind:'agent'|'reviewer'});
 export interface CodeReviewFinding { id: string; title: string; body: string; priority: 0 | 1 | 2 | 3; location: { path: string; side: 'head' | 'base'; startLine: number; endLine: number }; evidence: string; oid?: string }
 export interface CodeReview { repositoryAccessVersion?: number; id: string; at: string; assignmentId?: string; format?: 'projects-code-review-assessment/v2'; contextId: string; context: Record<string, unknown>; verdict: 'pass' | 'changes_requested'; summary?: string; findings: CodeReviewFinding[] | string; resolvedPriorFindingIds?: string[]; unresolvedFindingIds?: string[]; identity: AuthenticatedIdentity }
 export interface ReviewAssignment { id: string; at: string; sourceContextId: string; contextId?: string; reviewerIds: string[]; identity: AuthenticatedIdentity }
