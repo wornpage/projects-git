@@ -11,6 +11,9 @@ import {ArtifactEventReceipts} from '../src/cloudflare/artifact-events.ts';
 import {ArtifactSubscriptions} from '../src/cloudflare/artifact-subscriptions.ts';
 import {sqliteStorage} from './helpers/sqlite-store.mjs';
 import {testAuthority,AGENT_CLIENT,REVIEWER_CLIENT} from './helpers/hosted-authority.mjs';
+import {createWorkspace} from '../src/core/workflow.mjs';
+import {buildWorkspaceBackup} from '../src/core/workspace-backup.mjs';
+import {WORKSPACE_BACKUP_REQUEST_BYTES} from '../public/workspace-backup-limits.js';
 
 const file=new URL('../src/cloudflare/index.ts',import.meta.url),require=createRequire(file),module={exports:{}};
 const compiled=transformSync(readFileSync(file,'utf8'),{loader:'ts',format:'cjs',target:'es2022'}).code;
@@ -21,6 +24,20 @@ const handler=module.exports.createAuthenticatedFetch(new AccessVerifier(async()
 function fixture(){const calls=[],assets=[];return{calls,assets,env:{ACCESS_TEAM_DOMAIN:policy.issuer,ACCESS_AUD:policy.audience,ACCESS_OWNER_SUB:policy.ownerSubject,ACCESS_AGENT_CLIENT_IDS:JSON.stringify(policy.agentClientIds),WORKSPACE_ID:policy.workspaceId,
   WORKSPACES:{getByName:id=>{calls.push({id});return{api:call=>{calls.push({call});return Response.json({ok:true});}};}},ASSETS:{fetch:request=>{assets.push(request.url);return new Response('static');}}}};}
 async function request(path,token,body,headers={}){return new Request('https://workspace.example.test'+path,{method:body===undefined?'GET':'POST',headers:{...(token?{'Cf-Access-Jwt-Assertion':token}:{}),...(body!==undefined?{'Content-Type':'application/json','Idempotency-Key':'http-contract-request'}:{}),...headers},body:body===undefined?undefined:JSON.stringify(body)});}
+
+test('valid larger workspace archives cross the owner HTTP tier intact while oversized requests never dispatch',async()=>{
+  const workspace={...createWorkspace({id:policy.workspaceId,provider:'cloudflare-artifacts'}),projects:{}};
+  workspace.events=Array.from({length:4000},()=>({id:crypto.randomUUID(),at:'2026-10-16T12:00:00.000Z',type:'workspace.observed',message:'x'.repeat(300)}));
+  const archive=await buildWorkspaceBackup({workspace,revision:1,repositories:{},forks:{},operations:{},jobs:{},checkPolicies:{}},undefined,
+    {capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
+  const body={archive,expectedSha256:archive.sha256};assert.ok(Buffer.byteLength(JSON.stringify(body))>1100*1024);
+  const f=fixture(),token=await jwt();
+  assert.equal((await handler(await request('/api/workspace/backup-preview',token,body),f.env)).status,200);
+  assert.deepEqual(f.calls[1].call.body,body);
+  const refused=fixture();
+  assert.equal((await handler(await request('/api/workspace/backup-preview',token,{padding:'x'.repeat(WORKSPACE_BACKUP_REQUEST_BYTES)}),refused.env)).status,413);
+  assert.deepEqual(refused.calls,[]);
+});
 
 test('display-name writes retain the owner-only Worker boundary for agents and both reviewer kinds',async()=>{
   const f=fixture();f.env.ACCESS_REVIEWER_CLIENT_IDS=JSON.stringify([REVIEWER_CLIENT]);f.env.ACCESS_REVIEWER_SUBJECTS=JSON.stringify(['human-reviewer']);

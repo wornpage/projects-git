@@ -160,13 +160,13 @@ permissions before live work. This draft provides no bypass for those decisions.
 
 ## Limits and qualification
 
-Metadata and each CLI JSON input are limited to 1 MiB. The archive supports
-16 projects, 64 recovery resources, 256 task records, 512 candidate records,
+Metadata and each CLI JSON input are limited to 4 MiB. The archive supports
+32 current projects, 80 current and historical projects in total, 64 recovery resources, 256 task records, 512 candidate records,
 2,000 operation receipts, 10,000 event records, 512 check policies, 1,024 Git
 mappings and 512 job records. Record limits include current and imported history.
 Artifacts ledgers are additionally limited to 128 subscriptions, 4,096
 subscription attempts, 4,096 events, 16,384 event attempts and 4,096 delivery
-identities. The 1 MiB metadata limit applies to their combined serialized data,
+identities. The 4 MiB metadata limit applies to their combined serialized data,
 so large histories can reach the byte limit before these row-count ceilings.
 Each project supports 128 required commit roots. The aggregate encoded-object
 and expanded-object budgets are each 64 MiB, with at most 16,384 stored objects

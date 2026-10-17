@@ -23,7 +23,7 @@ test('ordinary JSON exports retain pretty formatting, trailing newline and the e
   assert.deepEqual(f.revoked,[]);f.timers[0].callback();assert.deepEqual(f.revoked,['blob:json-fixture-1']);
 });
 
-test('actual compact backup Blob at the exact 1 MiB admission limit round-trips without padding or newline',async t=>{
+test('actual compact backup Blob at the exact archive admission limit round-trips without padding or newline',async t=>{
   const workspace={...createWorkspace({id:'download-boundary',provider:'cloudflare-artifacts'}),projects:{}};
   workspace.events=Array.from({length:4000},()=>({id:crypto.randomUUID(),at:'2026-10-16T12:00:00.000Z',type:'workspace.observed',message:'x'.repeat(100)}));
   const snapshot={workspace,revision:0,repositories:{},forks:{},operations:{},jobs:{},checkPolicies:{}},at='2026-10-16T12:00:00.000Z';

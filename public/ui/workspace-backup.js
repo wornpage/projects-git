@@ -1,6 +1,6 @@
 import {el} from './dom.js';
 import {createWorkspaceRecoveryPanel} from './workspace-recovery.js';
-const MAX_BYTES=1024*1024;
+import {MAX_WORKSPACE_BACKUP_BYTES as MAX_BYTES,WORKSPACE_BACKUP_MIB,BACKUP_LIMITS} from '../workspace-backup-limits.js';
 const count=value=>Number.isSafeInteger(value)&&value>=0;
 export function readWorkspaceBackupPreview(result,expectedSha256){
   const c=result?.counts,keys=["currentProjects","historicalProjects","projects","currentOperations","historicalOperations","priorImports","resources","currentTasks","historicalTasks","tasks","currentRuns","historicalRuns","runs","currentEvents","historicalEvents","events","currentPolicies","historicalPolicies","policies","repositoryMappings","forkMappings","gitMappings","operations","operationReports","jobs","pendingOperations","unsettledJobs","artifactSubscriptions","pendingArtifactSubscriptions","artifactSubscriptionAttempts","pendingArtifactSubscriptionAttempts","artifactEvents","pendingArtifactEvents","artifactEventAttempts","pendingArtifactEventAttempts","artifactDeliveries","reservedArtifactSubscriptions","creatingArtifactSubscriptions","boundArtifactSubscriptions","readyArtifactSubscriptions","completedArtifactSubscriptionAttempts","failedArtifactSubscriptionAttempts","supersededArtifactSubscriptionAttempts","completedArtifactEvents","failedArtifactEvents","completedArtifactEventAttempts","failedArtifactEventAttempts","supersededArtifactEventAttempts","currentArtifactSubscriptions","historicalArtifactSubscriptions","currentArtifactSubscriptionAttempts","historicalArtifactSubscriptionAttempts","currentArtifactEvents","historicalArtifactEvents","currentArtifactEventAttempts","historicalArtifactEventAttempts","currentArtifactDeliveries","historicalArtifactDeliveries"];
@@ -40,8 +40,8 @@ export function createWorkspaceBackupPanel({getContext,captureSession,api,downlo
   async function inspect(file){
     if(!current()||busy||!file)return;busy=true;error='';preview=null;archive=null;const request=++selection;render();
     try{
-      if(!count(file.size)||file.size<2||file.size>MAX_BYTES)throw Error('Choose a complete backup JSON file, at most 1 MiB.');
-      const bytes=await file.slice(0,MAX_BYTES+1).arrayBuffer();if(bytes.byteLength>MAX_BYTES)throw Error('Backup file exceeds 1 MiB.');
+      if(!count(file.size)||file.size<2||file.size>MAX_BYTES)throw Error(`Choose a complete backup JSON file, at most ${WORKSPACE_BACKUP_MIB} MiB.`);
+      const bytes=await file.slice(0,MAX_BYTES+1).arrayBuffer();if(bytes.byteLength>MAX_BYTES)throw Error(`Backup file exceeds ${WORKSPACE_BACKUP_MIB} MiB.`);
       const selected=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));if(!current()||request!==selection)return;
       const result=await api('/api/workspace/backup-preview',{archive:selected,expectedSha256:selected.sha256});
       if(!current()||request!==selection)return;
@@ -82,7 +82,7 @@ export function createWorkspaceBackupPanel({getContext,captureSession,api,downlo
       recovery.root,
       el('details',{},el('summary',{},'Recover offline and understand the boundary'),
         el('p',{},'Use scripts/workspace-bundle.mjs from the source checkout to package every referenced commit from explicit local repositories. Record the returned manifest digest separately. Restore only to a new directory.'),
-        el('p',{},'Backup metadata is bounded at 1 MiB. Encoded and expanded Git objects each have an aggregate 64 MiB budget, with at most 16,384 objects. Limits include historical records. Exceeding a limit fails; nothing is silently truncated. A checksum proves integrity, not who created an archive.'),
+        el('p',{},`Backup metadata is bounded at ${WORKSPACE_BACKUP_MIB} MiB and ${BACKUP_LIMITS.currentProjects} current repositories. Current and historical records share the other limits. Encoded and expanded Git objects each have an aggregate 64 MiB budget, with at most 16,384 objects. Exceeding a limit fails; nothing is silently truncated. A checksum proves integrity, not who created an archive.`),
         el('p',{},'Credentials, access grants and runnable jobs are excluded. Historical decisions remain history. Unresolved receipts are retained; an expired lease does not prove an external process stopped. Reconnecting restored code to a live installation requires separate owner action and fresh authorization.'))].filter(Boolean));
   }
   render();return root;

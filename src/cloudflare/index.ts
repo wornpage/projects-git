@@ -9,6 +9,7 @@ import { HostedController } from "./controller.ts";
 import { WorkspaceStore } from './workspace-store.ts';
 import { parseWorkspacePage, projectMutationResult } from '../../public/workspace-page.js';
 import {parseProjectCatalog} from '../../public/project-catalog.js';
+import {WORKSPACE_BACKUP_REQUEST_BYTES} from '../../public/workspace-backup-limits.js';
 import {ArtifactEventReceipts,artifactEventPolicy,parseArtifactPush,parseArtifactPushEnvelope,reconcileArtifactPush} from './artifact-events.ts';
 import type {ArtifactEventSource} from './artifact-events.ts';
 import {ArtifactSubscriptions,subscriptionPlan,subscriptionDigest} from './artifact-subscriptions.ts';
@@ -438,7 +439,7 @@ export function createAuthenticatedFetch(verifier: AccessVerifier) {
       const mutation = request.method !== "GET" && request.method !== "HEAD";
       if (mutation) requireSameOrigin(request);
       const forbiddenSecrets = [request.headers.get('Cf-Access-Jwt-Assertion'), request.headers.get('CF-Access-Client-Secret'), env.MODEL_API_KEY].filter((value): value is string => Boolean(value));
-      const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/projects/restore','/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
+      const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? WORKSPACE_BACKUP_REQUEST_BYTES : url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
       const expectedWorkspace = request.headers.get('X-Workspace-Id') ?? body.expectedWorkspaceId;
       if (expectedWorkspace !== undefined && expectedWorkspace !== null && expectedWorkspace !== env.WORKSPACE_ID) throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The request targets a different workspace.');
       const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));

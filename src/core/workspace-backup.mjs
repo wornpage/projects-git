@@ -3,11 +3,10 @@ import {buildTaskHandoff,portableRepositoryObservation,portableRepositoryEvent} 
 import {archiveCommits} from './project-archive.mjs';
 import {operationTimings,timestamp} from './operation-timing.mjs';
 import {validateBackupHandoff,validateBackupCheckPolicy,portableBackupEvidence,validBackupEvidence,validBackupObservation,validBackupRepositoryEvent} from './backup-records.mjs';
+import {MAX_WORKSPACE_BACKUP_BYTES,WORKSPACE_BACKUP_MIB,BACKUP_LIMITS} from '../../public/workspace-backup-limits.js';
+export {MAX_WORKSPACE_BACKUP_BYTES,BACKUP_LIMITS} from '../../public/workspace-backup-limits.js';
 
 export const WORKSPACE_BACKUP_FORMAT='projects-git-workspace-backup/v1';
-export const MAX_WORKSPACE_BACKUP_BYTES=1024*1024;
-export const BACKUP_LIMITS=Object.freeze({projects:80,currentProjects:16,historicalProjects:64,resources:64,tasks:256,runs:512,operations:2000,events:10000,policies:512,gitMappings:1024,jobs:512,
-  artifactSubscriptions:128,artifactSubscriptionAttempts:4096,artifactEvents:4096,artifactEventAttempts:16384,artifactDeliveries:4096});
 const encoder=new TextEncoder(),hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const commit=value=>typeof value==='string'&&/^[a-f0-9]{40}$/.test(value);
 const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -97,7 +96,7 @@ function canonical(value,depth=0){
 }
 async function checksum(payload){
   const bytes=encoder.encode(canonical(payload));
-  if(bytes.byteLength>MAX_WORKSPACE_BACKUP_BYTES)refuse('Workspace backup exceeds 1 MiB; no records were truncated.');
+  if(bytes.byteLength>MAX_WORKSPACE_BACKUP_BYTES)refuse(`Workspace backup exceeds ${WORKSPACE_BACKUP_MIB} MiB; no records were truncated.`);
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(value=>value.toString(16).padStart(2,'0')).join('');
 }
 function operationValid(operation){
@@ -272,7 +271,7 @@ export async function buildWorkspaceBackup(snapshot,exportedAt=new Date().toISOS
 
 /** A digest proves integrity, never provenance or permission to act on historical receipts. */
 export async function readWorkspaceBackup(text,expectedSha256){
-  if(typeof text!=='string'||encoder.encode(text).byteLength>MAX_WORKSPACE_BACKUP_BYTES)refuse('Workspace backup must be JSON no larger than 1 MiB.');
+  if(typeof text!=='string'||encoder.encode(text).byteLength>MAX_WORKSPACE_BACKUP_BYTES)refuse(`Workspace backup must be JSON no larger than ${WORKSPACE_BACKUP_MIB} MiB.`);
   let archive;try{archive=JSON.parse(text);}catch{refuse('Workspace backup is not JSON.');}
   if(!fields(archive,['format','sha256','payload'])||archive.format!==WORKSPACE_BACKUP_FORMAT||!hash(expectedSha256)
     ||archive.sha256!==expectedSha256||await checksum(archive.payload)!==expectedSha256)refuse('Workspace backup checksum differs from the expected digest.');

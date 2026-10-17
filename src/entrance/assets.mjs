@@ -61,6 +61,7 @@ export const DEMO_ASSETS = Object.freeze([
   "webmcp.js",
   "workbench-actions.js",
   "workbench-state.js",
+  "workspace-backup-limits.js",
   "workspace-connection.js",
   "workspace-metrics.js",
   "workspace-page.js"

@@ -5,6 +5,7 @@ import {createWorkspace} from '../src/core/workflow.mjs';
 import {buildWorkspaceBackup,workspaceBackupPreview} from '../src/core/workspace-backup.mjs';
 import {createWorkspaceBackupPanel,canInspectWorkspaceBackup,readWorkspaceBackupPreview} from '../public/ui/workspace-backup.js';
 import {createApiClient} from '../public/api-client.js';
+import {MAX_WORKSPACE_BACKUP_BYTES} from '../public/workspace-backup-limits.js';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const testLedgers=()=>({capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
 const buildBackup=(snapshot,exportedAt)=>buildWorkspaceBackup(snapshot,exportedAt,testLedgers());
@@ -51,7 +52,7 @@ test('non-owner/demo views and oversized or malformed files cannot invoke recove
   assert.equal(canInspectWorkspaceBackup({demo:{},workspace:{authentication:{mode:'cloudflare-access',permissions:{manage:true}}}}),false);
   assert.equal(canInspectWorkspaceBackup({workspace:{authentication:{mode:'cloudflare-access',permissions:{manage:false}}}}),false);
   const calls=[],p=panel(async(...args)=>calls.push(args));
-  for(const file of [new Blob(['bad json']),{size:1024*1024+1,slice:()=>assert.fail('Oversized files must not be read')}]){
+  for(const file of [new Blob(['bad json']),{size:MAX_WORKSPACE_BACKUP_BYTES+1,slice:()=>assert.fail('Oversized files must not be read')}]){
     const input=p.root.querySelector('input');input.files=[file];await input.dispatch('change');assert.match(p.root.textContent,/Could not validate this backup/);
   }
   assert.deepEqual(calls,[]);

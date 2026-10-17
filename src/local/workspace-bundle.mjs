@@ -42,7 +42,7 @@ export async function writeWorkspaceBundle({archive,expectedArchiveSha256,source
   }
   await writeFile(path.join(root,'workspace.json'),JSON.stringify(archive),{flag:'wx',mode:0o600});
   const manifest={format:'projects-git-workspace-bundle/v1',archiveSha256:archive.sha256,sourceWorkspaceId:archive.payload.workspace.id,resources:entries},bytes=JSON.stringify(manifest);
-  if(Buffer.byteLength(bytes)>MAX_WORKSPACE_BACKUP_BYTES)refuse('Manifest exceeds 1 MiB.');
+  if(Buffer.byteLength(bytes)>MAX_WORKSPACE_BACKUP_BYTES)refuse('Manifest exceeds the workspace metadata byte limit.');
   await writeFile(path.join(root,'manifest.json'),bytes,{flag:'wx',mode:0o600});
   return {directory:root,manifestSha256:digest(bytes),archiveSha256:archive.sha256,projects:archive.payload.projects.length,resources:resources.length,
     encodedBytes:MAX_RECOVERY_GIT_BYTES-allowance.remainingArchiveBytes,expandedBytes:MAX_RECOVERY_GIT_BYTES-allowance.remainingBytes,
