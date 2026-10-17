@@ -274,6 +274,30 @@ test('two clients sharing a connection refuse overlap before a second provider r
  assert.equal(f.requests.filter(item=>item.method==='POST').length,1);
 });
 
+test('claim retains its one-time credential when a competing run admission pauses at the former race boundary',async t=>{
+ const f=await fixture(t),claimEntered=Promise.withResolvers(),releaseClaim=Promise.withResolvers(),runAcquired=Promise.withResolvers(),releaseRun=Promise.withResolvers();
+ const claimant=new HostedAgentClient(f.connection,{fetchImpl:async(url,options)=>{
+   if(options.method==='POST'){claimEntered.resolve();await releaseClaim.promise;}
+   return f.fetchImpl(url,options);
+ }});
+ const competing=new HostedAgentClient(f.connection,{fetchImpl:()=>assert.fail('competing command must not contact a provider')});
+ const acquire=competing.locks.acquire.bind(competing.locks);let touchedRun=false;
+ competing.locks.acquire=async(...args)=>{
+   await acquire(...args);
+   if(args[1]==='run-'+run){touchedRun=true;runAcquired.resolve();await releaseRun.promise;}
+ };
+ const settled=promise=>promise.then(result=>({result}),error=>({error}));
+ const claim=settled(claimant.claim(project,'Builder',requestId));await claimEntered.promise;
+ const start=settled(competing.mutate('start',run,{},crypto.randomUUID()));
+ await Promise.race([runAcquired.promise,start]);
+ releaseClaim.resolve();const claimResult=await claim;releaseRun.resolve();const competingResult=await start;
+ assert.equal(claimResult.error,undefined);assert.equal(claimResult.result.credentialStatus,'saved-privately');
+ assert.match(competingResult.error.message,/claim is still retaining/);assert.equal(touchedRun,false);
+ const saved=JSON.parse(await readFile(path.join(f.connection.stateDirectory,'runs',run+'.json')));
+ assert.equal(saved.credentials.token,f.credentials.token);
+ assert.equal(f.requests.filter(item=>item.method==='POST').length,1);assert.equal((await f.client.execute('locks')).total,0);
+});
+
 test('a terminated CLI operation retains uncertainty; local release and explicit reconciliation never repeat its effect', {timeout:15000},async t=>{
  const f=await fixture(t),key=crypto.randomUUID(),moduleUrl=new URL('../src/local/hosted-agent-client.mjs',import.meta.url).href;
  const source=`import {HostedAgentClient,loadHostedConnection} from ${JSON.stringify(moduleUrl)};

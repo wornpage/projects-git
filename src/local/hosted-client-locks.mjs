@@ -103,14 +103,19 @@ export class HostedClientLocks {
     return this.context.run(context, async () => {
       try {
         await this.acquire(path.join(this.directory, 'request-' + requestId), 'request-' + requestId, context);
-        if (runId) await this.acquire(path.join(this.directory, 'run-' + runId), 'run-' + runId, context);
         if (command === 'claim') {
           await this.acquire(path.join(this.directory, 'claim'), 'claim', context);
-          if ((await readdir(this.directory)).some(name => name.startsWith('run-') && resourceName(name)))
+          // A request directory is the admission marker, even before its owner
+          // metadata or run lock is ready. Reject before issuing a credential.
+          if ((await readdir(this.directory)).some(name => resourceName(name)
+            && (name.startsWith('run-') || name.startsWith('request-') && name !== 'request-' + requestId)))
             fail('An assignment operation is active in this connection. Finish or inspect it before an explicit claim.');
         } else {
+          // Register the request first, then check the barrier BEFORE taking a
+          // run lock. A claim either sees our marker or we see its barrier.
           try { await lstat(path.join(this.directory, 'claim')); fail('A claim is still retaining its issued-once credential. Inspect local locks before continuing.'); }
           catch (error) { if (error.code !== 'ENOENT') throw error; }
+          if (runId) await this.acquire(path.join(this.directory, 'run-' + runId), 'run-' + runId, context);
         }
         return await action();
       } finally {
@@ -166,13 +171,18 @@ export class HostedClientLocks {
 
   async releaseDirectory(directory, resource, expected) {
     const retired = directory + '.released-' + expected.lockId;
-    let location = directory, observed;
-    try { observed = await this.owner(directory, resource); }
-    catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-      try { observed = await this.owner(retired, resource); location = retired; }
-      catch (retiredError) { if (retiredError.code === 'ENOENT') return false; throw retiredError; }
-    }
+    const presentOwner = async location => {
+      try { return await this.owner(location, resource); }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        try { await lstat(location); }
+        catch (missing) { if (missing.code === 'ENOENT') return null; throw missing; }
+        fail('An existing local lock has incomplete ownership metadata. Preserve its request anchor and inspect it manually.');
+      }
+    };
+    let location = directory, observed = await presentOwner(directory);
+    if (!observed) { location = retired; observed = await presentOwner(retired); }
+    if (!observed) return false;
     const matches = () => observed.value.lockId === expected.lockId && observed.value.requestId === expected.requestId;
     if (!matches()) return false; // A later operation owns the canonical path; do not touch it.
     if (localProcessState(observed.value.pid) !== 'stopped') fail('The lock owner is running or cannot be confirmed stopped. No local lock was released.');

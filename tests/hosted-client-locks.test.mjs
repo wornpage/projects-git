@@ -92,6 +92,22 @@ test('claim blocks assignment operations until issued-once credential retention 
   assert.equal((await other.inspect()).total, 0);
 });
 
+test('claim admission sees an earlier request before that request acquires its run lock', async t => {
+  const f = await fixture(t), entered = Promise.withResolvers(), release = Promise.withResolvers();
+  const original = f.locks.acquire.bind(f.locks);
+  f.locks.acquire = async (...args) => {
+    await original(...args);
+    if (args[1] === 'request-' + f.requestId) {entered.resolve(); await release.promise;}
+  };
+  const operation = f.locks.run('start', f.requestId, f.runId, () => 'started');
+  await entered.promise;
+  try {
+    const claim = new HostedClientLocks(f.directory, scope);
+    await assert.rejects(claim.run('claim', randomUUID(), null, () => assert.fail('credential must not be issued')), /assignment operation is active/);
+  } finally {release.resolve(); assert.equal(await operation, 'started');}
+  assert.equal((await f.locks.inspect()).total, 0);
+});
+
 test('checkout/start and submit/push share a root owner; unrelated nesting and escaped callbacks refuse', async t => {
   const f = await fixture(t); let late;
   await f.locks.run('checkout', f.requestId, f.runId, async () => {
@@ -131,6 +147,17 @@ test('old nonce release cannot remove a later operation on the same checkout', {
   await second.stop();
 });
 
+test('an existing physical lock with missing ownership metadata preserves connection recovery anchors', {timeout: 15000}, async t => {
+  const f = await fixture(t), child = await childOwner(t, f, f.checkout), lockId = child.inventory.locks[0].lockId;
+  await child.stop();
+  const physical = path.join(f.checkout, '.git', 'projects-git-client.lock');
+  await unlink(path.join(physical, 'owner.json'));
+  await assert.rejects(f.locks.release(f.requestId, lockId, f.checkout), /incomplete ownership metadata/);
+  assert.deepEqual(await readdir(physical), []);
+  const inventory = await f.locks.inspect();
+  assert.equal(inventory.total, 2); assert.ok(inventory.locks.every(lock => lock.lockId === lockId));
+});
+
 test('simultaneous explicit release never doubles removal or touches unrelated files', {timeout: 15000}, async t => {
   const f = await fixture(t), child = await childOwner(t, f, f.checkout), lockId = child.inventory.locks[0].lockId;
   await child.stop(); await writeFile(path.join(f.checkout, 'keep.txt'), 'keep');
@@ -166,7 +193,7 @@ test('an interrupted pre-rename release guard and unknown contents require inspe
 test('unreadable, foreign and hardlinked metadata are preserved rather than treated as stale', {timeout: 15000}, async t => {
   const f = await fixture(t), child = await childOwner(t, f), owner = child.inventory.locks[0]; await child.stop();
   const file = path.join(f.directory, 'locks', owner.resource, 'owner.json'), original = await readFile(file, 'utf8');
-  for (const content of ['{broken', JSON.stringify({...owner, scopeSha256: 'foreign'})]) {
+  for (const content of ['{broken', JSON.stringify({...JSON.parse(original), scopeSha256: 'foreign'})]) {
     await writeFile(file, content);
     assert.equal((await f.locks.inspect()).unreadable, 1);
     await assert.rejects(f.locks.run('start', f.requestId, f.runId, () => assert.fail()), /Another local operation/);
