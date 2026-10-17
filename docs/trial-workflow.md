@@ -62,10 +62,13 @@ export and cleanup before describing the hosted trial as ready.
 On 2026-10-17, the Wrangler credential could not administer Access (HTTP 403 /
 code 1010). The authenticated dashboard subsequently created a separate trial
 application with no allow policy, and the trial Worker was deployed behind it.
-The staged pilot permits 2 new trials per day and 5 total, with 5 active at most;
+The pilot permits 2 new trials per day and 5 total, with 5 active at most;
 the private workspace's Access, deployed version and bindings were preserved.
-Public activation, real email login and hosted workflow qualification remain
-separate from the local proof. No hosted signup success is claimed here.
+The owner approved activation: email-PIN signup is enabled at
+`https://try-git.projectsdemo.org/trial/signup`. Only `/agent/api/*` is exempt from
+browser login; the Worker requires a valid role/workspace-scoped trial token and
+rejects anonymous or invalid credentials. Real email login and the authenticated
+hosted workflow still need qualification. No hosted signup success is claimed here.
 
 ## Local validation
 
