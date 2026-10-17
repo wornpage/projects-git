@@ -59,9 +59,13 @@ Access. Configure bounded resource approval and edge abuse controls before openi
 traffic. Verify actual hosted signup, two-user isolation, check limits, revocation,
 export and cleanup before describing the hosted trial as ready.
 
-On 2026-10-17, creating the dedicated Access app returned HTTP 403 / code 1010:
-the available Wrangler credential lacked Access administration permission. No
-Access app was created or changed. Source completion does not remove that blocker.
+On 2026-10-17, the Wrangler credential could not administer Access (HTTP 403 /
+code 1010). The authenticated dashboard subsequently created a separate trial
+application with no allow policy, and the trial Worker was deployed behind it.
+The staged pilot permits 2 new trials per day and 5 total, with 5 active at most;
+the private workspace's Access, deployed version and bindings were preserved.
+Public activation, real email login and hosted workflow qualification remain
+separate from the local proof. No hosted signup success is claimed here.
 
 ## Local validation
 
