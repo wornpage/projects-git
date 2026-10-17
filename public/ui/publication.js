@@ -90,6 +90,13 @@ export function createPublicationView({getContext, captureSession, api, mutate, 
 
   return function publicationPanel(task,run) {
     const {workspace,busy}=getContext();
+    if(workspace.trial){
+      if(!workspace.trial.workflowReady||run.status!=='merged'||!workspace.authentication?.permissions.manage)return null;
+      return panel('Keep your trial work',el('div',{class:'panel-body publication-panel'},
+        el('p',{},'Download your source snapshots and recorded workflow history before closing the trial.'),
+        el('a',{class:'button button-small',href:'/api/trial/export'},'Export source & history'),
+        el('p',{class:'small'},'Up to 3 export attempts, including failures. Closing the trial ends export access.')));
+    }
     if(workspace.provider==='cloudflare-artifacts'&&run.status==='merged'&&workspace.authentication?.permissions.manage&&downloadHandoff)
       return panel('Deliver to GitHub from your machine',el('div',{class:'panel-body publication-panel'},
         el('p',{},'Export this merged task, then use the operator-local delivery CLI with your exact Git objects and a private GitHub target. GitHub credentials stay on your machine.'),

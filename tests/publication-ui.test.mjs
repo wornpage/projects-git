@@ -38,6 +38,15 @@ test('hosted owner receives an export and local instructions, with no GitHub req
   f.context.workspace.authentication.permissions.manage=false;assert.equal(render(f.task,f.run),null);
 });
 
+test('merged trial work offers its source/history export instead of GitHub delivery',()=>{
+  const f=fixture();f.context.workspace.provider='cloudflare-artifacts';
+  f.context.workspace.trial={workflowReady:true};f.context.workspace.authentication={permissions:{manage:true}};
+  const view=f.render(f.task,f.run);assert.equal(view.querySelector('a').attrs.href,'/api/trial/export');
+  assert.match(view.textContent,/3 export attempts/);assert.doesNotMatch(view.textContent,/GitHub|local delivery/);assert.equal(f.calls.length,0);
+  f.context.workspace.authentication.permissions.manage=false;assert.equal(f.render(f.task,f.run),null);
+  f.context.workspace.authentication.permissions.manage=true;f.context.workspace.trial.workflowReady=false;assert.equal(f.render(f.task,f.run),null);
+});
+
 test('preview and explicit confirmation are separate; double clicks send one stable publication request',async()=>{
   const f=fixture(),view=f.render(f.task,f.run),pending=button(view,'Preview GitHub PR').dispatch('click');
   assert.equal(f.calls.length,1);assert.ok(f.calls[0].path.endsWith('/preview'));

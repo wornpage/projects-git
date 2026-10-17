@@ -71,8 +71,9 @@ application with no allow policy, and the trial Worker was deployed behind it.
 The pilot permits 2 new trials per day and 5 total, with 5 active at most;
 the private workspace's Access, deployed version and bindings were preserved.
 The owner approved activation: email-PIN signup is enabled at
-`https://try-git.projectsdemo.org/trial/signup`. Only `/agent/api/*` is exempt from
-browser login; the Worker requires a valid role/workspace-scoped trial token and
+`https://try-git.projectsdemo.org/trial/signup`. The introduction and its static
+assets are public. `/agent/api/*` uses application authentication instead of browser
+login; the Worker requires a valid role/workspace-scoped trial token and
 rejects anonymous or invalid credentials. Real email login, trial reservation,
 sample repository/task creation, and connection issuance/revocation have been
 verified on the deployed pilot. A manually implemented qualification candidate was
