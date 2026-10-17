@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createProjectsGitWebMcp,PROJECTS_GIT_WEBMCP_TOOLS} from '../public/webmcp.js';
+import {parseProjectCatalog} from '../public/project-catalog.js';
 import {projectOperationalMetrics} from '../src/core/operational-metrics.mjs';
+import {HostedController} from '../src/cloudflare/controller.ts';
+import {WorkspaceStore} from '../src/cloudflare/workspace-store.ts';
+import {sqliteStorage} from './helpers/sqlite-store.mjs';
+import {testAuthority} from './helpers/hosted-authority.mjs';
 
 const WORKSPACE='workspace-private',PROJECT='10000000-0000-4000-8000-000000000001',TASK='20000000-0000-4000-8000-000000000002',RUN='30000000-0000-4000-8000-000000000003';
 const BASE='a'.repeat(40),HEAD='b'.repeat(40);
 function context(){return {demo:false,workspace:{id:WORKSPACE,provider:'cloudflare-artifacts',authentication:{mode:'cloudflare-access',principal:{kind:'owner',id:'owner-subject',issuer:'https://fixture.cloudflareaccess.com',workspaceId:WORKSPACE}}}};}
-function catalog(){return {workspaceId:WORKSPACE,query:'',revision:7,total:1,matched:1,offset:0,limit:20,previousOffset:null,nextOffset:null,scope:'accessible-project-names',items:[{id:PROJECT,name:'Private repository',taskCount:1,candidateCount:1}]};}
+function catalog(scope='project-names-across-workspace'){return {workspaceId:WORKSPACE,query:'',revision:7,total:1,matched:1,offset:0,limit:20,previousOffset:null,nextOffset:null,scope,items:[{id:PROJECT,name:'Private repository',taskCount:1,candidateCount:1}]};}
 function page(criteria=['Expected result']){return {id:WORKSPACE,provider:'cloudflare-artifacts',sourceRevision:7,version:4,authentication:{SECRET_AUTH:'excluded'},projects:{[PROJECT]:{id:PROJECT,name:'Private repository',mainCommit:BASE,defaultBranch:'main',acceptingWork:true,codeConnected:true}},
   tasks:[{id:TASK,projectId:PROJECT,title:'Retained task',purpose:'Inspect status',criteria,status:'review',createdAt:'2026-10-16T00:00:00.000Z',revision:2,baseCommit:BASE,acceptedRunId:null,mergedCommit:null,dependsOn:[]}],
   runs:[{id:RUN,taskId:TASK,label:'Candidate',agent:'external',origin:'external-agent',status:'awaiting_review',baseCommit:BASE,headCommit:HEAD,startedAt:'2026-10-16T00:01:00.000Z',finishedAt:'2026-10-16T00:02:00.000Z',changedFiles:['src/app.js'],diff:'SECRET_DIFF',agentIdentity:{id:'SECRET_IDENTITY'},summary:'Retained candidate summary',evidence:null,review:null,codeReview:null}],events:[{message:'SECRET_EVENT'}],
@@ -51,6 +56,7 @@ test('native async registration exposes exactly four annotated same-origin read 
 test('tools use only fixed GET routes and return safe complete denominators',async()=>{
   const h=harness();await h.manager.sync();const repositories=parsed(await h.modelContext.tools.get(PROJECTS_GIT_WEBMCP_TOOLS[0]).execute({q:'',offset:0,limit:20},{}));
   assert.deepEqual(h.paths,['/api/projects/catalog?q=&offset=0&limit=20']);assert.equal(repositories.page.totalRepositories,1);assert.equal(repositories.repositories[0].candidateCount,1);
+  assert.equal(repositories.sourceScope,'project-names-across-workspace');
   const project=parsed(await h.modelContext.tools.get(PROJECTS_GIT_WEBMCP_TOOLS[1]).execute({projectId:PROJECT,at:7},{}));
   assert.equal(h.paths[1],`/api/workspace?limit=1&project=${PROJECT}&at=7`);assert.equal(project.page.scope,'complete-selected-project');assert.deepEqual(project.counts,{tasks:1,candidates:1});
   const task=parsed(await h.modelContext.tools.get(PROJECTS_GIT_WEBMCP_TOOLS[2]).execute({taskId:TASK},{}));
@@ -61,10 +67,35 @@ test('tools use only fixed GET routes and return safe complete denominators',asy
   assert.ok(h.paths.every(path=>path.startsWith('/api/')));assert.ok(h.paths.every(path=>!path.includes('http')&&!path.includes('..')));
 });
 
+test('real hosted owner and member catalogs retain their explicit denominator scopes through the tool',async t=>{
+  const {db,storage}=sqliteStorage();t.after(()=>db.close());const store=new WorkspaceStore(storage,WORKSPACE),ownerAuthority=testAuthority(WORKSPACE);
+  ownerAuthority.policy.memberSubjects=['member-person'];const owner=new HostedController(store,{},ownerAuthority),state=store.read(),denied='10000000-0000-4000-8000-000000000009';
+  state.workspace.projects[PROJECT]={id:PROJECT,name:'Shared repository',mainCommit:BASE,access:{version:1,grants:[{kind:'member',id:'member-person',role:'read',issuer:ownerAuthority.policy.issuer}],
+    updatedAt:'2026-10-16T00:00:00.000Z',updatedBy:ownerAuthority.principal.id}};
+  state.workspace.projects[denied]={id:denied,name:'Owner repository',mainCommit:BASE};state.workspace.tasks.push({id:TASK,projectId:PROJECT});state.workspace.runs.push({id:RUN,taskId:TASK});
+  const expected=state.revision;state.revision++;store.write(state,expected);
+  const invoke=controller=>async path=>controller.projectCatalog(parseProjectCatalog(new URL('https://workspace.example.test'+path).search));
+  const ownerTools=harness({api:invoke(owner)});await ownerTools.manager.sync();
+  const ownerResult=parsed(await ownerTools.modelContext.tools.get(PROJECTS_GIT_WEBMCP_TOOLS[0]).execute({},{}));
+  assert.equal(ownerResult.sourceScope,'project-names-across-workspace');assert.equal(ownerResult.page.totalRepositories,2);assert.equal(ownerResult.repositories.length,2);
+
+  const memberAuthority=structuredClone(ownerAuthority);memberAuthority.principal={...memberAuthority.principal,kind:'member',id:'member-person',displayName:'member@example.test'};
+  const member=new HostedController(store,{},memberAuthority),memberContext=context();memberContext.workspace.authentication.principal=structuredClone(memberAuthority.principal);
+  const memberTools=harness({ctx:memberContext,api:invoke(member)});await memberTools.manager.sync();
+  const memberResult=parsed(await memberTools.modelContext.tools.get(PROJECTS_GIT_WEBMCP_TOOLS[0]).execute({},{}));
+  assert.equal(memberResult.sourceScope,'accessible-project-names');assert.equal(memberResult.page.totalRepositories,1);
+  assert.deepEqual(memberResult.repositories.map(item=>item.id),[PROJECT]);
+});
+
 test('closed schemas and invalid arguments fail before I/O',async()=>{
   const h=harness();await h.manager.sync();for(const [name,args] of [[PROJECTS_GIT_WEBMCP_TOOLS[0],{limit:0}],[PROJECTS_GIT_WEBMCP_TOOLS[0],{url:'https://elsewhere.invalid'}],
     [PROJECTS_GIT_WEBMCP_TOOLS[1],{projectId:'bad'}],[PROJECTS_GIT_WEBMCP_TOOLS[2],{taskId:TASK,command:'git push'}],[PROJECTS_GIT_WEBMCP_TOOLS[3],{}]])
     await assert.rejects(h.modelContext.tools.get(name).execute(args,{}));assert.deepEqual(h.paths,[]);
+});
+
+test('catalog rejects unrecognized denominator scopes',async()=>{
+  const h=harness();h.responses.catalog=catalog('all-projects');await h.manager.sync();
+  await assert.rejects(h.modelContext.tools.get(PROJECTS_GIT_WEBMCP_TOOLS[0]).execute({},{}),/incomplete/);assert.equal(h.paths.length,1);
 });
 
 test('operational metrics recursively omit unknown backend fields and reject unknown outcomes',async()=>{
