@@ -2,13 +2,16 @@ import {mkdir,readFile,writeFile,lstat,realpath} from 'node:fs/promises';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {RepositoryRunner} from './repository-runner.mjs';
+import {captureGitObjects,readGitObjects,installGitObjects} from './git-object-capsule.mjs';
 import {readWorkspaceBackup,workspaceBackupPreview,MAX_WORKSPACE_BACKUP_BYTES} from '../core/workspace-backup.mjs';
 
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
-const MAX_GIT_BYTES=64*1024*1024,MAX_OBJECTS=16384;
+export const MAX_RECOVERY_GIT_BYTES=64*1024*1024,MAX_RECOVERY_OBJECTS=16384;
+const budget=()=>({remainingBytes:MAX_RECOVERY_GIT_BYTES,remainingObjects:MAX_RECOVERY_OBJECTS,remainingArchiveBytes:MAX_RECOVERY_GIT_BYTES});
 const refuse=message=>{throw Error('Workspace bundle: '+message);};
-const refs=project=>Object.fromEntries([['refs/heads/recovered-main',project.mainCommit],...project.commits.map(hash=>['refs/projects-backup/'+hash,hash])]);
-const dirname=index=>'project-'+String(index).padStart(3,'0');
+const anchorRef=resource=>resource.kind==='project'?'refs/heads/recovered-main':'refs/heads/recovered-anchor';
+const refs=resource=>Object.fromEntries([[anchorRef(resource),resource.anchorCommit],...resource.commits.map(hash=>['refs/projects-backup/'+hash,hash])]);
+const dirname=index=>'resource-'+String(index).padStart(3,'0');
 async function freshDirectory(directory){
   const root=path.resolve(directory);await mkdir(root,{mode:0o700});
   if(await realpath(root)!==root)refuse('Destination must not be redirected.');return root;
@@ -19,75 +22,69 @@ async function boundedFile(root,name,limit){
   const bytes=await readFile(file);if(bytes.length>limit)refuse('A package file grew beyond its limit.');return bytes;
 }
 
-/** Local sources only. Never clones, fetches a URL, reads credentials or runs imported checks. */
+/** Local object-only sources; no submission walker, fetch, checkout, credentials or imported checks. */
 export async function writeWorkspaceBundle({archive,expectedArchiveSha256,sources,directory}){
   archive=await readWorkspaceBackup(JSON.stringify(archive),expectedArchiveSha256);
-  const projects=archive.payload.projects;
-  if(!sources||typeof sources!=='object'||Array.isArray(sources)||Object.keys(sources).length!==projects.length
-    ||projects.some(project=>!Object.hasOwn(sources,project.id)))refuse('Supply exact local source mappings for every project.');
-  for(const project of projects){
-    const rows=sources[project.id];
-    if(!rows||typeof rows!=='object'||Array.isArray(rows)||Object.keys(rows).length!==project.commits.length
-      ||project.commits.some(hash=>!Object.hasOwn(rows,hash)||typeof rows[hash]!=='string'||!path.isAbsolute(rows[hash])))refuse('Every referenced commit needs an explicit absolute local source.');
+  const resources=archive.payload.resources;
+  if(!sources||typeof sources!=='object'||Array.isArray(sources)||Object.keys(sources).length!==resources.length
+    ||resources.some(resource=>!Object.hasOwn(sources,resource.id)))refuse('Supply exact local source mappings for every recovery resource.');
+  for(const resource of resources){
+    const rows=sources[resource.id];
+    if(!rows||typeof rows!=='object'||Array.isArray(rows)||Object.keys(rows).length!==resource.commits.length
+      ||resource.commits.some(hash=>!Object.hasOwn(rows,hash)||typeof rows[hash]!=='string'||!path.isAbsolute(rows[hash])))refuse('Every referenced commit needs an explicit absolute local source.');
   }
-  const root=await freshDirectory(directory),runner=new RepositoryRunner(root);await runner.initialize();
-  const budget={remainingBytes:MAX_GIT_BYTES,remainingObjects:MAX_OBJECTS,seen:new Set()},entries=[];
-  let totalBundleBytes=0;
-  for(const [index,project] of projects.entries()){
-    const name=dirname(index),directory=path.join(root,name),repository=path.join(directory,'objects.git');
-    await mkdir(directory,{mode:0o700});await mkdir(repository,{mode:0o700});await runner.git(repository,['init','--bare']);budget.seen=new Set();
-    for(const hash of project.commits)await runner.copyCommit(sources[project.id][hash],repository,hash,{boundary:'0'.repeat(40),objectBudget:budget});
-    const references=refs(project);for(const [ref,hash] of Object.entries(references))await runner.git(repository,['update-ref',ref,hash,'0'.repeat(40)]);
-    await runner.git(repository,['symbolic-ref','HEAD','refs/heads/recovered-main']);await runner.git(repository,['fsck','--strict','--full']);
-    const bytes=await runner.git(repository,['bundle','create','-','--all'],undefined,[],{binary:true,maxBuffer:MAX_GIT_BYTES-totalBundleBytes});
-    totalBundleBytes+=bytes.length;if(totalBundleBytes>MAX_GIT_BYTES)refuse('Git bundles exceed their aggregate 64 MiB limit.');
-    await writeFile(path.join(directory,'history.bundle'),bytes,{flag:'wx',mode:0o600});
-    entries.push({projectId:project.id,directory:name,bundleSha256:digest(bytes),bundleBytes:bytes.length,refs:references});
+  const root=await freshDirectory(directory),allowance=budget(),entries=[];
+  for(const [index,resource] of resources.entries()){
+    const name=dirname(index),folder=path.join(root,name);await mkdir(folder,{mode:0o700});
+    const bytes=await captureGitObjects(resource.commits,sources[resource.id],allowance);
+    await writeFile(path.join(folder,'objects.dat'),bytes,{flag:'wx',mode:0o600});
+    entries.push({resourceId:resource.id,directory:name,objectsSha256:digest(bytes),objectsBytes:bytes.length,refs:refs(resource)});
   }
   await writeFile(path.join(root,'workspace.json'),JSON.stringify(archive),{flag:'wx',mode:0o600});
-  const manifest={format:'projects-git-workspace-bundle/v1',archiveSha256:archive.sha256,sourceWorkspaceId:archive.payload.workspace.id,projects:entries},bytes=JSON.stringify(manifest);
+  const manifest={format:'projects-git-workspace-bundle/v1',archiveSha256:archive.sha256,sourceWorkspaceId:archive.payload.workspace.id,resources:entries},bytes=JSON.stringify(manifest);
+  if(Buffer.byteLength(bytes)>MAX_WORKSPACE_BACKUP_BYTES)refuse('Manifest exceeds 1 MiB.');
   await writeFile(path.join(root,'manifest.json'),bytes,{flag:'wx',mode:0o600});
-  return {directory:root,manifestSha256:digest(bytes),archiveSha256:archive.sha256,projects:projects.length,totalBundleBytes,historical:true};
+  return {directory:root,manifestSha256:digest(bytes),archiveSha256:archive.sha256,projects:archive.payload.projects.length,resources:resources.length,
+    encodedBytes:MAX_RECOVERY_GIT_BYTES-allowance.remainingArchiveBytes,expandedBytes:MAX_RECOVERY_GIT_BYTES-allowance.remainingBytes,
+    objects:MAX_RECOVERY_OBJECTS-allowance.remainingObjects,historical:true};
 }
 
-/** Recover into a new offline directory, never into an app's active database or source checkout. */
+/** Recover to a fresh offline directory after independently validating every expanded object and root. */
 export async function restoreWorkspaceBundle({directory,destination,expectedManifestSha256,expectedSourceWorkspaceId}){
   const root=path.resolve(directory);if(await realpath(root)!==root)refuse('Package directory must not be redirected.');
-  const manifestBytes=await boundedFile(root,'manifest.json',128*1024);
+  const manifestBytes=await boundedFile(root,'manifest.json',MAX_WORKSPACE_BACKUP_BYTES);
   if(typeof expectedManifestSha256!=='string'||!/^[a-f0-9]{64}$/.test(expectedManifestSha256)||digest(manifestBytes)!==expectedManifestSha256)refuse('Manifest digest mismatch.');
   let manifest;try{manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(manifestBytes));}catch{refuse('Invalid manifest JSON.');}
-  if(!manifest||Object.keys(manifest).sort().join(',')!=='archiveSha256,format,projects,sourceWorkspaceId'||manifest.format!=='projects-git-workspace-bundle/v1'
-    ||typeof expectedSourceWorkspaceId!=='string'||manifest.sourceWorkspaceId!==expectedSourceWorkspaceId||!Array.isArray(manifest.projects))refuse('Unexpected manifest or source workspace.');
+  if(!manifest||Object.keys(manifest).sort().join(',')!=='archiveSha256,format,resources,sourceWorkspaceId'||manifest.format!=='projects-git-workspace-bundle/v1'
+    ||typeof expectedSourceWorkspaceId!=='string'||manifest.sourceWorkspaceId!==expectedSourceWorkspaceId||!Array.isArray(manifest.resources))refuse('Unexpected manifest or source workspace.');
   const archive=await readWorkspaceBackup(new TextDecoder('utf-8',{fatal:true}).decode(await boundedFile(root,'workspace.json',MAX_WORKSPACE_BACKUP_BYTES)),manifest.archiveSha256);
-  if(archive.payload.workspace.id!==expectedSourceWorkspaceId||manifest.projects.length!==archive.payload.projects.length)refuse('Backup identity or project denominator differs.');
-  const bundles=[];let total=0;
-  for(const [index,project] of archive.payload.projects.entries()){
-    const entry=manifest.projects[index],name=dirname(index),folder=path.join(root,name);
-    if(!entry||Object.keys(entry).sort().join(',')!=='bundleBytes,bundleSha256,directory,projectId,refs'||entry.projectId!==project.id||entry.directory!==name
-      ||JSON.stringify(entry.refs)!==JSON.stringify(refs(project))||!Number.isSafeInteger(entry.bundleBytes)||entry.bundleBytes<1||entry.bundleBytes>MAX_GIT_BYTES-total
-      ||typeof entry.bundleSha256!=='string'||!/^[a-f0-9]{64}$/.test(entry.bundleSha256))refuse('Project bundle inventory differs from the backup.');
-    const stat=await lstat(folder);if(!stat.isDirectory()||stat.isSymbolicLink()||await realpath(folder)!==folder)refuse('Project package directory was redirected.');
-    const bytes=await boundedFile(folder,'history.bundle',entry.bundleBytes);
-    if(bytes.length!==entry.bundleBytes||digest(bytes)!==entry.bundleSha256)refuse('Git bundle digest mismatch.');
-    total+=bytes.length;bundles.push(bytes);
+  if(archive.payload.workspace.id!==expectedSourceWorkspaceId||manifest.resources.length!==archive.payload.resources.length)refuse('Backup identity or resource denominator differs.');
+  const captured=[],allowance=budget();
+  for(const [index,resource] of archive.payload.resources.entries()){
+    const entry=manifest.resources[index],name=dirname(index),folder=path.join(root,name);
+    if(!entry||Object.keys(entry).sort().join(',')!=='directory,objectsBytes,objectsSha256,refs,resourceId'||entry.resourceId!==resource.id||entry.directory!==name
+      ||JSON.stringify(entry.refs)!==JSON.stringify(refs(resource))||!Number.isSafeInteger(entry.objectsBytes)||entry.objectsBytes<1||entry.objectsBytes>allowance.remainingArchiveBytes
+      ||typeof entry.objectsSha256!=='string'||!/^[a-f0-9]{64}$/.test(entry.objectsSha256))refuse('Recovery resource inventory differs from the backup.');
+    const stat=await lstat(folder);if(!stat.isDirectory()||stat.isSymbolicLink()||await realpath(folder)!==folder)refuse('Resource package directory was redirected.');
+    const bytes=await boundedFile(folder,'objects.dat',entry.objectsBytes);
+    if(bytes.length!==entry.objectsBytes||digest(bytes)!==entry.objectsSha256)refuse('Git object capsule digest mismatch.');
+    captured.push(readGitObjects(bytes,resource.commits,allowance));
   }
-  // Validate identities and every file digest before creating the destination.
+  // Both compressed/encoded and expanded budgets, all object identities and
+  // complete graph closure are checked before a destination can be created.
   const restored=await freshDirectory(destination),runner=new RepositoryRunner(restored);await runner.initialize();
   const repositories=[];
-  for(const [index,project] of archive.payload.projects.entries()){
+  for(const [index,resource] of archive.payload.resources.entries()){
     const repository=path.join(restored,dirname(index)+'.git');await mkdir(repository,{mode:0o700});await runner.git(repository,['init','--bare']);
-    const file=path.join(repository,'history.bundle');await writeFile(file,bundles[index],{flag:'wx',mode:0o600});
-    await runner.git(repository,['bundle','verify',file]);
-    const references=refs(project),actual=(await runner.git(repository,['bundle','list-heads',file])).split('\n').map(line=>line.split(' ')).filter(([,ref])=>ref!=='HEAD');
-    if(actual.length!==Object.keys(references).length||actual.some(([hash,ref])=>!Object.hasOwn(references,ref)||references[ref]!==hash))refuse('Git bundle references differ from retained roots.');
-    await runner.git(repository,['bundle','unbundle',file]);
-    for(const [ref,hash] of Object.entries(references)){await runner.git(repository,['cat-file','-e',hash+'^{commit}']);await runner.git(repository,['update-ref',ref,hash,'0'.repeat(40)]);}
-    await runner.git(repository,['symbolic-ref','HEAD','refs/heads/recovered-main']);await runner.git(repository,['fsck','--strict','--full']);
-    repositories.push({projectId:project.id,directory:repository,recordedDefaultBranch:project.defaultBranch,mainCommit:project.mainCommit,commits:project.commits.length});
+    await installGitObjects(captured[index],repository);
+    for(const [ref,hash] of Object.entries(refs(resource)))await runner.git(repository,['update-ref',ref,hash,'0'.repeat(40)]);
+    await runner.git(repository,['symbolic-ref','HEAD',anchorRef(resource)]);await runner.git(repository,['fsck','--strict','--full']);
+    repositories.push({resourceId:resource.id,resourceKind:resource.kind,projectId:resource.projectId,directory:repository,
+      recordedDefaultBranch:resource.defaultBranch,anchorCommit:resource.anchorCommit,commits:resource.commits.length});
   }
   await writeFile(path.join(restored,'workspace.json'),JSON.stringify(archive),{flag:'wx',mode:0o600});
   const recovery={...workspaceBackupPreview(archive),format:'projects-git-offline-recovery/v1',manifestSha256:expectedManifestSha256,repositories,
+    encodedBytes:MAX_RECOVERY_GIT_BYTES-allowance.remainingArchiveBytes,expandedBytes:MAX_RECOVERY_GIT_BYTES-allowance.remainingBytes,objects:MAX_RECOVERY_OBJECTS-allowance.remainingObjects,
     installableSnapshot:false,pendingEffectPolicy:'Retain and reconcile separately. An expired lease is not evidence that work stopped.'};
-  await writeFile(path.join(restored,'recovery.json'),JSON.stringify(recovery),{flag:'wx',mode:0o600});
-  return recovery;
+  await writeFile(path.join(restored,'recovery.json'),JSON.stringify(recovery),{flag:'wx',mode:0o600});return recovery;
 }

@@ -4,14 +4,14 @@ export const HANDOFF_FORMAT = 'projects-git-handoff/v1';
 export const MAX_HANDOFF_BYTES = 2 * 1024 * 1024;
 const encoder = new TextEncoder();
 const select = (value, fields) => Object.fromEntries(fields.filter(key => value[key] !== undefined).map(key => [key, value[key]]));
-const taskFields = ['id', 'title', 'purpose', 'criteria', 'status', 'baseCommit', 'baseHistory', 'projectId', 'createdAt', 'acceptedRunId', 'mergedCommit', 'owner', 'ownerVersion', 'origin', 'repositoryName', 'resultBranch', 'dependsOn'];
-const runFields = ['id', 'taskId', 'origin', 'agent', 'label', 'status', 'baseCommit', 'headCommit', 'branch', 'startedAt', 'finishedAt', 'changedFiles', 'diff', 'summary', 'error', 'ownerVersion', 'reconcilesRunId', 'verificationPending'];
+const taskFields = ['id', 'title', 'purpose', 'criteria', 'status', 'baseCommit', 'baseHistory', 'projectId', 'createdAt', 'acceptedRunId', 'mergedCommit', 'owner', 'ownerVersion', 'origin', 'repositoryName', 'resultBranch', 'dependsOn', 'verificationProfile'];
+const runFields = ['id', 'taskId', 'origin', 'agent', 'label', 'status', 'baseCommit', 'headCommit', 'branch', 'startedAt', 'finishedAt', 'changedFiles', 'diff', 'summary', 'error', 'ownerVersion', 'reconcilesRunId', 'verificationPending', 'checkoutState'];
 const identity = value => value ? select(value, ['provider', 'kind', 'issuer', 'id', 'workspaceId', 'displayName']) : undefined;
 const reviewFields = ['decision', 'note', 'reviewer', 'at', 'headCommit', 'taskRevision', 'ownerVersion', 'comparisons', 'codeReviewId'];
 const policyDecision = value => ({...select(value, ['mode', 'enabled', 'version', 'at', 'ownerAudience', 'sessionsValidAfter', 'projectId', 'decisionId']), enabledBy: identity(value.enabledBy)});
 const reviewRecord = value => value ? {...select(value, reviewFields), ...(value.identity ? {identity: identity(value.identity)} : {}),
   ...(value.policy ? {policy: policyDecision(value.policy)} : {}), taskRevision: value.taskRevision ?? 1} : null;
-const codeReview = value => value ? {...select(value, ['id', 'at', 'assignmentId', 'format', 'contextId', 'context', 'verdict', 'summary', 'findings', 'resolvedPriorFindingIds', 'unresolvedFindingIds']), identity: identity(value.identity)} : null;
+const codeReview = value => value ? {...select(value, ['id', 'at', 'assignmentId', 'format', 'contextId', 'context', 'verdict', 'summary', 'findings', 'resolvedPriorFindingIds', 'unresolvedFindingIds', 'repositoryAccessVersion']), identity: identity(value.identity)} : null;
 const findingDecision = value => ({...select(value, ['id', 'at', 'assessmentId', 'findingId', 'decision', 'note']), identity: identity(value.identity)});
 const reviewAssignment = value => ({...select(value,['id','at','sourceContextId','contextId','reviewerIds']),identity:identity(value.identity)});
 const publicationPR = value => value ? select(value, ['number', 'url', 'headCommit', 'status', 'mergedAt', 'mergeCommit']) : null;

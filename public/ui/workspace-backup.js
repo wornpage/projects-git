@@ -1,6 +1,15 @@
 import {el} from './dom.js';
 const MAX_BYTES=1024*1024;
 const count=value=>Number.isSafeInteger(value)&&value>=0;
+export function readWorkspaceBackupPreview(result,expectedSha256){
+  const c=result?.counts,keys=['projects','resources','currentTasks','historicalTasks','tasks','currentRuns','historicalRuns','runs','currentEvents','historicalEvents','events',
+    'currentPolicies','historicalPolicies','policies','repositoryMappings','forkMappings','gitMappings','operations','operationReports','jobs','pendingOperations','unsettledJobs'];
+  if(result?.format!=='projects-git-workspace-backup/v1'||result.archiveSha256!==expectedSha256||result.historical!==true||result.restoresAuthority!==false||result.resumesWork!==false
+    ||!c||keys.some(key=>!count(c[key]))||['Tasks','Runs','Events','Policies'].some(name=>c['current'+name]+c['historical'+name]!==c[name.toLowerCase()])
+    ||c.repositoryMappings+c.forkMappings!==c.gitMappings||c.pendingOperations>c.operations||c.operationReports>c.operations||c.unsettledJobs>c.jobs
+    ||!Array.isArray(result.projects)||result.projects.length!==c.projects||!Array.isArray(result.resources)||result.resources.length!==c.resources)throw Error('The backup preview is incomplete.');
+  return result;
+}
 export function canInspectWorkspaceBackup({workspace,demo}){
   return !demo&&workspace?.authentication?.mode==='cloudflare-access'&&workspace.authentication.permissions?.manage===true;
 }
@@ -25,10 +34,7 @@ export function createWorkspaceBackupPanel({getContext,captureSession,api,downlo
       const archive=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));if(!current()||request!==selection)return;
       const result=await api('/api/workspace/backup-preview',{method:'POST',body:{archive,expectedSha256:archive.sha256}});
       if(!current()||request!==selection)return;
-      if(result?.format!=='projects-git-workspace-backup/v1'||result.archiveSha256!==archive.sha256||result.historical!==true||result.restoresAuthority!==false||result.resumesWork!==false
-        ||!result.counts||['projects','tasks','runs','operations','events','pendingOperations','unsettledJobs'].some(key=>!count(result.counts[key]))
-        ||result.counts.pendingOperations>result.counts.operations||!Array.isArray(result.projects)||result.projects.length!==result.counts.projects)throw Error('The backup preview is incomplete.');
-      preview=result;
+      preview=readWorkspaceBackupPreview(result,archive.sha256);
     }catch{if(!current()||request!==selection)return;error='Could not validate this backup. Keep the original file and its separately recorded digest.';}
     if(!current()||request!==selection)return;busy=false;render();
   }
@@ -42,13 +48,18 @@ export function createWorkspaceBackupPanel({getContext,captureSession,api,downlo
       el('input',{id:'workspace-backup-file',type:'file',accept:'.json,application/json',disabled:busy,onchange:event=>inspect(event.target.files?.[0])}),
       el('p',{class:'small'},'The selected file is sent to this private app for validation only. It is not stored or applied.'),
       busy?el('p',{role:'status'},'Reading backup metadata…'):null,error?el('p',{role:'alert'},error):null,
-      preview?el('div',{},el('p',{},`${preview.counts.projects} repositories · ${preview.counts.tasks} tasks · ${preview.counts.runs} candidates · ${preview.counts.operations} operation receipts`),
+      preview?el('div',{},el('p',{},`${preview.counts.projects} repositories · ${preview.counts.resources} Git recovery resources · ${preview.counts.operations} operation receipts`),
+        el('table',{},el('caption',{},'Complete retained record coverage'),el('thead',{},el('tr',{},...['Collection','Current','Historical','Total'].map(name=>el('th',{scope:'col'},name)))),
+          el('tbody',{},...[['Task records','Tasks'],['Candidate records','Runs'],['Event records','Events'],['Check policies','Policies']].map(([label,key])=>el('tr',{},
+            el('th',{scope:'row'},label),el('td',{},String(preview.counts['current'+key])),el('td',{},String(preview.counts['historical'+key])),el('td',{},String(preview.counts[key.toLowerCase()])))))),
+        el('p',{class:'small'},`${preview.counts.operationReports} operation verifier reports · ${preview.counts.repositoryMappings} repository mappings + ${preview.counts.forkMappings} fork mappings = ${preview.counts.gitMappings} Git mappings · ${preview.counts.jobs} job records`),
         el('p',{},`${preview.counts.pendingOperations} unresolved operation receipts · ${preview.counts.unsettledJobs} unsettled job records. No work will be resumed.`),
         el('p',{class:'small'},`Source workspace ${preview.sourceWorkspaceId} · revision ${preview.sourceRevision} · digest ${preview.archiveSha256}`),
-        ...preview.projects.map(project=>el('p',{class:'small'},`${project.name} · ${project.commits} required commits`))):null,
+        ...preview.projects.map(project=>el('p',{class:'small'},`${project.name} · ${project.commits} required commits`)),
+        ...preview.resources.filter(resource=>resource.kind!=='project').map(resource=>el('p',{class:'small'},`Unattached Git resource ${resource.id} · ${resource.commits} required commits · recovery anchor ${resource.anchorCommit}`))):null,
       el('details',{},el('summary',{},'Recover offline and understand the boundary'),
         el('p',{},'Use scripts/workspace-bundle.mjs from the source checkout to package every referenced commit from explicit local repositories. Record the returned manifest digest separately. Restore only to a new directory.'),
-        el('p',{},'Backup size is bounded at 1 MiB and Git packaging at 64 MiB. Exceeding a limit fails; nothing is silently truncated. A checksum proves integrity, not who created an archive.'),
+        el('p',{},'Backup metadata is bounded at 1 MiB. Encoded and expanded Git objects each have an aggregate 64 MiB budget, with at most 16,384 objects. Limits include historical records. Exceeding a limit fails; nothing is silently truncated. A checksum proves integrity, not who created an archive.'),
         el('p',{},'Credentials, access grants and runnable jobs are excluded. Historical decisions remain history. Unresolved receipts are retained; an expired lease does not prove an external process stopped. Reconnecting restored code to a live installation requires separate owner action and fresh authorization.'))].filter(Boolean));
   }
   render();return root;

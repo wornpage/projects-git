@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {installFakeDOM} from './helpers/fake-dom.mjs';
 import {createWorkspace} from '../src/core/workflow.mjs';
 import {buildWorkspaceBackup,workspaceBackupPreview} from '../src/core/workspace-backup.mjs';
-import {createWorkspaceBackupPanel,canInspectWorkspaceBackup} from '../public/ui/workspace-backup.js';
+import {createWorkspaceBackupPanel,canInspectWorkspaceBackup,readWorkspaceBackupPreview} from '../public/ui/workspace-backup.js';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 async function archive(){return buildWorkspaceBackup({revision:1,workspace:{...createWorkspace({id:'fixture-workspace',provider:'cloudflare-artifacts'}),projects:{}},operations:{},repositories:{},forks:{},jobs:{},checkPolicies:{}});}
 function panel(api){
@@ -42,4 +42,12 @@ test('non-owner/demo views and oversized or malformed files cannot invoke recove
     const input=p.root.querySelector('input');input.files=[file];await input.dispatch('change');assert.match(p.root.textContent,/Could not validate this backup/);
   }
   assert.deepEqual(calls,[]);
+});
+
+test('preview cannot hide historical populations or contradict resource, policy and mapping denominators',async()=>{
+  const value=await archive(),preview=workspaceBackupPreview(value);
+  for(const mutate of [p=>{p.counts.historicalTasks++;},p=>{delete p.counts.historicalRuns;},p=>{p.counts.resources++;},
+    p=>{p.counts.operationReports++;},p=>{p.counts.gitMappings++;},p=>{p.counts.historicalPolicies++;}]){
+    const changed=structuredClone(preview);mutate(changed);assert.throws(()=>readWorkspaceBackupPreview(changed,value.sha256),/incomplete/);
+  }
 });

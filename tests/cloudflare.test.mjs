@@ -2056,3 +2056,15 @@ test('revocation and regrant cannot revive an older independent assessment for a
   await assert.rejects(owner.review(runId,decision),{code:'REVIEWER_ACCESS_CHANGED'});
   assert.equal(c.store.read().workspace.runs.find(run=>run.id===runId).codeReview.repositoryAccessVersion,1);
 });
+
+
+test('backup preserves actual model-check and automatic-merge receipt identities',async()=>{
+  const c=executable();await c.controller.queueModels(modelInput(),'backup-model-check');await c.controller.drainJobs();
+  const original=Object.entries(c.store.read().operations).filter(([,op])=>op.kind==='model-check');assert.ok(original.length>0);
+  const modelBackup=await c.controller.workspaceBackup();
+  for(const [key,operation] of original){const receipt=modelBackup.payload.operations.find(row=>row.key===key)?.receipt;assert.ok(receipt);assert.equal(receipt.fingerprint,operation.fingerprint);assert.equal(receipt.report.commit,operation.report.commit);}
+  const a=await automaticContext();a.toggle(true);await a.system().drainAutomaticMerges();
+  const expected=Object.keys(a.store.read().operations).filter(key=>key.startsWith('automatic-merge:'));assert.ok(expected.length>0);
+  const owner=new HostedController(a.store,a.artifacts,testAuthority(),a.runtime),automaticBackup=await owner.workspaceBackup();
+  assert.deepEqual(automaticBackup.payload.operations.filter(row=>row.key.startsWith('automatic-merge:')).map(row=>row.key),expected);
+});

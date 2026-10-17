@@ -43,6 +43,16 @@ function fixture(t) {
 }
 const count=(f,kind)=>f.calls.filter(call=>call[0]===kind).length;
 
+test('backup captures the beforePush creation receipt and known commit before a project is attached',async t=>{
+  const f=fixture(t);f.runtime.git.seedRepository=async options=>{await options.beforePush(HEAD);throw Error('Controlled interrupted seed');};
+  await assert.rejects(f.controller.createRepository(input,'backup-before-push'),{code:'REPOSITORY_CREATION_INTERRUPTED'});
+  assert.equal(Object.keys(f.store.read().workspace.projects).length,0);assert.equal(f.operation().pendingCommit,HEAD);
+  const calls=f.calls.length,backup=await f.controller.workspaceBackup();assert.equal(f.calls.length,calls);
+  assert.equal(backup.payload.projects.length,0);assert.equal(backup.payload.resources.length,1);
+  assert.equal(backup.payload.resources[0].repositoryName,input.name);assert.deepEqual(backup.payload.resources[0].commits,[HEAD]);
+  assert.equal(backup.payload.resources[0].projectId,f.operation().projectId);
+});
+
 test('private creation seeds main, cleans credentials and connects one empty project; replay is stable',async t=>{
   const f=fixture(t),result=await f.controller.createRepository(input,'create-repo-01');
   assert.equal(result.name,input.name);assert.equal(result.baseCommit,HEAD);assert.equal(result.defaultBranch,'main');assert.equal(result.replayed,false);
