@@ -36,11 +36,13 @@ export function summarizeIntervals(rows,observedAt){
   return {total:rows.length,...counts,outcomes:Object.fromEntries(outcomes),medianMs:median(durations),minimumMs,
     maximumMs,activeMedianElapsedMs:median(activeDurations),remainingMs:null};
 }
-function startEvents(events,taskIds,runIds){
-  const index=new Map();
+function startEvents(events,projectId,taskIds,runs){
+  const index=new Map(),runTasks=new Map(runs.map(run=>[run.id,run.taskId]));
   for(const event of events){
+    if(event.projectId!=null&&event.projectId!==projectId||event.taskId!=null&&!taskIds.has(event.taskId)
+      ||event.runId!=null&&!runTasks.has(event.runId)||event.taskId!=null&&event.runId!=null&&runTasks.get(event.runId)!==event.taskId)continue;
     const key=event.type==='task.created'&&taskIds.has(event.taskId)?'task:'+event.taskId
-      :event.type==='run.assigned'&&runIds.has(event.runId)?'run:'+event.runId:null;
+      :event.type==='run.assigned'&&runTasks.has(event.runId)?'run:'+event.runId:null;
     if(!key)continue;const previous=index.get(key);
     if(previous==='invalid'||timestamp(event.at)===null)index.set(key,'invalid');
     else if(!previous||event.at<previous)index.set(key,event.at);
@@ -67,32 +69,34 @@ export function projectOperationalMetrics(snapshot,projectId,observedAt=new Date
     throw new WorkflowError('METRICS_COMPLETE_SNAPSHOT_REQUIRED','Metrics need a complete retained snapshot; a page cannot establish their denominators.',409);
   if(!workspace.projects?.[projectId])throw new WorkflowError('PROJECT_NOT_FOUND','Repository not found.',404);
   const tasks=workspace.tasks.filter(task=>task.projectId===projectId),taskIds=new Set(tasks.map(task=>task.id));
-  const runs=workspace.runs.filter(run=>taskIds.has(run.taskId)),runIds=new Set(runs.map(run=>run.id)),events=startEvents(workspace.events,taskIds,runIds);
+  const runs=workspace.runs.filter(run=>taskIds.has(run.taskId)),runIds=new Set(runs.map(run=>run.id)),events=startEvents(workspace.events,projectId,taskIds,runs);
   const operations=Object.values(snapshot.operations).filter(op=>op&&(!op.projectId||op.projectId===projectId)&&(!op.taskId||taskIds.has(op.taskId))
     &&(!op.itemId||runIds.has(op.itemId)||taskIds.has(op.itemId))&&(!op.sourceRunId||runIds.has(op.sourceRunId))
     &&(!op.taskIds||Array.isArray(op.taskIds)&&op.taskIds.every(id=>taskIds.has(id)))
     &&(op.projectId===projectId||taskIds.has(op.taskId)||runIds.has(op.itemId)||taskIds.has(op.itemId)));
-  const assignedByTask=new Map();
+  const assignedByTask=new Map(),tasksWithRuns=new Set(runs.map(run=>run.taskId));
   for(const run of runs){const at=events.get('run:'+run.id),previous=assignedByTask.get(run.taskId);if(at&&(at==='invalid'||!previous||previous!=='invalid'&&at<previous))assignedByTask.set(run.taskId,at);}
   const phase=(name,rows)=>({...definitions[name],...summarizeIntervals(rows,observedAt)});
   const queue=tasks.map(task=>{
     const start=events.get('task:'+task.id)??null,assigned=assignedByTask.get(task.id)??null;
-    return {start,end:assigned,active:!assigned,outcome:'assigned'};
+    return {start,end:assigned,active:!assigned&&!tasksWithRuns.has(task.id),outcome:'assigned'};
   });
   const handoff=runs.map(run=>({start:events.get('run:'+run.id)??null,end:run.startedAt,
     active:run.status==='assigned',classification:['existing-git','reconciled-git'].includes(run.origin)?'notApplicable':undefined,outcome:'started'}));
   const execution=runs.map(run=>({start:run.startedAt,end:run.finishedAt,active:run.status==='running',outcome:run.status==='failed'?'failed':'submitted',
     classification:['existing-git','reconciled-git'].includes(run.origin)&&!run.startedAt?'notApplicable':run.status==='assigned'&&!run.startedAt?'notStarted':undefined}));
+  const reviewOccurred=run=>Boolean(run.codeReview||run.codeReviewHistory?.length||run.review||run.reviewHistory?.length||['accepted','rejected','merged'].includes(run.status));
   const reviewWait=runs.map(run=>{
     const evidence=run.evidence,assignment=run.reviewAssignments?.at(-1),start=evidence?.verified===true?evidence.verifiedAt:null;
     const end=assignment&&timestamp(assignment.at)===null?assignment.at
       :assignment&&timestamp(start)!==null&&timestamp(assignment.at)>=timestamp(start)?assignment.at:null;
-    return {start,end,active:Boolean(start)&&!end,classification:!run.finishedAt&&run.status!=='awaiting_review'?'notApplicable':undefined,outcome:'assigned'};
+    const applicable=run.status==='awaiting_review'||reviewOccurred(run)||run.evidence||run.evidenceHistory?.length;
+    return {start,end,active:Boolean(start)&&!end&&Boolean(assignment||!reviewOccurred(run)),classification:!applicable?'notApplicable':undefined,outcome:'assigned'};
   });
   const reviewTurnaround=runs.map(run=>{
     const assignment=run.reviewAssignments?.at(-1),assessment=run.codeReview;
     return {start:assignment?.at??null,end:assessment?.assignmentId===assignment?.id?assessment?.at??null:null,active:Boolean(assignment),
-      classification:!assignment?'notStarted':undefined,outcome:assessment?.verdict??'unconfirmed'};
+      classification:!assignment&&!reviewOccurred(run)?'notStarted':undefined,outcome:assessment?.verdict??'unconfirmed'};
   });
   const modelNames=new Map(),usage={knownRequests:0,unknownUsageRequests:0,inputTokens:0,outputTokens:0,cachedInputTokens:0,cachedUsageKnownRequests:0,
     modelRunsWithoutReceipt:0,externalRunsWithoutUsage:0,totalOverflow:false};

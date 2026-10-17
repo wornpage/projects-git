@@ -101,6 +101,32 @@ test('an earlier assignment does not close a renewed verification wait, and mism
   assert.equal(data.phases.reviewTurnaround.active,1);assert.equal(data.phases.reviewTurnaround.observed,0);
 });
 
+test('later durable artifacts keep missing legacy phase boundaries out of open, not-started and N/A counts',()=>{
+  for(const status of ['awaiting_review','accepted','rejected','merged']){
+    const source=snapshot(),run=source.workspace.runs[0];run.status=status;run.finishedAt=null;delete run.reviewAssignments;
+    source.workspace.events=source.workspace.events.filter(event=>event.type!=='run.assigned');
+    const data=projectOperationalMetrics(source,'one',at(200));
+    for(const name of ['queue','reviewWait','reviewTurnaround']){
+      const phase=data.phases[name];assert.equal(phase.missing,1,name);assert.equal(phase.active,0,name);
+      assert.equal(phase.notStarted,0,name);assert.equal(phase.notApplicable,0,name);
+      assert.equal(phase.total,phase.observed+phase.active+phase.missing+phase.invalid+phase.notStarted+phase.notApplicable);
+    }
+  }
+});
+
+test('every populated event reference must belong to this repository and its actual run-task linkage',()=>{
+  const source=snapshot(),run=source.workspace.runs[0];
+  source.workspace.tasks.push({id:'local-second',projectId:'one'});source.workspace.runs.push({id:'local-run-second',taskId:'local-second',status:'assigned'});
+  const original=projectOperationalMetrics(source,'one',at(200));
+  source.workspace.events.push({type:'run.assigned',runId:run.id,taskId:'task-one',projectId:'other',at:at(1)},
+    {type:'task.created',taskId:'task-one',runId:'foreign-run',at:at(-10)},
+    {type:'run.assigned',runId:run.id,taskId:'foreign-task',at:at(2)},
+    {type:'run.assigned',runId:run.id,taskId:'local-second',at:at(3)},
+    {type:'task.created',taskId:'task-one',runId:'local-run-second',at:at(-5)});
+  const data=projectOperationalMetrics(source,'one',at(200));
+  assert.deepEqual(data.phases,original.phases);
+});
+
 test('timing records are append-only per admitted attempt and cannot rebind old history',()=>{
   const operation={state:'pending',kind:'checks',attemptId:attempt};beginOperationTiming(operation,'verification',attempt,at(0));
   assert.throws(()=>beginOperationTiming(operation,'verification',attempt,at(1)),{code:'TIMING_ALREADY_STARTED'});

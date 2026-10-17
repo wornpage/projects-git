@@ -20,9 +20,17 @@ test('duration units preserve actual zero and reject an invalid measured value',
 });
 test('incomplete or contradictory metrics cannot render as a complete dashboard',()=>{
   for(const change of [d=>{delete d.phases.recovery;},d=>{d.phases.queue.observed=1;},d=>{d.phases.queue.medianMs=0;},
-    d=>{d.usage.unknownUsageRequests++;},d=>{d.cost.actual=0;},d=>{d.scope='loaded-page';},d=>{d.modelProvenance.recordedRuns++;}]){
+    d=>{d.usage.unknownUsageRequests++;},d=>{d.cost.actual=0;},d=>{d.scope='loaded-page';},d=>{d.modelProvenance.recordedRuns++;},
+    d=>{d.phases.recovery.outcomes={failed:1};},d=>{delete d.usage.totalOverflow;}]){
     const value=data();change(value);assert.throws(()=>readMetrics(value,'one'),/incomplete/);
   }
+});
+
+test('measured failed outcomes and unsafe token totals stay visible',async()=>{
+  const value=data();Object.assign(value.phases.recovery,{total:1,observed:1,medianMs:20,minimumMs:20,maximumMs:20,outcomes:{unconfirmed:1}});
+  value.usage.totalOverflow=true;
+  const p=panel(async()=>value);await tick();
+  assert.match(p.root.textContent,/Measured outcomes: unconfirmed 1/);assert.match(p.root.textContent,/token total exceeded safe arithmetic limits/);
 });
 test('late metrics cannot replace another session, project or detached panel',async()=>{
   for(const change of [p=>p.changeSession(),p=>{p.context.selectedProject='other';},p=>{p.root.isConnected=false;},p=>{delete p.context.workspace.projects.one;}]){

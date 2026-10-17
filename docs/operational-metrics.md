@@ -25,8 +25,9 @@ overlap; do not add their medians into a total duration.
 
 Each phase partitions its denominator into measured, open, missing, invalid,
 not started and not applicable. Medians and minimum/maximum values use measured
-windows only. Open windows have separate elapsed time, not a completion estimate
-or proof that a process is alive. Remaining time is unknown. Imported Git work
+windows only, including failed and unconfirmed outcomes. The status breakdown
+shows those outcomes separately. Open windows have separate elapsed time; they
+do not prove that a process is alive. Remaining time is unknown. Imported Git work
 without an execution interval is not applicable. Bad clock order is invalid.
 
 New verification, merge-verification, base-update and explicit interrupted-work

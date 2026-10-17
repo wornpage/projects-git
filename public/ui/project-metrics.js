@@ -18,6 +18,8 @@ export function readMetrics(value,projectId){
       ||!row.label||!row.definition||!row.unit||row.observed===0&&row.medianMs!==null
       ||row.observed>0&&[row.medianMs,row.minimumMs,row.maximumMs].some(value=>value===null))fail();
     for(const key of ['medianMs','minimumMs','maximumMs','activeMedianElapsedMs'])if(row[key]!==null&&(typeof row[key]!=='number'||!Number.isFinite(row[key])||row[key]<0))fail();
+    if(!row.outcomes||typeof row.outcomes!=='object'||Array.isArray(row.outcomes)||Object.values(row.outcomes).some(value=>!count(value))
+      ||Object.values(row.outcomes).reduce((n,value)=>n+value,0)!==row.observed)fail();
     if(row.coverage&&(!count(row.coverage.operations)||!count(row.coverage.withRecords)||!count(row.coverage.withoutRecords)
       ||row.coverage.withRecords+row.coverage.withoutRecords!==row.coverage.operations))fail();
   }
@@ -29,7 +31,7 @@ export function readMetrics(value,projectId){
   const usage=value.usage;
   if(!usage||!count(usage.knownRequests)||!count(usage.observedUsageRequests)||!count(usage.unknownUsageRequests)
     ||usage.observedUsageRequests+usage.unknownUsageRequests!==usage.knownRequests
-    ||!count(usage.modelRunsWithoutReceipt)||!count(usage.externalRunsWithoutUsage)||!count(usage.cachedUsageKnownRequests))fail();
+    ||!count(usage.modelRunsWithoutReceipt)||!count(usage.externalRunsWithoutUsage)||!count(usage.cachedUsageKnownRequests)||typeof usage.totalOverflow!=='boolean')fail();
   for(const key of ['observedInputTokens','observedOutputTokens','observedCachedInputTokens'])if(usage[key]!==null&&!count(usage[key]))fail();
   if(value.cost?.currency!=='USD'||value.cost.actual!==null||value.cost.estimate!==null||value.cost.measuredRequests!==0)fail();
   return value;
@@ -52,19 +54,21 @@ export function createProjectMetricsPanel({projectId,getContext,captureSession,a
     if(!canInspectProjectMetrics(getContext(),projectId)){root.replaceChildren(el('p',{},'Repository metrics are unavailable in this session.'));return;}
     const body=data?[
       el('p',{class:'small'},`${data.counts.tasks} tasks · ${data.counts.candidates} candidates · ${data.counts.retainedOperations} retained operations · revision ${data.sourceRevision}`),
-      el('p',{class:'small'},'Medians use observed windows only. Phases may overlap; their times must not be added.'),
+      el('p',{class:'small'},'Medians include every measured outcome, including failed and unconfirmed windows. Phases may overlap; their times must not be added.'),
       el('div',{class:'project-metrics-table'},el('table',{},el('caption',{},'Retained timing observations'),
         el('thead',{},el('tr',{},...['Phase','Median','Coverage','Other observations'].map(label=>el('th',{scope:'col'},label)))),
         el('tbody',{},...phaseNames.map(name=>{const row=data.phases[name];return el('tr',{},
           el('th',{scope:'row'},row.label),el('td',{},durationLabel(row.medianMs)),
           el('td',{},`${row.observed}/${row.total} ${row.unit} measured`,row.coverage?el('p',{class:'small'},`${row.coverage.withRecords}/${row.coverage.operations} operations have records`):null),
-          el('td',{},`Open ${row.active} · missing ${row.missing} · invalid ${row.invalid} · not started ${row.notStarted} · N/A ${row.notApplicable}`));})))),
+          el('td',{},`Open ${row.active} · missing ${row.missing} · invalid ${row.invalid} · not started ${row.notStarted} · N/A ${row.notApplicable}`,
+            el('p',{class:'small'},'Measured outcomes: '+(Object.entries(row.outcomes).map(([name,count])=>`${name} ${count}`).join(' · ')||'None'))));})))),
       el('h4',{},'Model and usage observations'),
       el('p',{},`${data.modelProvenance.recordedRuns}/${data.modelProvenance.totalRuns} candidates have a recorded model selection. ${data.modelProvenance.unattributedRuns} are unattributed.`),
       ...data.modelProvenance.models.map(model=>el('p',{class:'small'},`${model.name}: ${model.runs} candidates`)),
       data.modelProvenance.models.length>1?el('p',{class:'capability-note'},'Timing comparisons include multiple recorded models.'):null,
       el('p',{},`${data.usage.observedUsageRequests}/${data.usage.knownRequests} retained model requests have usage. ${data.usage.unknownUsageRequests} have unknown usage.`),
       el('p',{class:'small'},`Observed tokens: input ${number(data.usage.observedInputTokens)} · output ${number(data.usage.observedOutputTokens)}. Cache usage recorded for ${data.usage.cachedUsageKnownRequests}/${data.usage.observedUsageRequests} observed requests.`),
+      data.usage.totalOverflow?el('p',{role:'alert',class:'inline-error'},'A token total exceeded safe arithmetic limits and is unavailable. The other observed counts remain separate.'):null,
       el('p',{class:'small'},`Model candidates without a receipt: ${data.usage.modelRunsWithoutReceipt}. External candidates without request usage: ${data.usage.externalRunsWithoutUsage}.`),
       el('p',{},'Dollar spend: not recorded. No price estimate is included.'),
       el('details',{},el('summary',{},'Definitions and missing history'),
