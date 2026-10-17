@@ -3,8 +3,9 @@
 ## Status and boundary
 
 The bounded workflow is implemented and tested locally with real Git, SQLite and
-workerd checks. Artifacts management and signed identities are local fixtures.
-This is not proof of hosted signup, email delivery, billing, or live isolation.
+workerd checks. Local Artifacts management and signed identities are fixtures;
+hosted qualification is recorded separately below. Local tests alone do not prove
+hosted signup, email delivery, billing, or live isolation.
 
 `wrangler.trial-workflow.template.jsonc` is a non-public, unapproved template.
 Its placeholder issuer, audience and namespace must never be deployed as a live
@@ -78,8 +79,21 @@ rejects anonymous or invalid credentials. Real email login, trial reservation,
 sample repository/task creation, and connection issuance/revocation have been
 verified on the deployed pilot. A manually implemented qualification candidate was
 claimed through the scoped agent API, published as a real Git commit, submitted,
-and passed all 16 hosted checkout checks. Multi-user hosted isolation, independent
-code review, merge, export and scheduled cleanup remain separate from that proof.
+and passed all 16 hosted checkout checks.
+
+The same qualification trial then completed an independent review of exact
+candidate `c0f9e553544f8d926829a0da468fc911dfc2e550`, owner acceptance and a guarded
+merge with another 16/16 hosted checks. The reviewer credential was also denied
+owner merge authority. Its downloaded source/history export passed digest, blob
+and Git tree verification; the exported checkout code passed all 16 local cases.
+The export contains source snapshots and retained history, not a Git object database.
+
+The owner closed this trial at `2026-10-17T07:57:17.932Z`, after saving the export.
+Owner workspace/export access and reviewer access then returned `TRIAL_CLOSED`.
+Cleanup becomes due at `2026-10-18T07:57:17.932Z`; deletion is not yet confirmed.
+A follow-up is scheduled for October 18 at 9 a.m. America/New_York to inspect
+the cleanup receipt and credential removal. Multi-user hosted isolation and
+final app-source review remain separate from this single-trial qualification.
 
 ## Local validation
 
