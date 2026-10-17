@@ -9,7 +9,7 @@ type Storage = Pick<DurableObjectStorage, 'sql' | 'transactionSync'>;
 type RecordRow = { kind: string; id: string; position: number; data: string };
 type Header = { revision: number; data: string };
 export type IndexState = { project_id: string; revision: number; delivered_revision: number; indexed_revision: number; attempts: number; next_attempt_at: number; error_code: string | null; automatic: number };
-const mapKinds = ['repositories', 'forks', 'operations', 'jobs', 'checkPolicies'] as const;
+const mapKinds = ['repositories', 'forks', 'operations', 'jobs', 'checkPolicies', 'recoveryImports'] as const;
 const historyKinds = { tasks: ['revisions', 'ownerHistory', 'baseHistory'], runs: ['evidenceHistory', 'reviewHistory'] } as const;
 const MAX_RECORD_BYTES = 1_900_000;
 
@@ -303,12 +303,14 @@ export class WorkspaceStore implements SnapshotStore {
       for (const row of parts.records) {
         const key = JSON.stringify([row.kind, row.id]);
         const previous = old.get(key);
+        if(row.kind==='recoveryImports'&&previous&&previous.data!==row.data)throw new ApiError(409,'RECOVERY_IMPORT_IMMUTABLE','Retained recovery archives and provenance cannot be changed.');
         if (!previous || previous.data !== row.data || previous.position !== row.position) { this.put(row); mark(row); }
         old.delete(key);
       }
       // Removal is explicit, never an ignored stale row. Project removal is not a workflow operation.
       for (const row of old.values()) {
         if (row.kind === 'operations') throw new ApiError(409,'OPERATION_RECEIPT_REMOVAL','Retained operation identities cannot be forgotten or reused.');
+        if(row.kind==='recoveryImports')throw new ApiError(409,'RECOVERY_IMPORT_IMMUTABLE','Retained recovery archives cannot be removed.');
         this.storage.sql.exec('DELETE FROM workspace_records WHERE kind = ? AND id = ?', row.kind, row.id);
         mark(row);
       }

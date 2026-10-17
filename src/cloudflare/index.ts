@@ -273,6 +273,9 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     controller = this.controller(authority);
       if(call.method==='GET'&&call.path==='/api/repositories') return reply(await controller.repositoryCatalog(call.search ?? ''));
       if(call.method==='GET'&&call.path==='/api/workspace/backup')return reply(await controller.workspaceBackup());
+      if(call.method==='GET'&&call.path==='/api/workspace/recovery-imports')return reply(controller.recoveryHistory());
+      const recoveryImport=/^\/api\/workspace\/recovery-imports\/([a-f0-9]{64})(\/archive)?$/.exec(call.path);
+      if(call.method==='GET'&&recoveryImport)return reply(controller.recoveryHistory(recoveryImport[1],Boolean(recoveryImport[2])));
       if(call.method==='GET'&&call.path==='/api/repositories/head') return reply(await controller.repositoryHead(call.search ?? ''));
       if(call.method==='POST'&&call.path==='/api/repositories') return reply(await controller.createRepository(call.body,call.key),201);
       if(call.method==='GET'&&call.path==='/api/projects/catalog') {
@@ -335,6 +338,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
       if (call.method === 'GET' && archive) return reply(archive[2] === 'export' ? await controller.exportProject(archive[1]) : controller.projectHistory(archive[1]));
       if (call.method !== "POST") throw new ApiError(404, "NOT_FOUND", "API route not found.");
       if(call.path==='/api/workspace/backup-preview')return reply(await controller.workspaceBackupPreview(call.body));
+      if(call.path==='/api/workspace/restore')return reply(await controller.restoreWorkspaceHistory(call.body,call.key),201);
       if(projectAccess)return reply(await controller.changeProjectAccess(projectAccess[1],call.body,call.key));
       if (call.path === '/api/projects/restore') return reply(await controller.restoreProject(call.body, call.key), 201);
       if (call.path === "/api/workspace/adopt-owner") return reply(controller.adoptOwner());
@@ -434,10 +438,10 @@ export function createAuthenticatedFetch(verifier: AccessVerifier) {
       const mutation = request.method !== "GET" && request.method !== "HEAD";
       if (mutation) requireSameOrigin(request);
       const forbiddenSecrets = [request.headers.get('Cf-Access-Jwt-Assertion'), request.headers.get('CF-Access-Client-Secret'), env.MODEL_API_KEY].filter((value): value is string => Boolean(value));
-      const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/projects/restore','/api/workspace/backup-preview'].includes(url.pathname) ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
+      const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/projects/restore','/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
       const expectedWorkspace = request.headers.get('X-Workspace-Id') ?? body.expectedWorkspaceId;
       if (expectedWorkspace !== undefined && expectedWorkspace !== null && expectedWorkspace !== env.WORKSPACE_ID) throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The request targets a different workspace.');
-      const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
+      const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
       const key = needsKey ? idempotencyKey(request) : "";
       const stub = env.WORKSPACES.getByName(env.WORKSPACE_ID);
       return await stub.api({ principal, policy, forbiddenSecrets, method: request.method, path: url.pathname, body, key, search: url.search });

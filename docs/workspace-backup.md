@@ -3,9 +3,10 @@
 This draft backs up complete retained workflow history and operation receipts,
 then packages the Git objects needed by that history. Recovery writes isolated
 bare repositories and historical records into a new local directory. It does
-not install an active database, reconnect a Cloudflare resource, resume a job,
-replay an operation or carry forward authority. Live installation recovery is
-not yet implemented or qualified.
+not reconnect a Cloudflare resource, resume a job, replay an operation or carry
+forward authority. The owner can separately retain the complete archive in an
+empty destination app as immutable, readable history. This is historical recovery;
+active workflow and provider recovery remain separate.
 
 ## Capture metadata in the private Cloudflare app
 
@@ -26,6 +27,57 @@ The preview uploads the selected file to this private app for integrity and
 schema validation only. It does not save or apply the archive. A digest detects
 corruption; it does not authenticate the author or authorize an action. Backup
 files contain private source and history; keep them private.
+
+## Restore readable history into an empty app
+
+Use the current authenticated owner of an empty destination workspace.
+Open **Installation readiness → Workspace backup**, preview the archive, then
+choose **Read destination and recovery history**. Verify the destination workspace
+and its exact revision. Enter the expected source workspace and the independently
+recorded archive SHA-256, then type **RESTORE HISTORY ONLY** before confirming.
+Existing projects, tasks, candidates, repository/fork mappings, check policies,
+jobs or other operation receipts cause refusal; restoration never overwrites them.
+Earlier historical imports may remain alongside the new archive.
+
+The app stores the entire validated original archive and current-owner import
+provenance under its digest. It atomically records one complete `workspace-restore`
+receipt. Source authentication, grants, approval and provider ledgers do not become
+live state. Imported project/task/candidate IDs remain historical; no assignments,
+verification, integration, provider retries or code fetching run during restoration.
+The current destination identity and permissions remain authoritative.
+
+Owner history lists distinguish current workflow from historical imports and mark
+code unavailable in the app. **Read historical import**, **Read all original
+historical records** and **Download original archive** expose preserved records
+without making old decisions current. Re-export includes prior imports and their
+Git roots/counts. Git objects must be independently recovered with the capsule CLI.
+
+If the response is lost, read recovery history by archive digest before explicitly
+retrying the saved request. The UI retains the original DTO and idempotency key;
+it never automatically repeats the mutation. Replays return their existing receipt
+even though its original expected revision is now stale. Changing input under the
+same key conflicts. Archives and import provenance cannot later be modified or
+removed through ordinary snapshot writes.
+
+All original project, fork, unattached-operation and ledger repository names stay
+quarantined, including names inside earlier imports. New project connection,
+creation, assignment and base-update paths refuse those names before provider I/O.
+Connect independently restored code only under explicit fresh resource names using
+the existing **New project** flow. An elapsed lease or stopped process never proves
+an earlier external effect stopped; restoration does not reconcile that history.
+
+| Owner endpoint | Effect |
+| --- | --- |
+| `POST /api/workspace/restore` | Validate and retain history; requires `Idempotency-Key`, archive, expected digest/source/destination/revision and exact confirmation |
+| `GET /api/workspace/recovery-imports` | Current destination revision/workflow counts, historical imports and quarantined names |
+| `GET /api/workspace/recovery-imports/<sha256>` | Historical import provenance and complete count preview |
+| `GET /api/workspace/recovery-imports/<sha256>/archive` | Exact original archive, including unresolved effects |
+
+The confirmation DTO is `{archive, expectedSha256, expectedSourceWorkspaceId,
+expectedWorkspaceId, expectedRevision, confirmation: "RESTORE HISTORY ONLY"}`.
+All routes are owner-only. Current source/local SQLite and HTTP/UI fixtures prove
+metadata retention and replay behavior; they are not hosted disaster-recovery or
+provider resource qualification.
 
 The preview separates current and historical task, candidate, event and policy
 records, with explicit totals. It also counts operation reports, jobs and Git

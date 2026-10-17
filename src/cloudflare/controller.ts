@@ -27,6 +27,7 @@ import type {RepositoryPermission} from '../core/repository-access.mjs';
 import {discoveryParameter, listRepositories, inspectRepository} from './repository-discovery.ts';
 import {projectOperationalMetrics} from '../core/operational-metrics.mjs';
 import {buildWorkspaceBackup,readWorkspaceBackup,workspaceBackupPreview} from '../core/workspace-backup.mjs';
+import {readWorkspaceRecovery,retainWorkspaceRecovery,workspaceRecoverySummary,requireFreshRecoveryResource,quarantinedRecoveryNames} from '../core/workspace-recovery.mjs';
 import {beginOperationTiming,finishOperationTiming,operationTimings} from '../core/operation-timing.mjs';
 import type {OperationTiming} from '../core/operation-timing.mjs';
 
@@ -53,7 +54,8 @@ interface Operation {
   report?: Evidence;
   idleResult?: { idle: boolean; reason: string; waitingTaskIds: string[] };
   fingerprint: string;
-  kind: "task" | "assign" | "claim" | "model" | "merge" | "checks" | "base-update" | "model-check" | "review-inference" | "restore" | "repository-create" | "project-access";
+  kind: "task" | "assign" | "claim" | "model" | "merge" | "checks" | "base-update" | "model-check" | "review-inference" | "restore" | "repository-create" | "project-access" | "workspace-restore";
+  recoveryImportId?:string;
   accessVersion?: number;
   revokeRunIds?: string[];
   revokedRunIds?: string[];
@@ -104,6 +106,7 @@ export interface HostedSnapshot {
   operations: Record<string, Operation>;
   jobs?: Record<string, HostedJob>;
   checkPolicies?: Record<string, CheckPolicy>;
+  recoveryImports?:Record<string,{archive:any;importedAt:string;importedBy:string}>;
 }
 export interface WorkspaceCapacity {limit:number;running:number;reserved:number;occupied:number;queued:number;verification:{limit:number;occupied:number;waiting:number}}
 export interface SnapshotPage {
@@ -137,7 +140,7 @@ function verificationOccupancy(snapshot: HostedSnapshot, except?: string): numbe
 }
 
 export function initialSnapshot(id: string): HostedSnapshot {
-  return { revision: 0, workspace: { ...createWorkspace({ id, name: "Projects Git", provider: "cloudflare-artifacts" }), projects: {} }, repositories: {}, forks: {}, operations: {}, jobs: {}, checkPolicies: {} };
+  return { revision: 0, workspace: { ...createWorkspace({ id, name: "Projects Git", provider: "cloudflare-artifacts" }), projects: {} }, repositories: {}, forks: {}, operations: {}, jobs: {}, checkPolicies: {}, recoveryImports:{} };
 }
 
 // Upgrade the persisted task-only prototype once, without contacting a provider.
@@ -294,6 +297,7 @@ export class HostedController {
     if (Object.keys(input).some(key => !['name', 'description'].includes(key)))
       throw new ApiError(400, 'INVALID_REPOSITORY_CREATION', 'Supply a repository name and optional description only.');
     const name = repositoryName(input.name), description = input.description === undefined || input.description === '' ? '' : text(input.description, 'Description', 500);
+    core(()=>requireFreshRecoveryResource(this.store.read(),name));
     const key = await this.operationKey(requestKey), fingerprint = await digest(JSON.stringify({name, description}));
     this.requireOwner();
     let snapshot = this.store.read();
@@ -579,6 +583,33 @@ export class HostedController {
     this.checkBinding();return workspaceBackupPreview(archive);
   }
 
+  recoveryHistory(id?:string,archiveOnly=false) {
+    this.requireOwner();
+    if(this.authority.principal.kind!=='owner')throw new ApiError(403,'OWNER_REQUIRED','Only the current authenticated owner can inspect recovery history.');
+    const snapshot=this.store.read(),entries=snapshot.recoveryImports??{};
+    if(id!==undefined){
+      if(!/^[a-f0-9]{64}$/.test(id)||!Object.hasOwn(entries,id))throw new ApiError(404,'RECOVERY_IMPORT_NOT_FOUND','Recovery import not found.');
+      const entry=entries[id];return archiveOnly?structuredClone(entry.archive):{...workspaceRecoverySummary(id,entry),preview:workspaceBackupPreview(entry.archive)};
+    }
+    return {workspaceId:snapshot.workspace.id,revision:snapshot.revision,current:{projects:Object.keys(snapshot.workspace.projects??{}).length,tasks:snapshot.workspace.tasks.length,runs:snapshot.workspace.runs.length},
+      imports:Object.entries(entries).map(([key,entry])=>workspaceRecoverySummary(key,entry)),quarantinedNames:quarantinedRecoveryNames(snapshot)};
+  }
+
+  async restoreWorkspaceHistory(input:Record<string,unknown>,requestKey:string) {
+    this.requireOwner();validateIdempotencyKey(requestKey);
+    if(this.authority.principal.kind!=='owner')throw new ApiError(403,'OWNER_REQUIRED','Only the current authenticated owner can restore historical records.');
+    const request=await coreAsync(()=>readWorkspaceRecovery(input));
+    const key=await this.operationKey(requestKey),fingerprint=await digest(JSON.stringify(request.fingerprintInput));
+    this.requireOwner();const snapshot=this.store.read();
+    if(snapshot.workspace.id!==request.expectedWorkspaceId)throw new ApiError(403,'WORKSPACE_RESTORE_DESTINATION','The confirmed destination differs from this workspace.');
+    const prior=this.checkOperation(snapshot.operations[key],fingerprint,'workspace-restore');
+    if(prior?.state==='complete')return {workspaceId:snapshot.workspace.id,recoveryImportId:prior.recoveryImportId!,replayed:true,historical:true,restoresAuthority:false,resumesWork:false,codeAvailable:false};
+    const id=core(()=>retainWorkspaceRecovery(snapshot,request,{ownerSubject:this.authority.principal.id,importedAt:new Date().toISOString()}));
+    snapshot.operations[key]={kind:'workspace-restore',state:'complete',fingerprint,recoveryImportId:id};
+    snapshot.workspace.version++;this.save(snapshot);
+    return {workspaceId:snapshot.workspace.id,recoveryImportId:id,replayed:false,historical:true,restoresAuthority:false,resumesWork:false,codeAvailable:false};
+  }
+
   async changeProjectAccess(projectId:string,input:Record<string,unknown>,requestKey:string) {
     this.requireOwner();
     const release=this.store.lockProjectAccess(projectId);
@@ -745,6 +776,7 @@ export class HostedController {
   }
 
   private requireRepositoryReady(snapshot: HostedSnapshot, name: string): void {
+    core(()=>requireFreshRecoveryResource(snapshot,name));
     if (Object.values(snapshot.operations).some(op => op.kind === 'repository-create' && op.resourceName === name && op.state === 'pending'))
       throw new ApiError(409, 'REPOSITORY_CREATION_PENDING', 'Finish the saved repository creation request before connecting this code.');
   }
@@ -1029,6 +1061,7 @@ export class HostedController {
     const suffix = key.slice(0, 32);
     const attemptId = crypto.randomUUID();
     const resourceName = prior?.resourceName ?? 'agent-' + crypto.randomUUID();
+    core(()=>{requireFreshRecoveryResource(snapshot,snapshot.repositories[taskId]);requireFreshRecoveryResource(snapshot,resourceName);});
     const marker = prior?.marker ?? 'projects-agent-git:' + snapshot.workspace.id + ':' + key;
     let run = prior?.itemId ? snapshot.workspace.runs.find(item => item.id === prior.itemId)! : core(() => {
       bindQueuedBase(snapshot.workspace, task!);
@@ -1383,6 +1416,7 @@ export class HostedController {
       if (!prior?.reservesExecution && executionOccupancy(snapshot) >= MAX_ACTIVE_RUNS) throw new ApiError(409, 'CAPACITY_FULL', 'An agent slot is required for resolution work.');
     }
     const attemptId = crypto.randomUUID(), resourceName = prior?.resourceName ?? 'update-' + crypto.randomUUID();
+    core(()=>{for(const name of [resourceName,snapshot.repositories[task.id],snapshot.forks[runId]?.name])requireFreshRecoveryResource(snapshot,name);});
     const marker = prior?.marker ?? 'projects-agent-git:' + snapshot.workspace.id + ':' + key;
     const branch = 'updates/' + key.slice(0, 32);
     snapshot.operations[key] = { ...prior, fingerprint, kind: 'base-update', state: 'pending', taskId: task.id, projectId: task.projectId, sourceRunId: runId,
@@ -1505,6 +1539,7 @@ export class HostedController {
     try { limits = executionLimits(input.limits); }
     catch { throw new ApiError(422, 'INVALID_BUDGET', 'Supply explicit request, input, output and time limits within the supported ranges.'); }
     const repository = repositoryName(runtime.repository);
+    core(()=>requireFreshRecoveryResource(this.store.read(),repository));
     const key = await digest('model:' + requestKey);
     const fingerprint = await digest(JSON.stringify({ repository, candidates: input.candidates, limits }));
     let snapshot = this.store.read();

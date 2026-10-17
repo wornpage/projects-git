@@ -1,13 +1,16 @@
 import {el} from './dom.js';
+import {createWorkspaceRecoveryPanel} from './workspace-recovery.js';
 const MAX_BYTES=1024*1024;
 const count=value=>Number.isSafeInteger(value)&&value>=0;
 export function readWorkspaceBackupPreview(result,expectedSha256){
-  const c=result?.counts,keys=['projects','resources','currentTasks','historicalTasks','tasks','currentRuns','historicalRuns','runs','currentEvents','historicalEvents','events',
+  const c=result?.counts,keys=['currentProjects','historicalProjects','projects','currentOperations','historicalOperations','priorImports','resources','currentTasks','historicalTasks','tasks','currentRuns','historicalRuns','runs','currentEvents','historicalEvents','events',
     'currentPolicies','historicalPolicies','policies','repositoryMappings','forkMappings','gitMappings','operations','operationReports','jobs','pendingOperations','unsettledJobs'];
   if(result?.format!=='projects-git-workspace-backup/v1'||result.archiveSha256!==expectedSha256||result.historical!==true||result.restoresAuthority!==false||result.resumesWork!==false
-    ||!c||keys.some(key=>!count(c[key]))||['Tasks','Runs','Events','Policies'].some(name=>c['current'+name]+c['historical'+name]!==c[name.toLowerCase()])
+    ||!c||keys.some(key=>!count(c[key]))||['Projects','Operations','Tasks','Runs','Events','Policies'].some(name=>c['current'+name]+c['historical'+name]!==c[name.toLowerCase()])
     ||c.repositoryMappings+c.forkMappings!==c.gitMappings||c.pendingOperations>c.operations||c.operationReports>c.operations||c.unsettledJobs>c.jobs
-    ||!Array.isArray(result.projects)||result.projects.length!==c.projects||!Array.isArray(result.resources)||result.resources.length!==c.resources)throw Error('The backup preview is incomplete.');
+    ||!Array.isArray(result.projects)||result.projects.length!==c.currentProjects||!Array.isArray(result.priorImports)
+    ||result.priorImports.some(item=>!item?.counts||keys.some(key=>!count(item.counts[key]))||!/^[a-f0-9]{64}$/.test(item.id))
+    ||result.priorImports.reduce((total,item)=>total+1+item.counts.priorImports,0)!==c.priorImports||!Array.isArray(result.resources)||result.resources.length!==c.resources)throw Error('The backup preview is incomplete.');
   return result;
 }
 export function canInspectWorkspaceBackup({workspace,demo}){
@@ -15,7 +18,8 @@ export function canInspectWorkspaceBackup({workspace,demo}){
 }
 export function createWorkspaceBackupPanel({getContext,captureSession,api,downloadJson}){
   const root=el('section',{id:'workspace-backup-settings','aria-label':'Workspace backup'}),session=captureSession(),workspaceId=getContext().workspace?.id;
-  let busy=false,error='',preview=null,selection=0;
+  let busy=false,error='',preview=null,archive=null,selection=0;
+  const recovery=createWorkspaceRecoveryPanel({getContext,captureSession,api,downloadJson,canManage:canInspectWorkspaceBackup,getSelection:()=>archive&&preview?{archive,preview}:null});
   const current=()=>root.isConnected&&session()&&getContext().workspace?.id===workspaceId&&canInspectWorkspaceBackup(getContext());
   async function download(){
     if(!current()||busy)return;busy=true;error='';const request=++selection;render();
@@ -27,20 +31,20 @@ export function createWorkspaceBackupPanel({getContext,captureSession,api,downlo
     if(!current()||request!==selection)return;busy=false;render();
   }
   async function inspect(file){
-    if(!current()||busy||!file)return;busy=true;error='';preview=null;const request=++selection;render();
+    if(!current()||busy||!file)return;busy=true;error='';preview=null;archive=null;const request=++selection;render();
     try{
       if(!count(file.size)||file.size<2||file.size>MAX_BYTES)throw Error('Choose a complete backup JSON file, at most 1 MiB.');
       const bytes=await file.slice(0,MAX_BYTES+1).arrayBuffer();if(bytes.byteLength>MAX_BYTES)throw Error('Backup file exceeds 1 MiB.');
-      const archive=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));if(!current()||request!==selection)return;
-      const result=await api('/api/workspace/backup-preview',{method:'POST',body:{archive,expectedSha256:archive.sha256}});
+      const selected=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));if(!current()||request!==selection)return;
+      const result=await api('/api/workspace/backup-preview',{archive:selected,expectedSha256:selected.sha256});
       if(!current()||request!==selection)return;
-      preview=readWorkspaceBackupPreview(result,archive.sha256);
+      preview=readWorkspaceBackupPreview(result,selected.sha256);archive=selected;
     }catch{if(!current()||request!==selection)return;error='Could not validate this backup. Keep the original file and its separately recorded digest.';}
     if(!current()||request!==selection)return;busy=false;render();
   }
   function render(){
     if(!canInspectWorkspaceBackup(getContext())){root.replaceChildren(el('p',{},'Workspace backup is available to the signed-in owner.'));return;}
-    root.replaceChildren(...[el('h3',{},'Workspace backup'),
+    recovery.render();root.replaceChildren(...[el('h3',{},'Workspace backup'),
       el('p',{},'Download retained history, operation receipts and required Git commit references. Package Git objects separately on your computer.'),
       el('button',{type:'button',class:'button button-small',disabled:busy,onclick:download},'Download backup metadata'),
       el('p',{class:'small'},'Metadata alone cannot recover code. Offline recovery restores isolated Git repositories and history; it does not resume work or install an active database.'),
@@ -50,13 +54,15 @@ export function createWorkspaceBackupPanel({getContext,captureSession,api,downlo
       busy?el('p',{role:'status'},'Reading backup metadata…'):null,error?el('p',{role:'alert'},error):null,
       preview?el('div',{},el('p',{},`${preview.counts.projects} repositories · ${preview.counts.resources} Git recovery resources · ${preview.counts.operations} operation receipts`),
         el('table',{},el('caption',{},'Complete retained record coverage'),el('thead',{},el('tr',{},...['Collection','Current','Historical','Total'].map(name=>el('th',{scope:'col'},name)))),
-          el('tbody',{},...[['Task records','Tasks'],['Candidate records','Runs'],['Event records','Events'],['Check policies','Policies']].map(([label,key])=>el('tr',{},
+          el('tbody',{},...[['Repository records','Projects'],['Operation receipts','Operations'],['Task records','Tasks'],['Candidate records','Runs'],['Event records','Events'],['Check policies','Policies']].map(([label,key])=>el('tr',{},
             el('th',{scope:'row'},label),el('td',{},String(preview.counts['current'+key])),el('td',{},String(preview.counts['historical'+key])),el('td',{},String(preview.counts[key.toLowerCase()])))))),
         el('p',{class:'small'},`${preview.counts.operationReports} operation verifier reports · ${preview.counts.repositoryMappings} repository mappings + ${preview.counts.forkMappings} fork mappings = ${preview.counts.gitMappings} Git mappings · ${preview.counts.jobs} job records`),
         el('p',{},`${preview.counts.pendingOperations} unresolved operation receipts · ${preview.counts.unsettledJobs} unsettled job records. No work will be resumed.`),
         el('p',{class:'small'},`Source workspace ${preview.sourceWorkspaceId} · revision ${preview.sourceRevision} · digest ${preview.archiveSha256}`),
         ...preview.projects.map(project=>el('p',{class:'small'},`${project.name} · ${project.commits} required commits`)),
+        ...preview.priorImports.map(item=>el('p',{class:'small'},`Prior historical workspace ${item.workspaceId} · ${item.id} · ${item.counts.tasks} task records`)),
         ...preview.resources.filter(resource=>resource.kind!=='project').map(resource=>el('p',{class:'small'},`Unattached Git resource ${resource.id} · ${resource.commits} required commits · recovery anchor ${resource.anchorCommit}`))):null,
+      recovery.root,
       el('details',{},el('summary',{},'Recover offline and understand the boundary'),
         el('p',{},'Use scripts/workspace-bundle.mjs from the source checkout to package every referenced commit from explicit local repositories. Record the returned manifest digest separately. Restore only to a new directory.'),
         el('p',{},'Backup metadata is bounded at 1 MiB. Encoded and expanded Git objects each have an aggregate 64 MiB budget, with at most 16,384 objects. Limits include historical records. Exceeding a limit fails; nothing is silently truncated. A checksum proves integrity, not who created an archive.'),
