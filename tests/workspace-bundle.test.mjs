@@ -9,6 +9,8 @@ import {RepositoryRunner} from '../src/local/repository-runner.mjs';
 import {createWorkspace,createTask,assignRun,startRun} from '../src/core/workflow.mjs';
 import {buildWorkspaceBackup} from '../src/core/workspace-backup.mjs';
 import {writeWorkspaceBundle,restoreWorkspaceBundle} from '../src/local/workspace-bundle.mjs';
+const testLedgers=()=>({capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
+const buildBackup=(snapshot,exportedAt)=>buildWorkspaceBackup(snapshot,exportedAt,testLedgers());
 async function fixture(t){
   const root=await mkdtemp(path.join(tmpdir(),'projects-workspace-backup-')),runner=new RepositoryRunner(root);await runner.initialize();
   t.after(async()=>{assert.ok(path.resolve(root).startsWith(path.resolve(tmpdir())+path.sep));await rm(root,{recursive:true,force:true});});
@@ -22,7 +24,7 @@ async function fixture(t){
   const run=assignRun(workspace,task.id,{agent:'external',label:'Fixture',branch:'agents/fixture'});startRun(workspace,run.id);
   const snapshot={revision:3,workspace,operations:{['f'.repeat(64)]:{kind:'merge',fingerprint:'e'.repeat(64),state:'pending',projectId:first,itemId:run.id,pendingCommit:pending}},
     repositories:{[task.id]:workspace.projects[first].repositoryName},forks:{},jobs:{},checkPolicies:{}};
-  const archive=await buildWorkspaceBackup(snapshot),sources=Object.fromEntries(archive.payload.resources.map(resource=>[resource.id,Object.fromEntries(resource.commits.map(hash=>[hash,source]))]));
+  const archive=await buildBackup(snapshot),sources=Object.fromEntries(archive.payload.resources.map(resource=>[resource.id,Object.fromEntries(resource.commits.map(hash=>[hash,source]))]));
   return {root,runner,source,base,pending,archive,sources};
 }
 test('cold offline recovery retains two projects and uncertain commits without the original source or live authority',async t=>{
@@ -64,7 +66,7 @@ test('missing local source mappings and URLs cannot begin a package',async t=>{
 
 async function singleResource(head,source){
   const workspace=createWorkspace({provider:'cloudflare-artifacts'}),id=crypto.randomUUID();workspace.projects={[id]:{id,name:'Full history',repositoryName:'full-history',mainCommit:head,defaultBranch:'main',kind:'artifacts',acceptingWork:true,policyVersion:1}};
-  const archive=await buildWorkspaceBackup({revision:1,workspace,operations:{},repositories:{},forks:{},jobs:{},checkPolicies:{}});
+  const archive=await buildBackup({revision:1,workspace,operations:{},repositories:{},forks:{},jobs:{},checkPolicies:{}});
   return {archive,expectedArchiveSha256:archive.sha256,sources:{[id]:{[head]:source}}};
 }
 test('backup captures more than 32 ancestors under aggregate budgets',async t=>{
@@ -94,7 +96,7 @@ test('wide, binary and symlink trees recover without submission-only snapshot li
 });
 test('a pending resource with no project record packages and restores its uncertain commit',async t=>{
   const f=await fixture(t),workspace=createWorkspace({provider:'cloudflare-artifacts'});workspace.projects={};const projectId=crypto.randomUUID(),key='d'.repeat(64);
-  const archive=await buildWorkspaceBackup({revision:1,workspace,repositories:{},forks:{},jobs:{},checkPolicies:{},operations:{[key]:{kind:'repository-create',
+  const archive=await buildBackup({revision:1,workspace,repositories:{},forks:{},jobs:{},checkPolicies:{},operations:{[key]:{kind:'repository-create',
     fingerprint:'c'.repeat(64),state:'pending',projectId,resourceName:'pending-source',pendingCommit:f.pending}}});
   const resource=archive.payload.resources[0],directory=path.join(f.root,'pending-package');
   const packaged=await writeWorkspaceBundle({archive,expectedArchiveSha256:archive.sha256,sources:{[resource.id]:{[f.pending]:f.source}},directory});

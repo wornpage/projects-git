@@ -40,6 +40,7 @@ const NEW_BLOB = "2".repeat(40);
 const CONTROL_TOKEN = "test-control-token-" + "x".repeat(40);
 const LONG_TOKEN = "initial-provider-credential-sensitive";
 const SHORT_TOKEN = "short-provider-credential-sensitive";
+const emptyBackupLedgers=()=>({capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
 const reviewInput=(contextId,summary='Inspected the exact source and trusted checks.',verdict='pass',findings=[])=>({
   format:'projects-code-review-assessment/v2',contextId,summary,verdict,findings,resolvedPriorFindingIds:[]});
 async function assignTestReview(c,runId,reviewerIds=[REVIEWER_CLIENT],controller=c.controller){
@@ -620,6 +621,7 @@ function setup(runtime, workspaceId = 'mock-workspace') {
     },
     identity: () => ({...snapshot.workspace,revision:snapshot.revision,empty:!snapshot.workspace.tasks.length&&!snapshot.workspace.runs.length&&!Object.keys(snapshot.operations).length}),
     read: () => structuredClone(snapshot),
+    captureBackup:()=>({snapshot:structuredClone(snapshot),backupLedgers:emptyBackupLedgers()}),
     operation: key => structuredClone(snapshot.operations[key]),
     project: id => structuredClone(snapshot.workspace.projects?.[id]),
     readPage: request => snapshotPage(snapshot,request),

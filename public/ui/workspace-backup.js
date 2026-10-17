@@ -3,10 +3,21 @@ const MAX_BYTES=1024*1024;
 const count=value=>Number.isSafeInteger(value)&&value>=0;
 export function readWorkspaceBackupPreview(result,expectedSha256){
   const c=result?.counts,keys=['projects','resources','currentTasks','historicalTasks','tasks','currentRuns','historicalRuns','runs','currentEvents','historicalEvents','events',
-    'currentPolicies','historicalPolicies','policies','repositoryMappings','forkMappings','gitMappings','operations','operationReports','jobs','pendingOperations','unsettledJobs'];
-  if(result?.format!=='projects-git-workspace-backup/v1'||result.archiveSha256!==expectedSha256||result.historical!==true||result.restoresAuthority!==false||result.resumesWork!==false
+    'currentPolicies','historicalPolicies','policies','repositoryMappings','forkMappings','gitMappings','operations','operationReports','jobs','pendingOperations','unsettledJobs',
+    'artifactSubscriptions','pendingArtifactSubscriptions','artifactSubscriptionAttempts','pendingArtifactSubscriptionAttempts','artifactEvents','pendingArtifactEvents',
+    'artifactEventAttempts','pendingArtifactEventAttempts','artifactDeliveries','reservedArtifactSubscriptions','creatingArtifactSubscriptions','boundArtifactSubscriptions','readyArtifactSubscriptions',
+    'completedArtifactSubscriptionAttempts','failedArtifactSubscriptionAttempts','supersededArtifactSubscriptionAttempts','completedArtifactEvents','failedArtifactEvents',
+    'completedArtifactEventAttempts','failedArtifactEventAttempts','supersededArtifactEventAttempts'];
+  if(result?.format!=='projects-git-workspace-backup/v1'||result.archiveSha256!==expectedSha256||result.ledgerCapture!=='coherent-sqlite-transaction'||result.historical!==true||result.restoresAuthority!==false||result.resumesWork!==false
     ||!c||keys.some(key=>!count(c[key]))||['Tasks','Runs','Events','Policies'].some(name=>c['current'+name]+c['historical'+name]!==c[name.toLowerCase()])
     ||c.repositoryMappings+c.forkMappings!==c.gitMappings||c.pendingOperations>c.operations||c.operationReports>c.operations||c.unsettledJobs>c.jobs
+    ||c.pendingArtifactSubscriptions>c.artifactSubscriptions||c.pendingArtifactSubscriptionAttempts>c.artifactSubscriptionAttempts
+    ||c.pendingArtifactEvents>c.artifactEvents||c.pendingArtifactEventAttempts>c.artifactEventAttempts
+    ||c.reservedArtifactSubscriptions+c.creatingArtifactSubscriptions+c.boundArtifactSubscriptions+c.readyArtifactSubscriptions!==c.artifactSubscriptions
+    ||c.reservedArtifactSubscriptions+c.creatingArtifactSubscriptions+c.boundArtifactSubscriptions!==c.pendingArtifactSubscriptions
+    ||c.pendingArtifactSubscriptionAttempts+c.completedArtifactSubscriptionAttempts+c.failedArtifactSubscriptionAttempts+c.supersededArtifactSubscriptionAttempts!==c.artifactSubscriptionAttempts
+    ||c.pendingArtifactEvents+c.completedArtifactEvents+c.failedArtifactEvents!==c.artifactEvents
+    ||c.pendingArtifactEventAttempts+c.completedArtifactEventAttempts+c.failedArtifactEventAttempts+c.supersededArtifactEventAttempts!==c.artifactEventAttempts
     ||!Array.isArray(result.projects)||result.projects.length!==c.projects||!Array.isArray(result.resources)||result.resources.length!==c.resources)throw Error('The backup preview is incomplete.');
   return result;
 }
@@ -53,6 +64,11 @@ export function createWorkspaceBackupPanel({getContext,captureSession,api,downlo
           el('tbody',{},...[['Task records','Tasks'],['Candidate records','Runs'],['Event records','Events'],['Check policies','Policies']].map(([label,key])=>el('tr',{},
             el('th',{scope:'row'},label),el('td',{},String(preview.counts['current'+key])),el('td',{},String(preview.counts['historical'+key])),el('td',{},String(preview.counts[key.toLowerCase()])))))),
         el('p',{class:'small'},`${preview.counts.operationReports} operation verifier reports · ${preview.counts.repositoryMappings} repository mappings + ${preview.counts.forkMappings} fork mappings = ${preview.counts.gitMappings} Git mappings · ${preview.counts.jobs} job records`),
+        el('p',{class:'small'},`${preview.counts.artifactSubscriptions} artifact subscriptions: reserved ${preview.counts.reservedArtifactSubscriptions} · creating ${preview.counts.creatingArtifactSubscriptions} · bound ${preview.counts.boundArtifactSubscriptions} · ready ${preview.counts.readyArtifactSubscriptions}`),
+        el('p',{class:'small'},`${preview.counts.artifactSubscriptionAttempts} subscription attempts: pending ${preview.counts.pendingArtifactSubscriptionAttempts} · complete ${preview.counts.completedArtifactSubscriptionAttempts} · failed ${preview.counts.failedArtifactSubscriptionAttempts} · superseded ${preview.counts.supersededArtifactSubscriptionAttempts}`),
+        el('p',{class:'small'},`${preview.counts.artifactEvents} artifact events: pending ${preview.counts.pendingArtifactEvents} · complete ${preview.counts.completedArtifactEvents} · failed ${preview.counts.failedArtifactEvents}`),
+        el('p',{class:'small'},`${preview.counts.artifactEventAttempts} event attempts: pending ${preview.counts.pendingArtifactEventAttempts} · complete ${preview.counts.completedArtifactEventAttempts} · failed ${preview.counts.failedArtifactEventAttempts} · superseded ${preview.counts.supersededArtifactEventAttempts} · ${preview.counts.artifactDeliveries} delivery identities`),
+        el('p',{class:'small'},'Workflow and provider-effect ledgers were captured in one coherent SQLite read transaction.'),
         el('p',{},`${preview.counts.pendingOperations} unresolved operation receipts · ${preview.counts.unsettledJobs} unsettled job records. No work will be resumed.`),
         el('p',{class:'small'},`Source workspace ${preview.sourceWorkspaceId} · revision ${preview.sourceRevision} · digest ${preview.archiveSha256}`),
         ...preview.projects.map(project=>el('p',{class:'small'},`${project.name} · ${project.commits} required commits`)),

@@ -29,6 +29,7 @@ import {projectOperationalMetrics} from '../core/operational-metrics.mjs';
 import {buildWorkspaceBackup,readWorkspaceBackup,workspaceBackupPreview} from '../core/workspace-backup.mjs';
 import {beginOperationTiming,finishOperationTiming,operationTimings} from '../core/operation-timing.mjs';
 import type {OperationTiming} from '../core/operation-timing.mjs';
+import type {BackupCapture} from './workspace-store.ts';
 
 const sampleTask = { title: 'Make checkout totals trustworthy', owner: 'Cloudflare coordinator', purpose: 'Calculate exact integer-cent totals and reject invalid inputs and unsafe totals.',
   criteria: ['Use safe integer cents.', 'Reject invalid quantities and prices.', 'Preserve valid inputs and reject unsafe totals.'] };
@@ -116,6 +117,7 @@ export interface SnapshotPage {
 export interface SnapshotStore {
   lockProjectAccess(projectId:string):()=>void;
   read(): HostedSnapshot;
+  captureBackup(): BackupCapture;
   operation(key: string): Operation | undefined;
   project(id: string): Project | undefined;
   readPage(request: NonNullable<ReturnType<typeof parseWorkspacePage>>): SnapshotPage;
@@ -565,7 +567,7 @@ export class HostedController {
 
   async workspaceBackup() {
     this.requireOwner();
-    const snapshot=this.store.read(),backup=await coreAsync(()=>buildWorkspaceBackup(snapshot));
+    const {snapshot,backupLedgers}=this.store.captureBackup(),backup=await coreAsync(()=>buildWorkspaceBackup(snapshot,new Date().toISOString(),backupLedgers));
     this.checkBinding();
     if(this.store.identity().revision!==snapshot.revision)throw new ApiError(409,'STALE_WORKSPACE_BACKUP','Workspace history changed during export. Read the current revision; no partial backup was returned.');
     return backup;
