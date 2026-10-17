@@ -3586,3 +3586,8 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
 .installation-status.status-blocked { color: var(--worn-danger-text); }
 .installation-check { padding-block: .7rem; border-bottom: 1px solid var(--worn-border); }
 .installation-check p { margin-block: .3rem 0; }
+
+/* Repository access stays readable with long verified subject IDs. */
+.project-access-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(10rem,14rem);gap:1rem;align-items:center;margin-block:1rem}
+.project-access-row label{overflow-wrap:anywhere}.project-access-row label .small{display:block}
+@media(max-width:640px){.project-access-row{grid-template-columns:1fr;gap:.4rem}}

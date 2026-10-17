@@ -25,6 +25,7 @@ import {createPublicationView} from './ui/publication.js';
 import {createProjectControls, automaticMergeControls} from './ui/project-controls.js';
 import {createProjectsView} from './ui/views/projects.js';
 import {canInspectInstallation, createInstallationPanel} from './ui/installation.js';
+import {canManageProjectAccess, createProjectAccessPanel} from './ui/project-access.js';
 import "./vendor/wornpage-button-0.2.3/worn-button.js";
 import { independentlyVerified as verifiedAtCurrentHead, connectionLabel, mergeState, workspacePresentationKey, taskOutcome, projectContext, dependencyState, readLocation, locationSearch } from './workbench-state.js';
 import { localAgentInstructions, hostedAgentInstructions } from './agent-instructions.js';
@@ -430,6 +431,8 @@ function updateProjectHeader() {
   projectHeaderKey = key;
   const controlsId = 'project-controls-' + project.id;
   const controls = createProjectControls({id: controlsId, onOpen: (body,opener)=>openInspector('Project settings · '+project.name,body)},
+    canManageProjectAccess(getContext())?el('button',{class:'button button-small',onclick:()=>openInspector('People and access · '+project.name,
+      createProjectAccessPanel({projectId:project.id,getContext,captureSession:connection.captureSession,api,refresh}))},'People and access'):null,
     demo || workspace.personalWorkspace?.agentConnections === false ? null : el('button', { id: 'shell-connect-agent', class: 'button button-small', onclick: () => openAgentConnection(project.id, $('#shell-project-controls')) }, 'Connect agent'), admissionSwitch(project),
     automaticMergeControls({project, hosted:!demo && workspace.authentication?.mode === 'cloudflare-access', canManage:workspace.authentication?.permissions.manage,
       busy:actions.busy, onChange:(enabled, expectedVersion) => mutate(() => api('/api/projects/' + project.id + '/automatic-merge', {enabled, expectedVersion}),

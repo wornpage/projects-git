@@ -53,16 +53,18 @@ and keep automatic merge off during identity-policy rollouts.
 | Principal | Permissions |
 | --- | --- |
 | Owner | Workspace management, task briefs and coordination, check policy, owner acceptance/rejection, merge, recovery and automatic merge policy |
-| Agent client | Read its workspace, claim eligible work, and start, submit or fail its own assignments |
-| Reviewer client | Read exact candidate review context and append its own bound assessment; no build, verification, acceptance or merge actions |
+| Human member | Read repositories explicitly shared with its stable subject; no workflow mutations |
+| Agent client | Read explicitly shared repositories; build permission allows claims and changes to its own assignments |
+| Reviewer client | Repository review grant plus candidate assignment allows exact review context and its own bound assessment; no build, verification, acceptance or merge actions |
 | Private workspace alarm | Execute a current owner-enabled automatic policy; cannot configure it or manufacture a human decision |
 | Other identity | No workspace access |
 
-There is one pinned owner, not a team membership system. Builder and reviewer
-permissions are separate, but there are no team administrators, project-member
-roles, approval quorums or separately delegated merge permissions. Adding team
-members requires a deliberate authorization model; a task's owner label does
-not grant account access.
+There is one pinned workspace owner. [Repository grants](repository-access.md)
+provide member reads, builder access and independent-review access for configured
+identities. `ACCESS_MEMBER_SUBJECTS` optionally lists human member subjects. There
+are no delegated team administrators, approval quorums or delegated merge powers.
+A task's owner label grants no account access. Existing repositories require
+explicit owner grants before non-owner access resumes after this upgrade.
 
 Projects can opt in to [automatic approval and merge](automatic-merge.md), off
 by default. That policy requires current independent checks and code review;

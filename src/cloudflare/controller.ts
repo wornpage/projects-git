@@ -20,7 +20,10 @@ import type { HostedAuthority, AccessPrincipal, AccessPolicy } from './access.ts
 import { automaticApprovalEligible, approveRunByPolicy } from '../core/workflow.mjs';
 import { setAutomaticMergePolicy } from '../core/project-work.mjs';
 import { automaticMergePolicyCurrent, independentReviewStatus } from '../../public/review-boundary.js';
-import {parseWorkspacePage} from '../../public/workspace-page.js';
+import {parseWorkspacePage, projectWorkspace} from '../../public/workspace-page.js';
+import {projectCatalog as accessibleCatalog} from '../../public/project-catalog.js';
+import {repositoryAccess, setRepositoryAccess, repositoryWorkspace, hasRepositoryPermission, requireRepositoryPermission} from '../core/repository-access.mjs';
+import type {RepositoryPermission} from '../core/repository-access.mjs';
 import {discoveryParameter, listRepositories, inspectRepository} from './repository-discovery.ts';
 
 const sampleTask = { title: 'Make checkout totals trustworthy', owner: 'Cloudflare coordinator', purpose: 'Calculate exact integer-cent totals and reject invalid inputs and unsafe totals.',
@@ -45,7 +48,11 @@ interface Operation {
   report?: Evidence;
   idleResult?: { idle: boolean; reason: string; waitingTaskIds: string[] };
   fingerprint: string;
-  kind: "task" | "assign" | "claim" | "model" | "merge" | "checks" | "base-update" | "model-check" | "review-inference" | "restore" | "repository-create";
+  kind: "task" | "assign" | "claim" | "model" | "merge" | "checks" | "base-update" | "model-check" | "review-inference" | "restore" | "repository-create" | "project-access";
+  accessVersion?: number;
+  revokeRunIds?: string[];
+  revokedRunIds?: string[];
+  accessRequest?: {id:string;input:Record<string,unknown>};
   reservesExecution?: boolean;
   state: "pending" | "complete" | "failed";
   itemId?: string;
@@ -202,6 +209,8 @@ export class HostedController {
   private store: SnapshotStore;
   private artifacts: Artifacts;
   private authority: HostedAuthority;
+  private projectGuards = new Map<string, {version:number;permissions:Set<RepositoryPermission>}>();
+  private delegatedProjectGuards: {projectId:string;identity:AuthenticatedIdentity;permission:RepositoryPermission;version:number}[] = [];
   private runtime?: HostedRuntime;
   constructor(store: SnapshotStore, artifacts: Artifacts, authority: HostedAuthority, runtime?: HostedRuntime) {
     this.store = store;
@@ -225,6 +234,30 @@ export class HostedController {
     const expected = ownerBinding(this.authority.policy);
     if (state.authentication && (['provider', 'issuer', 'audience', 'subject', 'workspaceId'] as const).some(key => state.authentication![key] !== expected[key])) throw new ApiError(403, 'WORKSPACE_OWNER_MISMATCH', 'The configured owner does not match this retained workspace.');
     if (!state.authentication && this.authority.principal.kind !== 'owner') throw new ApiError(409, 'OWNER_ADOPTION_REQUIRED', 'The owner must explicitly adopt this retained workspace.');
+    for (const [projectId, guard] of this.projectGuards) {
+      const project=this.store.project(projectId);
+      for (const permission of guard.permissions) core(() => requireRepositoryPermission(project, this.authority.principal, this.authority.policy, permission));
+      if(project&&core(()=>repositoryAccess(project)).version!==guard.version)throw new ApiError(409,'PROJECT_ACCESS_CHANGED','Repository access changed during this request. Inspect its retained outcome before retrying.');
+    }
+    for (const guard of this.delegatedProjectGuards) {
+      const project=this.store.project(guard.projectId);
+      core(() => requireRepositoryPermission(project, guard.identity, this.authority.policy, guard.permission));
+      if(project&&core(()=>repositoryAccess(project)).version!==guard.version)throw new ApiError(409,'PROJECT_ACCESS_CHANGED','Repository access changed during delegated work. Inspect its retained outcome before retrying.');
+    }
+  }
+
+  /** Rechecked by every subsequent authority/save boundary on this request. */
+  requireProjectAccess(projectId: string, permission: RepositoryPermission = 'read'): void {
+    this.checkBinding();
+    core(() => requireRepositoryPermission(this.store.project(projectId), this.authority.principal, this.authority.policy, permission));
+    if(['owner','system'].includes(this.authority.principal.kind))return;
+    if (!this.projectGuards.has(projectId)) this.projectGuards.set(projectId, {version:core(()=>repositoryAccess(this.store.project(projectId)!)).version,permissions:new Set()});
+    this.projectGuards.get(projectId)!.permissions.add(permission);
+  }
+
+  private guardDelegatedProject(projectId:string,identity:AuthenticatedIdentity,permission:RepositoryPermission) {
+    this.checkBinding();core(()=>requireRepositoryPermission(this.store.project(projectId),identity,this.authority.policy,permission));
+    this.delegatedProjectGuards.push({projectId,identity,permission,version:core(()=>repositoryAccess(this.store.project(projectId)!)).version});
   }
 
   private requireOwner(): void {
@@ -389,6 +422,9 @@ export class HostedController {
     if (!run) throw new ApiError(404, 'RUN_NOT_FOUND', 'Assignment not found in this workspace.');
     const actor = this.authority.principal;
     if (actor.kind === 'reviewer') throw new ApiError(403, 'REVIEWER_READ_ONLY', 'Reviewers cannot modify assignments.');
+    if (!['owner', 'agent'].includes(actor.kind)) throw new ApiError(403, 'OWNER_REQUIRED', 'Only the owner or assigned builder can modify assignments.');
+    const task = this.store.read().workspace.tasks.find(task => task.id === run.taskId);
+    this.requireProjectAccess(task?.projectId ?? '', 'build');
     if (actor.kind === 'agent' && (!run.agentIdentity || run.agentIdentity.id !== actor.id || run.agentIdentity.issuer !== actor.issuer || run.agentIdentity.workspaceId !== actor.workspaceId)) {
       throw new ApiError(403, 'ASSIGNMENT_FORBIDDEN', 'This assignment belongs to another authenticated client.');
     }
@@ -440,7 +476,7 @@ export class HostedController {
   workspace(snapshot = this.store.read(), globalCapacity?: WorkspaceCapacity) {
     this.checkBinding();
     if (this.authority.principal.kind === 'reviewer') throw new ApiError(403, 'REVIEWER_READ_ONLY', 'Use the sealed candidate review context.');
-    const state = snapshot.workspace;
+    const state = core(() => repositoryWorkspace(snapshot.workspace, this.authority.principal, this.authority.policy));
     const reviewRequests = Object.fromEntries(state.runs.map(run => [run.id, this.reviewRequestState(state, run)]));
     const presentation = {...state, reviewRequests};
     const canManage = this.authority.principal.kind === 'owner';
@@ -454,7 +490,8 @@ export class HostedController {
         permissions: { manage: this.authority.principal.kind === 'owner', review: this.authority.principal.kind === 'owner', merge: this.authority.principal.kind === 'owner' },
         agentClientIds: this.authority.principal.kind === 'owner' ? this.authority.policy.agentClientIds : [],
         reviewerClientIds: this.authority.principal.kind === 'owner' ? this.authority.policy.reviewerClientIds ?? [] : [],
-        reviewerSubjects: this.authority.principal.kind === 'owner' ? this.authority.policy.reviewerSubjects ?? [] : [] },
+        reviewerSubjects: this.authority.principal.kind === 'owner' ? this.authority.policy.reviewerSubjects ?? [] : [],
+        memberSubjects: canManage ? this.authority.policy.memberSubjects ?? [] : [] },
       capacity: globalCapacity ?? { limit: MAX_ACTIVE_RUNS, running: state.runs.filter(run => run.status === 'running').length,
         reserved: executionReservations(snapshot),
         occupied: executionOccupancy(snapshot),
@@ -472,10 +509,99 @@ export class HostedController {
   projectCatalog(request: ReturnType<typeof import('../../public/project-catalog.js').parseProjectCatalog>) {
     this.checkBinding();
     if(this.authority.principal.kind==='reviewer')throw new ApiError(403,'REVIEWER_READ_ONLY','Use the sealed candidate review context.');
-    return this.store.readCatalog(request);
+    if (this.authority.principal.kind === 'owner') return this.store.readCatalog(request);
+    const snapshot=this.store.read(), workspace=core(()=>repositoryWorkspace(snapshot.workspace,this.authority.principal,this.authority.policy));
+    try{return {...accessibleCatalog(workspace,request,snapshot.revision),scope:'accessible-project-names'};}
+    catch(error){
+      const failure=error as {code?:string;status?:number;message:string};
+      if(failure.code&&['PROJECT_CATALOG_CHANGED','PROJECT_CATALOG_PAGE_UNAVAILABLE'].includes(failure.code))throw new ApiError(409,failure.code,failure.message);
+      throw error;
+    }
+  }
+
+  workspacePage(request: ReturnType<typeof parseWorkspacePage>) {
+    this.checkBinding();
+    if (this.authority.principal.kind === 'owner') {
+      const page = request ? this.store.readPage(request) : null;
+      return {...(page ? this.workspace(page.snapshot,page.capacity) : this.workspace()),
+        ...(page ? {page: page.page, operationReceipts: page.operationReceipts} : {})};
+    }
+    // Filter before selection, numbering, counts and metrics, including explicit
+    // task/run selections. A denied repository never creates a sparse page.
+    try{return projectWorkspace(this.workspace(),request,this.store.identity().revision);}
+    catch(error){
+      const failure=error as {code?:string;status?:number;message:string};
+      if(failure.code&&['WORKSPACE_PAGE_CHANGED','PROJECT_NOT_FOUND','RUN_NOT_FOUND'].includes(failure.code))
+        throw new ApiError(failure.status??409,failure.code,failure.message);
+      throw error;
+    }
+  }
+
+  projectAccess(projectId:string) {
+    this.requireOwner();
+    const project=this.store.project(projectId);
+    if(!project)throw new ApiError(404,'PROJECT_NOT_FOUND','Repository not found.');
+    const snapshot=this.store.read();
+    const pending=Object.entries(snapshot.operations).find(([,op])=>op.kind==='project-access'&&op.projectId===projectId&&op.state==='pending');
+    return {projectId,access:core(()=>repositoryAccess(project)),
+      identities:[...this.authority.policy.agentClientIds.map(id=>({kind:'agent',id,roles:['read','build']})),
+        ...[...(this.authority.policy.reviewerClientIds??[]),...(this.authority.policy.reviewerSubjects??[])].map(id=>({kind:'reviewer',id,roles:['review']})),
+        ...(this.authority.policy.memberSubjects??[]).map(id=>({kind:'member',id,roles:['read']}))],
+      recovery:pending?{requestId:pending[1].accessRequest?.id,input:pending[1].accessRequest?.input,accessVersion:pending[1].accessVersion,
+        pendingRuns:pending[1].revokeRunIds?.filter(id=>!pending[1].revokedRunIds?.includes(id))??[],state:'credential-cleanup-pending'}:null};
+  }
+
+  async changeProjectAccess(projectId:string,input:Record<string,unknown>,requestKey:string) {
+    this.requireOwner();
+    validateIdempotencyKey(requestKey);
+    const key=await this.operationKey(requestKey),fingerprint=await digest(JSON.stringify([projectId,input]));
+    this.requireOwner();let snapshot=this.store.read();
+    let operation=this.checkOperation(snapshot.operations[key],fingerprint,'project-access');
+    if(!operation){
+      if(Object.values(snapshot.operations).some(op=>op.kind==='project-access'&&op.projectId===projectId&&op.state==='pending'))
+        throw new ApiError(409,'PROJECT_ACCESS_RECOVERY_REQUIRED','Finish the saved access change before starting another. Repository policy is already enforced.');
+      const project=snapshot.workspace.projects?.[projectId];if(!project)throw new ApiError(404,'PROJECT_NOT_FOUND','Repository not found.');
+      const previous=core(()=>repositoryAccess(project));
+      const next=core(()=>setRepositoryAccess(project,input,this.authority.principal,this.authority.policy));
+      const revoked=new Set(previous.grants.filter(grant=>grant.kind==='agent'&&grant.role==='build'
+        && !next.grants.some(after=>after.issuer===grant.issuer&&after.kind===grant.kind&&after.id===grant.id&&after.role==='build')).map(grant=>grant.issuer+'|'+grant.id));
+      const tasks=new Set(snapshot.workspace.tasks.filter(task=>task.projectId===projectId).map(task=>task.id));
+      const revokeRunIds=snapshot.workspace.runs.filter(run=>tasks.has(run.taskId)&&run.agentIdentity
+        && revoked.has(run.agentIdentity.issuer+'|'+run.agentIdentity.id)).map(run=>run.id);
+      operation={kind:'project-access',state:'pending',fingerprint,projectId,accessVersion:next.version,revokeRunIds,revokedRunIds:[],accessRequest:{id:requestKey,input:structuredClone(input)}};
+      snapshot.operations[key]=operation;snapshot.workspace.version++;
+      snapshot.workspace.events.push({id:crypto.randomUUID(),at:next.updatedAt,type:'project.access_changed',projectId,taskId:null,runId:null,
+        message:'Owner changed repository access to version '+next.version+'. Credential cleanup is tracked separately.'});
+      this.save(snapshot);
+    }
+    if(operation.state==='complete')return {projectId,accessVersion:operation.accessVersion,credentialCleanup:'confirmed',replayed:true};
+    const currentOperation=()=>{
+      this.requireOwner();const fresh=this.store.read(),op=fresh.operations[key];
+      if(op?.kind!=='project-access'||op.fingerprint!==fingerprint||op.accessVersion!==fresh.workspace.projects?.[projectId]?.access?.version)
+        throw new ApiError(409,'PROJECT_ACCESS_CHANGED','Saved access cleanup no longer matches the repository policy.');
+      return {fresh,op};
+    };
+    for(const runId of operation.revokeRunIds??[]){
+      let {fresh,op}=currentOperation();if(op.revokedRunIds?.includes(runId))continue;
+      const assignment=Object.values(fresh.operations).find(candidate=>['assign','claim','base-update'].includes(candidate.kind)&&candidate.itemId===runId);
+      // A pending provider call is not proved stopped by an elapsed lease. Keep
+      // the uncertainty visible instead of claiming all credentials are gone.
+      if(assignment?.state==='pending')continue;
+      const resource=fresh.forks[runId];
+      if(!resource)throw new ApiError(409,'ACCESS_CREDENTIAL_RECOVERY_REQUIRED','The retained assignment needs owner recovery before credential cleanup can be confirmed.');
+      using repo=await this.artifacts.get(resource.name);
+      await this.revokeRunTokens(repo,currentOperation);
+      ({fresh,op}=currentOperation());op.revokedRunIds=[...(op.revokedRunIds??[]),runId];this.save(fresh);
+    }
+    const {fresh,op}=currentOperation();
+    const pending=(op.revokeRunIds??[]).filter(id=>!op.revokedRunIds?.includes(id));
+    if(!pending.length){op.state='complete';this.save(fresh);}
+    return {projectId,accessVersion:op.accessVersion,credentialCleanup:pending.length?'pending':'confirmed',pendingRunIds:pending,replayed:false,
+      next:pending.length?'Repository access is enforced. Reconcile the retained assignment, then retry this exact access request to finish credential cleanup.':'Repository access and observed credential cleanup are recorded.'};
   }
 
   private save(snapshot: HostedSnapshot): void {
+    this.checkBinding();
     const current = this.store.identity();
     assertAuthority(this.authority, current.id);
     assertSession(this.authority.principal, current.sessionsValidAfter);
@@ -489,7 +615,11 @@ export class HostedController {
   async handoff(taskId: string) {
     this.checkBinding();
     if (this.authority.principal.kind === 'reviewer') throw new ApiError(403, 'REVIEWER_READ_ONLY', 'Use the sealed candidate review context.');
-    try { return await buildTaskHandoff(this.store.read().workspace, taskId); }
+    const task=this.store.read().workspace.tasks.find(task=>task.id===taskId);
+    if(!task&&this.authority.principal.kind==='owner')throw new ApiError(404,'task_not_found','Task not found.');
+    this.requireProjectAccess(task?.projectId ?? '');
+    try { const state=core(()=>repositoryWorkspace(this.store.read().workspace,this.authority.principal,this.authority.policy));
+      const result=await buildTaskHandoff(state, taskId);this.checkBinding();return result; }
     catch (error) {
       if (error instanceof WorkflowError) throw new ApiError(error.status, error.code, error.message);
       throw error;
@@ -685,7 +815,10 @@ export class HostedController {
 
   private currentReviewerAllowed(run?: Run): boolean {
     const reviewer = run?.codeReview?.identity;
-    return Boolean(reviewer?.issuer === this.authority.policy.issuer && this.reviewerAllowed(reviewer.id));
+    const state=this.store.read().workspace,task=state.tasks.find(task=>task.id===run?.taskId),project=task?.projectId?state.projects?.[task.projectId]:undefined;
+    return Boolean(reviewer?.issuer === this.authority.policy.issuer && this.reviewerAllowed(reviewer.id)
+      && project && run?.codeReview?.repositoryAccessVersion===core(()=>repositoryAccess(project)).version
+      && core(()=>hasRepositoryPermission(project,reviewer!,this.authority.policy,'review')));
   }
 
   private requireCurrentReviewer(workspace: Workspace, runId: string): void {
@@ -718,7 +851,9 @@ export class HostedController {
     if (!['awaiting_review', 'accepted'].includes(run.status)) return 'closed';
     try { if (codeReviewContext(workspace, run.id).contextId !== assignment.contextId) return 'stale'; }
     catch { return 'stale'; }
-    if (!assignment.reviewerIds.some(id => this.reviewerAllowed(id))) return 'reviewer-unavailable';
+    const projectId=workspace.tasks.find(task=>task.id===run.taskId)?.projectId,project=projectId?this.store.project(projectId):undefined;
+    if (!assignment.reviewerIds.some(id => this.reviewerAllowed(id)&&project&&core(()=>hasRepositoryPermission(project,
+      {kind:'reviewer',issuer:this.authority.policy.issuer,id},this.authority.policy,'review')))) return 'reviewer-unavailable';
     if (run.codeReview?.assignmentId !== assignment.id) return 'pending';
     if (!this.currentReviewerAllowed(run)) return 'reviewer-unavailable';
     const review = independentReviewStatus(workspace, run);
@@ -759,7 +894,7 @@ export class HostedController {
         && run.automaticMergeStop?.decisionId !== run.review.policy.decisionId
         && !snapshot.operations['automatic-merge:' + run.review.policy.decisionId];
       return Boolean(run.codeReview && run.codeReview.identity.issuer === this.authority.policy.issuer
-        && this.reviewerAllowed(run.codeReview.identity.id) && automaticApprovalEligible(snapshot.workspace, run.id));
+        && this.currentReviewerAllowed(run) && automaticApprovalEligible(snapshot.workspace, run.id));
     })?.id;
   }
 
@@ -804,6 +939,9 @@ export class HostedController {
     this.checkBinding();
     const actor = this.authority.principal;
     if (actor.kind === 'reviewer') throw new ApiError(403, 'REVIEWER_READ_ONLY', 'Reviewers cannot claim or create assignments.');
+    if (!['owner','system','agent'].includes(actor.kind)) throw new ApiError(403, 'OWNER_REQUIRED', 'Only the owner or a permitted builder can create assignments.');
+    const projectId=claim ? targetId : this.store.read().workspace.tasks.find(task=>task.id===targetId)?.projectId;
+    this.requireProjectAccess(projectId ?? '', 'build');
     if (!claim || queued) this.requireOwner();
     if (!this.store.read().workspace.authentication) throw new ApiError(409, 'OWNER_ADOPTION_REQUIRED', 'Adopt the workspace before claiming work.');
     let agentIdentity: AuthenticatedIdentity | undefined;
@@ -812,6 +950,7 @@ export class HostedController {
       if (actor.kind === 'agent' && Object.hasOwn(input, 'agentClientId')) throw new ApiError(403, 'IDENTITY_FORGED', 'Self-claims derive the client identity from Access.');
       if (typeof clientId !== 'string' || !this.authority.policy.agentClientIds.includes(clientId)) throw new ApiError(400, 'AGENT_IDENTITY_REQUIRED', 'Choose a configured Access agent client.');
       agentIdentity = { provider: 'cloudflare-access', kind: 'agent', issuer: actor.issuer, id: clientId, workspaceId: actor.workspaceId, displayName: clientId };
+      this.guardDelegatedProject(projectId!,agentIdentity!,'build');
     }
     const agent = queued ? 'model' : 'external';
     const label = text(input.label, "Label", 160);
@@ -940,6 +1079,7 @@ export class HostedController {
 
   private assignmentResult(operation: Operation, replayed: boolean) {
     this.checkBinding();
+    if (operation.projectId) this.requireProjectAccess(operation.projectId, 'build');
     if (!operation.itemId) return { ...(operation.idleResult ?? { idle: true, reason: 'No unassigned tasks in this project.' }), replayed, credentials: null };
     return { runId: operation.itemId, taskId: operation.taskId, projectId: operation.projectId, workspace: this.workspace(), credentials: null, credentialStatus: 'already-issued', replayed };
   }
@@ -1002,14 +1142,24 @@ export class HostedController {
   }
 
   private async revokeRunTokens(repo: ArtifactsRepo, assertCurrent: () => unknown): Promise<void> {
-    const tokens = await repo.listTokens();
+    const inventory=async()=>{
+      const result=await repo.listTokens();assertCurrent();
+      if(!Number.isSafeInteger(result.total)||!Array.isArray(result.tokens)||result.total!==result.tokens.length||result.total>1000
+        ||result.tokens.some(token=>!token||typeof token.id!=='string'||!token.id||!['active','expired','revoked'].includes(token.state))
+        ||new Set(result.tokens.map(token=>token.id)).size!==result.total)
+        throw new ApiError(409,'TOKEN_INVENTORY_INCOMPLETE','Credential inventory is incomplete or exceeds the 1,000-token cleanup budget. No complete revocation is claimed; inspect the retained assignment.');
+      return result.tokens;
+    };
+    const tokens = await inventory();
     // A delayed list can include a credential delivered by a newer attempt.
     // Recheck ownership after listing and before every provider mutation.
     assertCurrent();
-    for (const token of tokens.tokens) if (token.state === 'active') {
+    for (const token of tokens) if (token.state === 'active') {
       assertCurrent();
       await repo.revokeToken(token.id);
     }
+    if((await inventory()).some(token=>token.state==='active'))
+      throw new ApiError(409,'TOKEN_REVOCATION_UNCONFIRMED','Active credentials remain after cleanup. Keep the retained recovery request.');
   }
 
   private requireTaskIdle(snapshot: HostedSnapshot, taskId: string, except?: string) {
@@ -1173,6 +1323,8 @@ export class HostedController {
     if (prior?.leaseUntil && prior.leaseUntil > Date.now()) throw new ApiError(409, 'OPERATION_IN_PROGRESS', 'Base update is running. Retry the same request after its lease.');
     const run = snapshot.workspace.runs.find(item => item.id === runId), task = snapshot.workspace.tasks.find(item => item.id === run?.taskId);
     if (!run || !task || !snapshot.forks[runId]) throw new ApiError(404, 'RUN_NOT_FOUND', 'Candidate not found.');
+    if(mode==='resolve')this.guardDelegatedProject(task.projectId!,{provider:'cloudflare-access',kind:'agent',id:agentClientId as string,
+      issuer:this.authority.policy.issuer,workspaceId:snapshot.workspace.id,displayName:agentClientId as string},'build');
     if (!requestKey || !run.headCommit || input.headCommit !== run.headCommit || input.taskRevision !== task.revision) throw new ApiError(409, 'STALE_RUN', 'Read the exact candidate and current requirements before updating.');
     this.requireTaskIdle(snapshot, task.id, key);
     if (mode === 'resolve') {
@@ -1802,7 +1954,12 @@ export class HostedController {
     requireAttempt(snapshot);
     const validation = structuredClone(snapshot.workspace);
     const validated = core(() => recordCodeReview(validation, runId, assessmentInput, actor, key));
-    if (validation.version === snapshot.workspace.version) return {runId, codeReview: validated.codeReview};
+    if (validation.version === snapshot.workspace.version) {
+      const projectId=snapshot.workspace.tasks.find(task=>task.id===validated.taskId)?.projectId;
+      if(!projectId||validated.codeReview?.repositoryAccessVersion!==core(()=>repositoryAccess(this.store.project(projectId)!)).version)
+        throw new ApiError(409,'REVIEWER_ACCESS_CHANGED','Access changed since this assessment. Obtain a new assignment and assessment.');
+      return {runId, codeReview: validated.codeReview};
+    }
     this.requireTaskIdle(snapshot, snapshot.workspace.runs.find(run => run.id === runId)!.taskId,attemptId===undefined?undefined:key);
     const resource = snapshot.forks[runId];
     if (!resource) throw new ApiError(404, 'RUN_NOT_FOUND', 'Candidate repository not found.');
@@ -1821,6 +1978,8 @@ export class HostedController {
     this.requireTaskIdle(current, run.taskId,attemptId===undefined?undefined:key);
     const version = current.workspace.version;
     const reviewed = core(() => recordCodeReview(current.workspace, runId, assessmentInput, actor, key));
+    const reviewedProject=current.workspace.tasks.find(task=>task.id===reviewed.taskId)?.projectId;
+    if(reviewed.codeReview&&reviewedProject)reviewed.codeReview.repositoryAccessVersion=core(()=>repositoryAccess(this.store.project(reviewedProject)!)).version;
     const reviewedFindings = reviewed.codeReview?.findings;
     if (head && Array.isArray(reviewedFindings)) validateFindingLocations(reviewedFindings, head, base);
     if (current.workspace.version !== version) {
@@ -1834,6 +1993,7 @@ export class HostedController {
     if(this.authority.principal.kind==='owner')return;
     const run=workspace.runs.find(run=>run.id===runId);
     if(!run)throw new ApiError(404,'RUN_NOT_FOUND','Candidate not found.');
+    this.requireProjectAccess(workspace.tasks.find(task=>task.id===run.taskId)?.projectId ?? '', 'review');
     const assignment=run.reviewAssignments?.at(-1);
     if(this.authority.principal.kind!=='reviewer' || !assignment?.reviewerIds.includes(this.authority.principal.id)
       || assignment.identity.issuer!==this.authority.principal.issuer) {
@@ -1851,6 +2011,7 @@ export class HostedController {
       if(!assignment || actor.kind==='reviewer' && !assignment.reviewerIds.includes(actor.id))return [];
       const task=workspace.tasks.find(task=>task.id===run.taskId);
       if(!task)return [];
+      if(actor.kind==='reviewer'&&!core(()=>hasRepositoryPermission(workspace.projects![task.projectId!],actor,this.authority.policy,'review')))return [];
       return [{workspaceId:workspace.id,projectId:task.projectId,taskId:task.id,taskTitle:task.title,
         runId:run.id,runLabel:run.label,headCommit:run.headCommit,assignmentId:assignment.id,
         assignmentScope:assignment.reviewerIds.length>1?'team':'personal',
@@ -1866,8 +2027,14 @@ export class HostedController {
     if(this.authority.principal.kind!=='owner')throw new ApiError(403,'OWNER_REQUIRED','Only the owner can assign reviewers.');
     if(typeof requestKey!=='string'||!requestKey.trim()||requestKey.length>200)throw new ApiError(422,'IDEMPOTENCY_REQUIRED','Supply an idempotency key.');
     const key=await this.operationKey(requestKey);this.requireOwner();
-    const allowed=[...(this.authority.policy.reviewerClientIds??[]),...(this.authority.policy.reviewerSubjects??[])];
     const snapshot=this.store.read(),validation=structuredClone(snapshot.workspace);
+    const projectId=snapshot.workspace.tasks.find(task=>task.id===snapshot.workspace.runs.find(run=>run.id===runId)?.taskId)?.projectId;
+    const project=projectId?snapshot.workspace.projects?.[projectId]:undefined;
+    const allowed=[...(this.authority.policy.reviewerClientIds??[]),...(this.authority.policy.reviewerSubjects??[])]
+      .filter(id=>project&&core(()=>hasRepositoryPermission(project,{kind:'reviewer',id,issuer:this.authority.policy.issuer},this.authority.policy,'review')));
+    if(Array.isArray(input.reviewerIds))for(const id of input.reviewerIds)if(typeof id==='string'&&allowed.includes(id))
+      this.guardDelegatedProject(projectId!,{provider:'cloudflare-access',kind:'reviewer',id,issuer:this.authority.policy.issuer,
+        workspaceId:this.authority.principal.workspaceId,displayName:id},'review');
     const result=core(()=>assignReviewers(validation,runId,input,this.authority.principal as AuthenticatedIdentity,allowed,key));
     if(validation.version===snapshot.workspace.version)return {runId,assignment:result};
     const run=snapshot.workspace.runs.find(run=>run.id===runId),resource=snapshot.forks[runId];

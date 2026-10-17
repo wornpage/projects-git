@@ -49,6 +49,9 @@ node scripts/repository-work.mjs status --connection $connection --project $proj
 
 The read verifies the expected workspace and authenticated service identity.
 Project settings → Connect agent supplies project-specific instructions.
+The owner must also grant this identity read/build access in **Project settings →
+People and access**. An allowlisted service identity without repository grants
+cannot read or claim that repository. See [repository access](repository-access.md).
 
 ## Work on an agreed task
 

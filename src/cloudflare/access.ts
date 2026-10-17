@@ -2,11 +2,11 @@ import { createLocalJWKSet, jwtVerify } from 'jose';
 import type { JSONWebKeySet } from 'jose';
 import { ApiError } from './security.ts';
 
-export interface AccessPolicy { issuer: string; audience: string; workspaceId: string; ownerSubject: string; agentClientIds: string[]; reviewerClientIds?: string[]; reviewerSubjects?: string[] }
-export interface AccessPrincipal { provider: 'cloudflare-access'; kind: 'owner' | 'agent' | 'reviewer'; issuer: string; id: string; workspaceId: string; displayName: string; issuedAt: number; expiresAt: number }
+export interface AccessPolicy { issuer: string; audience: string; workspaceId: string; ownerSubject: string; agentClientIds: string[]; reviewerClientIds?: string[]; reviewerSubjects?: string[]; memberSubjects?: string[] }
+export interface AccessPrincipal { provider: 'cloudflare-access'; kind: 'owner' | 'agent' | 'reviewer' | 'member'; issuer: string; id: string; workspaceId: string; displayName: string; issuedAt: number; expiresAt: number }
 export interface SystemPrincipal { provider: 'internal'; kind: 'system'; issuer: string; id: 'workspace-alarm'; workspaceId: string; displayName: 'Workspace alarm' }
 export interface HostedAuthority { policy: AccessPolicy; principal: AccessPrincipal | SystemPrincipal; forbiddenSecrets?: string[] }
-export interface AccessEnvironment { ACCESS_TEAM_DOMAIN?: string; ACCESS_AUD?: string; ACCESS_OWNER_SUB?: string; ACCESS_AGENT_CLIENT_IDS?: string; ACCESS_REVIEWER_CLIENT_IDS?: string; ACCESS_REVIEWER_SUBJECTS?: string; WORKSPACE_ID?: string }
+export interface AccessEnvironment { ACCESS_TEAM_DOMAIN?: string; ACCESS_AUD?: string; ACCESS_OWNER_SUB?: string; ACCESS_AGENT_CLIENT_IDS?: string; ACCESS_REVIEWER_CLIENT_IDS?: string; ACCESS_REVIEWER_SUBJECTS?: string; ACCESS_MEMBER_SUBJECTS?: string; WORKSPACE_ID?: string }
 
 export function accessPolicy(env: AccessEnvironment): AccessPolicy {
   const issuer = env.ACCESS_TEAM_DOMAIN ?? '', audience = env.ACCESS_AUD ?? '', ownerSubject = env.ACCESS_OWNER_SUB ?? '', workspaceId = env.WORKSPACE_ID ?? '';
@@ -31,7 +31,13 @@ export function accessPolicy(env: AccessEnvironment): AccessPolicy {
     || new Set(reviewerSubjects).size !== reviewerSubjects.length) {
     throw new ApiError(503, 'AUTH_NOT_CONFIGURED', 'Configure distinct human reviewer subjects outside owner, builder, and service reviewer identities.');
   }
-  return { issuer, audience, ownerSubject, workspaceId, agentClientIds: ids, reviewerClientIds: reviewers, reviewerSubjects };
+  let memberSubjects: unknown;
+  try { memberSubjects = JSON.parse(env.ACCESS_MEMBER_SUBJECTS ?? '[]'); } catch { throw new ApiError(503, 'AUTH_NOT_CONFIGURED', 'Member subjects must be a JSON array.'); }
+  if (!Array.isArray(memberSubjects) || memberSubjects.length > 100 || memberSubjects.some(id =>
+    typeof id !== 'string' || !/^[A-Za-z0-9_.:@-]{1,200}$/.test(id) || id === ownerSubject
+      || ids.includes(id) || reviewers.includes(id) || reviewerSubjects.includes(id)) || new Set(memberSubjects).size !== memberSubjects.length)
+    throw new ApiError(503, 'AUTH_NOT_CONFIGURED', 'Members must use distinct human subjects outside owner, builders and independent reviewers.');
+  return { issuer, audience, ownerSubject, workspaceId, agentClientIds: ids, reviewerClientIds: reviewers, reviewerSubjects, memberSubjects };
 }
 
 // Cache only public signing material; no request, token or identity is cached.
@@ -78,6 +84,10 @@ export class AccessVerifier {
       if (claims.sub === policy.ownerSubject && typeof claims.email === 'string' && claims.email.length > 0 && claims.email.length <= 320 && !claims.common_name) {
         return { provider: 'cloudflare-access', kind: 'owner', issuer: policy.issuer, id: claims.sub, workspaceId: policy.workspaceId, displayName: claims.email, issuedAt: claims.iat!, expiresAt: claims.exp! };
       }
+      if (typeof claims.sub === 'string' && policy.memberSubjects?.includes(claims.sub)
+        && typeof claims.email === 'string' && claims.email.length > 0 && claims.email.length <= 320 && !claims.common_name) {
+        return { provider: 'cloudflare-access', kind: 'member', issuer: policy.issuer, id: claims.sub, workspaceId: policy.workspaceId, displayName: claims.email, issuedAt: claims.iat!, expiresAt: claims.exp! };
+      }
       if (typeof claims.sub === 'string' && policy.reviewerSubjects?.includes(claims.sub)
         && typeof claims.email === 'string' && claims.email.length > 0 && claims.email.length <= 320 && !claims.common_name) {
         return { provider: 'cloudflare-access', kind: 'reviewer', issuer: policy.issuer, id: claims.sub, workspaceId: policy.workspaceId, displayName: claims.email, issuedAt: claims.iat!, expiresAt: claims.exp! };
@@ -103,8 +113,10 @@ export function assertAuthority(authority: HostedAuthority, workspaceId: string)
   const valid = principal.kind === 'system' ? principal.provider === 'internal' && principal.id === 'workspace-alarm'
     : principal.provider === 'cloudflare-access' && (principal.kind === 'owner' ? principal.id === policy.ownerSubject
       : principal.kind === 'agent' ? policy.agentClientIds.includes(principal.id) && !policy.reviewerClientIds?.includes(principal.id)
-      : principal.kind === 'reviewer' && (Boolean(policy.reviewerClientIds?.includes(principal.id)) || Boolean(policy.reviewerSubjects?.includes(principal.id)))
-        && !policy.agentClientIds.includes(principal.id));
+      : principal.kind === 'reviewer' ? (Boolean(policy.reviewerClientIds?.includes(principal.id)) || Boolean(policy.reviewerSubjects?.includes(principal.id)))
+        && !policy.agentClientIds.includes(principal.id)
+      : principal.kind === 'member' && Boolean(policy.memberSubjects?.includes(principal.id))
+        && !policy.agentClientIds.includes(principal.id) && !policy.reviewerClientIds?.includes(principal.id) && !policy.reviewerSubjects?.includes(principal.id));
   if (!valid) throw new ApiError(403, 'FORBIDDEN', 'The authenticated identity is not authorized.');
 }
 
@@ -133,6 +145,7 @@ export function authorizeRoute(principal: AccessPrincipal, method: string, path:
     throw new ApiError(403, 'REVIEWER_READ_ONLY', 'Reviewers may only read candidate review context and record their own assessment.');
   }
   if (method === 'GET' && (path === '/api/workspace' || path === '/api/projects/catalog' || /^\/api\/projects\/[a-f0-9-]{36}\/(search|search-index)$/.test(path) || /^\/api\/tasks\/[a-f0-9-]{36}\/handoff$/.test(path))) return;
+  if (principal.kind === 'member') throw new ApiError(403, 'MEMBER_READ_ONLY', 'Members may read only repositories explicitly shared with them.');
   if (method === 'POST' && (/^\/api\/projects\/[a-f0-9-]{36}\/claim$/.test(path) || /^\/api\/runs\/[a-f0-9-]{36}\/(start|submit|fail)$/.test(path))) return;
   throw new ApiError(403, 'OWNER_REQUIRED', 'Only the authenticated owner can perform this operation.');
 }

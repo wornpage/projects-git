@@ -142,8 +142,13 @@ independent review and integration. Use a small repository you control and an
 explicit run budget. Account reachability, a healthy Worker, a successful source
 build and a complete private workflow are separate results.
 
-The hosted model currently has one human owner and separately restricted builders
-and reviewers. Multi-user membership is not enabled by this setup work.
+The hosted model keeps one human owner and supports explicit [repository grants](repository-access.md)
+for human readers, builders and independent reviewers. Configure optional
+`ACCESS_MEMBER_SUBJECTS` with stable verified subjects, then grant repository roles
+in **Project settings → People and access**. Existing repositories begin owner-only
+after this source upgrade. Grant build/review access before attempting the private
+workflow; an Access allowlist alone does not share a repository. Check revocation,
+denied cross-repository reads and pending credential cleanup as separate cases.
 
 Local development uses JSON workspace records and owned Git copies under
 `.local/`. It does not provide the hosted D1 search backend or Cloudflare Access

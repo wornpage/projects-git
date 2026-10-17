@@ -263,7 +263,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     const reply = (value:unknown,status=200) => json(call.method==='POST'?projectMutationResult(value,call.path):value,status);
     let controller: HostedController | undefined;
     try {
-    if (!call.principal || !['owner', 'agent', 'reviewer'].includes(call.principal.kind)) return reply({code:'UNAUTHORIZED',error:'Authenticated request context required.'},401);
+    if (!call.principal || !['owner', 'agent', 'reviewer', 'member'].includes(call.principal.kind)) return reply({code:'UNAUTHORIZED',error:'Authenticated request context required.'},401);
     // Only the authenticated Worker supplies this policy over internal RPC.
     // A retained DO environment can predate a settings-only Worker deployment.
     if (!call.policy) throw new ApiError(503, 'AUTH_POLICY_REQUIRED', 'The authenticated Worker must supply its current Access policy.');
@@ -282,12 +282,14 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
         let pageRequest;
         try { pageRequest = parseWorkspacePage(call.search); }
         catch (error) { throw new ApiError(400,'INVALID_WORKSPACE_PAGE',(error as Error).message); }
-        const page = pageRequest ? this.store.readPage(pageRequest) : null;
-        const snapshot = page ? controller.workspace(page.snapshot,page.capacity) : controller.workspace();
-        return reply({ ...snapshot, ...(page?{page:page.page,operationReceipts:page.operationReceipts}:{}), sourceRevision: this.store.identity().revision, artifactEvents:this.artifactReceipts.summary(), artifactSubscriptions:this.subscriptions.summary(), capabilities: { ...snapshot.capabilities, retainedSearch: Boolean(this.env.SEARCH_DB && this.env.SEARCH_JOBS), semanticSearch: String(this.env.SEARCH_EMBEDDINGS_ENABLED) === 'true' } });
+        const snapshot = controller.workspacePage(pageRequest);
+        return reply({ ...snapshot, sourceRevision: this.store.identity().revision,
+          ...(call.principal.kind==='owner'?{artifactEvents:this.artifactReceipts.summary(),artifactSubscriptions:this.subscriptions.summary()}:{}),
+          capabilities: { ...snapshot.capabilities, retainedSearch: Boolean(this.env.SEARCH_DB && this.env.SEARCH_JOBS), semanticSearch: String(this.env.SEARCH_EMBEDDINGS_ENABLED) === 'true' } });
       }
       const search = /^\/api\/projects\/([a-f0-9-]{36})\/(search|search-index)$/.exec(call.path);
       if (search) {
+        controller.requireProjectAccess(search[1]);
         const snapshot = this.store.read();
         if (!Object.hasOwn(snapshot.workspace.projects ?? {}, search[1])) throw new ApiError(404, 'PROJECT_NOT_FOUND', 'Project is not in this workspace.');
         if (!this.env.SEARCH_DB || !this.env.SEARCH_JOBS) throw new ApiError(503, 'SEARCH_NOT_CONFIGURED', 'Configure search database and queue bindings.');
@@ -305,17 +307,23 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
             const semantic = this.semantic();
             if (!semantic) throw new ApiError(409, 'SEMANTIC_DISABLED', 'Semantic search is disabled. Literal search is available.');
             const current = await index.generation(snapshot.workspace.id, search[1]);
+            controller.requireProjectAccess(search[1]);
             if (!current) throw new ApiError(409, 'SEMANTIC_INDEX_NOT_CURRENT', 'Build the history index before semantic search.');
             const matches = await semantic.search(snapshot.workspace.id, search[1], current.generation, query);
+            controller.requireProjectAccess(search[1]);
             const items = await index.documents(snapshot.workspace.id, search[1], current.generation, matches.map(match => match.documentId));
+            controller.requireProjectAccess(search[1]);
             return reply({ mode, generation: current.generation, total: current.document_count, matched: null, items: items.map(doc => ({ ...doc, score: matches.find(match => match.documentId === doc.id)!.score })), nextOffset: null, index: this.store.indexState(search[1]), sourceRevision: this.store.read().revision });
           }
           const result = await index.search(snapshot.workspace.id, search[1], query, Number(params.get('offset') ?? '0'));
+          controller.requireProjectAccess(search[1]);
           return reply({ ...result, mode, index: this.store.indexState(search[1]), sourceRevision: this.store.read().revision });
         }
         throw new ApiError(405, 'METHOD_NOT_ALLOWED', 'Use GET for search or GET/POST for index status and rebuild.');
       }
       const handoff = /^\/api\/tasks\/([a-f0-9-]{36})\/handoff$/.exec(call.path);
+      const projectAccess = /^\/api\/projects\/([a-f0-9-]{36})\/access$/.exec(call.path);
+      if(projectAccess&&call.method==='GET')return reply(controller.projectAccess(projectAccess[1]));
       if (call.method === 'GET' && call.path === '/api/review-inbox') return reply(controller.reviewInbox());
       const reviewContext = /^\/api\/runs\/([a-f0-9-]{36})\/review-context$/.exec(call.path);
       if (call.method === 'GET' && reviewContext) return reply(await controller.reviewContext(reviewContext[1]));
@@ -323,6 +331,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
       const archive = /^\/api\/projects\/([a-f0-9-]{36})\/(export|history)$/.exec(call.path);
       if (call.method === 'GET' && archive) return reply(archive[2] === 'export' ? await controller.exportProject(archive[1]) : controller.projectHistory(archive[1]));
       if (call.method !== "POST") throw new ApiError(404, "NOT_FOUND", "API route not found.");
+      if(projectAccess)return reply(await controller.changeProjectAccess(projectAccess[1],call.body,call.key));
       if (call.path === '/api/projects/restore') return reply(await controller.restoreProject(call.body, call.key), 201);
       if (call.path === "/api/workspace/adopt-owner") return reply(controller.adoptOwner());
       if (call.path === "/api/workspace/revoke-sessions") return reply(controller.revokeSessions(call.body));

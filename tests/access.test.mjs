@@ -30,6 +30,24 @@ test('allowlisted human reviewer subjects get review scope without owner powers'
  assert.throws(()=>accessPolicy({ACCESS_TEAM_DOMAIN:policy.issuer,ACCESS_AUD:policy.audience,ACCESS_OWNER_SUB:policy.ownerSubject,WORKSPACE_ID:policy.workspaceId,ACCESS_AGENT_CLIENT_IDS:'[]',ACCESS_REVIEWER_SUBJECTS:JSON.stringify([policy.ownerSubject])}),{code:'AUTH_NOT_CONFIGURED'});
 });
 
+test('configured human members authenticate by signed subject and receive read-only routes',async()=>{
+ const f=fixture(),subject='team-member',scoped={...policy,memberSubjects:[subject]};
+ const member=await f.verifier.authenticate(request(await token({...claims,sub:subject,email:'member@example.test'})),scoped);
+ assert.equal(member.kind,'member');assert.equal(member.id,subject);assertAuthority({policy:scoped,principal:member},policy.workspaceId);
+ authorizeRoute(member,'GET','/api/workspace');
+ assert.throws(()=>authorizeRoute(member,'POST','/api/tasks'),{code:'MEMBER_READ_ONLY'});
+ await assert.rejects(f.verifier.authenticate(request(await token({...claims,sub:'another-subject',email:'member@example.test'})),scoped),{code:'FORBIDDEN'});
+ assert.throws(()=>assertAuthority({policy:{...scoped,memberSubjects:[]},principal:member},policy.workspaceId),{code:'FORBIDDEN'});
+});
+
+test('member configuration rejects duplicates and identities with another authority role',()=>{
+ const env={ACCESS_TEAM_DOMAIN:policy.issuer,ACCESS_AUD:policy.audience,ACCESS_OWNER_SUB:policy.ownerSubject,WORKSPACE_ID:policy.workspaceId,
+   ACCESS_AGENT_CLIENT_IDS:JSON.stringify(policy.agentClientIds),ACCESS_REVIEWER_CLIENT_IDS:JSON.stringify(policy.reviewerClientIds),ACCESS_REVIEWER_SUBJECTS:'["reviewer-person"]'};
+ for(const entries of [[policy.ownerSubject],[AGENT_CLIENT],[policy.reviewerClientIds[0]],['reviewer-person'],['one','one'],['*'],{}])
+   assert.throws(()=>accessPolicy({...env,ACCESS_MEMBER_SUBJECTS:JSON.stringify(entries)}),{code:'AUTH_NOT_CONFIGURED'});
+ assert.deepEqual(accessPolicy({...env,ACCESS_MEMBER_SUBJECTS:'["stable-member-subject"]'}).memberSubjects,['stable-member-subject']);
+});
+
 test('signed owner and service sessions derive distinct trusted principals',async()=>{
   const f=fixture();assert.deepEqual(await f.verifier.authenticate(request(await token()),policy),{...authority.principal,issuedAt:seconds,expiresAt:seconds+3600});
   const {email,...service}=claims;service.sub='';service.common_name=AGENT_CLIENT;
