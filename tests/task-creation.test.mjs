@@ -31,6 +31,16 @@ function fixture(saved = null) {
 }
 const result=(projectId='one')=>{const taskId=crypto.randomUUID();return {projectId,taskId,taskIds:[taskId]};};
 
+test('full trial owners can queue existing-project tasks while repository import stays unavailable',async()=>{
+  const f=fixture();f.context.workspace.trial={workflowReady:true};f.context.workspace.capabilities.repository=false;
+  f.context.workspace.authentication={permissions:{manage:true}};f.controller.update();await f.fill();
+  assert.equal(f.$('#create-task').disabled,false);
+  const pending=f.submit();assert.equal(f.calls[0].body.source,'project');assert.equal(f.calls[0].body.projectId,'one');
+  f.calls[0].resolve(result());await pending;
+  f.controller.activate('repository');f.controller.update();assert.equal(f.$('#create-task').disabled,true);
+  f.controller.activate('project:one');f.context.workspace.authentication.permissions.manage=false;f.controller.update();assert.equal(f.$('#create-task').disabled,true);
+});
+
 function repositoryFixture(saved=null) {
   const f=fixture();f.context.workspace.provider='cloudflare-artifacts';f.context.workspace.capabilities.repositoryCreate=true;
   f.controller.restore(saved);f.controller.update();f.$('#task-launcher').showModal();f.controller.activate('new-repository');f.controller.update();

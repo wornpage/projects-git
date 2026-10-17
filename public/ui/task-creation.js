@@ -128,7 +128,9 @@ export function createTaskCreation({getContext, currentProject, selectProject, s
     $('#inspect-repository').hidden = !workspace.capabilities?.inspectRepository;
     $('#inspect-repository').disabled = taskStarting || Boolean(pendingTaskStart) || inspectingRepository;
     const activeWork = workspace.runs.some(run => ['assigned', 'running'].includes(run.status));
-    const supported = !sample ? workspace.capabilities?.repository : mode === 'model' ? workspace.capabilities?.model : workspace.capabilities?.demo;
+    const supported = source.startsWith('project:')&&workspace.trial?.workflowReady
+      ? workspace.authentication?.permissions.manage
+      : !sample ? workspace.capabilities?.repository : mode === 'model' ? workspace.capabilities?.model : workspace.capabilities?.demo;
     $('#new-task-summary').textContent = creating ? 'New project · Create repository' : sample ? 'New project · sample starter' : source==='repository' ? codeStep ? 'New project · connect code' : 'New project · first task' : 'Add to the task queue';
     if (source === 'repository' && !codeStep) $('#task-source-note').textContent = $('#project-name-input').value + ' · ' + $('#repository-path').value + ' · Commit ' + $('#repository-base').value + (workspace.provider === 'cloudflare-artifacts' ? '. The project uses this Artifacts repository and selected base commit.' : '. Only this committed code will be copied.');
     $('#create-task').disabled = creating || codeStep || taskStarting || unloadedSource || !supported || sample && (busy || activeWork);
