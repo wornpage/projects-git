@@ -2,7 +2,7 @@
 export function workspaceAccessLost(error) {
   return Boolean(error?.auth||error?.accessLost||error?.status===401||[
     'UNAUTHORIZED','FORBIDDEN','SESSION_EXPIRED','SESSION_REVOKED','WORKSPACE_FORBIDDEN','WORKSPACE_OWNER_MISMATCH',
-    'HUMAN_IDENTITY_REQUIRED','TRIAL_NOT_ADMITTED','TRIAL_CLOSED','TRIAL_EXPIRED','TRIAL_IDENTITY_FORBIDDEN','TRIAL_IDENTITY_CHANGED',
+    'HUMAN_IDENTITY_REQUIRED','TRIAL_NOT_ADMITTED','TRIAL_CLOSED','TRIAL_EXPIRED','TRIAL_IDENTITY_FORBIDDEN','TRIAL_IDENTITY_CHANGED','TRIAL_SAMPLE_FORBIDDEN',
   ].includes(error?.code));
 }
 export function createApiClient({captureSession = () => () => true, onAuthRequired, onAccessLost, fetchRequest = fetch}) {

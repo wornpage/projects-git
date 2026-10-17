@@ -32,7 +32,7 @@ export function renderTrial(root,announcement,state,actions) {
     button(phase==='reserving'?'Reserving…':'Reserve trial',actions.reserve),
     el('p',{class:'small muted'},'A reservation does not start an agent, create a repository or run checks.'));
   if(['admitted','confirm-close','closing'].includes(phase))nodes.push(
-    el('p',{},'Your separate workspace preview is available. Repository setup and coding runs still need to be prepared.'),
+    el('p',{},'Your separate workspace preview is available. Coding agents and hosted checks are not available yet.'),
     el('p',{class:'expiry'},'Expires ',expiry(trial.expiresAt)),
     phase==='closing'?button('Closing…',()=>{}):el('a',{class:'button primary',href:'/workspace/?view=projects'},'View private workspace preview →'),
     el('p',{class:'small muted'},'The preview is read-only. No code or tasks have been created by signing up.'),
@@ -47,7 +47,7 @@ export function renderTrial(root,announcement,state,actions) {
   if(phase==='blocked')nodes.push(el('p',{class:'notice'},'Trial signup requires a verified human email login. No reservation has been created.'),sampleLink());
   if(phase==='failed')nodes.push(el('p',{class:'notice',role:'alert'},errors[state.error]??'Trial signup is unavailable. Check your reservation status before trying again.'),button('Check reservation status',actions.refresh),sampleLink());
   if(['eligible','admitted'].includes(phase))nodes.push(el('details',{class:'reservation-help'},el('summary',{},'About this early preview'),
-    el('p',{},'Your identity owns one reservation. Repeating signup keeps the original expiry. Closing a trial stops access but does not delete retained records. No model credits, repository setup, exports or automatic cleanup are included.')));
+    el('p',{},'Your identity owns one reservation. Repeating signup keeps the original expiry. Closing a trial stops access but does not delete retained records. No model credits, coding runs, exports or automatic cleanup are included.')));
   let dialog;
   if(phase==='confirm-close') {
     dialog=el('dialog',{class:'confirmation','aria-labelledby':'close-heading','aria-describedby':'close-description',oncancel:event=>{event.preventDefault();actions.cancelClose();}},

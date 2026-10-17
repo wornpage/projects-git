@@ -31,6 +31,7 @@ import {readWorkspaceRecovery,retainWorkspaceRecovery,workspaceRecoverySummary,r
 import {beginOperationTiming,finishOperationTiming,operationTimings} from '../core/operation-timing.mjs';
 import type {OperationTiming} from '../core/operation-timing.mjs';
 import type {BackupCapture} from './workspace-store.ts';
+import {TRIAL_SAMPLE,trialSampleName} from '../core/trial-sample.mjs';
 
 const sampleTask = { title: 'Make checkout totals trustworthy', owner: 'Cloudflare coordinator', purpose: 'Calculate exact integer-cent totals and reject invalid inputs and unsafe totals.',
   criteria: ['Use safe integer cents.', 'Reject invalid quantities and prices.', 'Preserve valid inputs and reject unsafe totals.'] };
@@ -79,6 +80,8 @@ interface Operation {
   sourceRunId?: string;
   errorCode?: string;
   timestamp?: number;
+  seedTemplate?: string;
+  seedDigest?: string;
   contextId?: string;
   assignmentId?: string;
   reviewerId?: string;
@@ -89,6 +92,7 @@ interface Operation {
 interface HostedJob { status: 'queued' | 'running' | 'finished' | 'failed'; task: Task; limits: ExecutionLimits; phase: string; pendingCommit?: string; attemptId?: string }
 export interface HostedRuntime {
   guard?:()=>void;
+  trial?: {workspaceId:string;validate:()=>Promise<void>};
   currentPolicy?: () => Promise<AccessPolicy>;
   ensureSubscription?: (repositoryName:string,validate:()=>void)=>Promise<void>;
   checks: { verify(source: string, commit: string, signal?: AbortSignal, attemptId?: string): Promise<Evidence> };
@@ -293,7 +297,41 @@ export class HostedController {
     return {workspaceId:this.store.identity().id,...result};
   }
 
-  async createRepository(input: Record<string, unknown>, requestKey: string) {
+  private trialSampleContext() {
+    this.requireOwner();
+    const workspaceId=this.store.identity().id;
+    if(!this.runtime?.trial||this.runtime.trial.workspaceId!==workspaceId||!/^trial-[a-f0-9]{64}$/.test(workspaceId))
+      throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Sample setup requires an authenticated trial workspace.');
+    if(!this.artifacts)throw new ApiError(503,'TRIAL_SAMPLE_UNAVAILABLE','The dedicated trial repository binding is not configured.');
+    return {workspaceId,name:trialSampleName(workspaceId)};
+  }
+
+  async trialSampleStatus() {
+    const {workspaceId,name}=this.trialSampleContext(),key=await this.operationKey('trial-sample-setup-v1'),seedDigest=await digest(JSON.stringify(TRIAL_SAMPLE.files));
+    this.requireOwner();
+    const operation=this.store.operation(key),project=operation?.projectId?this.store.project(operation.projectId):undefined;
+    if(operation&&(operation.kind!=='repository-create'||operation.resourceName!==name||operation.seedTemplate!==TRIAL_SAMPLE.id||operation.seedDigest!==seedDigest))
+      throw new ApiError(409,'TRIAL_SAMPLE_STATE_CHANGED','The retained sample setup needs operator review.');
+    if(operation?.state==='complete'&&(!operation.repositoryId||!operation.pendingCommit||project?.repositoryName!==name
+      ||project.mainCommit!==operation.pendingCommit||project.kind!=='artifacts'||project.codeConnected!==true))
+      throw new ApiError(409,'TRIAL_SAMPLE_STATE_CHANGED','The confirmed sample repository no longer matches its project.');
+    const retryable=!operation||operation.state==='pending'&&(!operation.errorCode||['REPOSITORY_CREATION_INTERRUPTED','TOKEN_REVOCATION_UNCONFIRMED','TOKEN_INVENTORY_INCOMPLETE'].includes(operation.errorCode));
+    return {workspaceId,template:TRIAL_SAMPLE.id,phase:!operation?'not-started':operation.state==='complete'?'ready':operation.errorCode||operation.state==='failed'?'failed':'preparing',
+      retryable,repository:operation?{name,repositoryId:operation.repositoryId??null,projectId:operation.projectId??null,baseCommit:operation.pendingCommit??null}:null,
+      errorCode:operation?.errorCode??null,workflowReady:false};
+  }
+
+  async setupTrialSample(input:Record<string,unknown>,requestKey:string) {
+    const {name}=this.trialSampleContext();validateIdempotencyKey(requestKey);
+    if(Object.keys(input).length)throw new ApiError(400,'INVALID_TRIAL_SAMPLE','Send an empty object; the sample and repository name are supplied by the server.');
+    if(Object.values(this.store.read().workspace.projects??{}).some(project=>project.repositoryName!==name))
+      throw new ApiError(409,'TRIAL_SAMPLE_STATE_CHANGED','This trial contains unexpected projects. Sample setup needs operator review.');
+    // Every client key resumes the one tenant-owned setup operation.
+    const result=await this.createRepository({name,description:TRIAL_SAMPLE.description},'trial-sample-setup-v1',TRIAL_SAMPLE);
+    return {...await this.trialSampleStatus(),replayed:result.replayed};
+  }
+
+  async createRepository(input: Record<string, unknown>, requestKey: string,template?:typeof TRIAL_SAMPLE) {
     this.requireOwner();
     validateIdempotencyKey(requestKey);
     if (this.authority.principal.kind !== 'owner') throw new ApiError(403, 'OWNER_REQUIRED', 'Only the authenticated owner can create a repository.');
@@ -302,11 +340,15 @@ export class HostedController {
       throw new ApiError(400, 'INVALID_REPOSITORY_CREATION', 'Supply a repository name and optional description only.');
     const name = repositoryName(input.name), description = input.description === undefined || input.description === '' ? '' : text(input.description, 'Description', 500);
     core(()=>requireFreshRecoveryResource(this.store.read(),name));
-    const key = await this.operationKey(requestKey), fingerprint = await digest(JSON.stringify({name, description}));
+    if(template){const context=this.trialSampleContext();if(template!==TRIAL_SAMPLE||name!==context.name)throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Only the supplied trial sample can be prepared.');}
+    const seedDigest=template?await digest(JSON.stringify(template.files)):undefined;
+    const key = await this.operationKey(requestKey), fingerprint = await digest(JSON.stringify({name, description,...(template?{seedTemplate:template.id,seedDigest}:{})}));
+    if(template)await this.runtime!.trial!.validate();
     this.requireOwner();
     let snapshot = this.store.read();
     const prior = this.checkOperation(snapshot.operations[key], fingerprint, 'repository-create');
     const result = async (operation: Operation, replayed: boolean) => {
+      if(template)await this.runtime!.trial!.validate();
       await this.ensureProjectSubscription(operation.projectId!);
       this.requireOwner();
       return {workspaceId: this.store.identity().id, projectId: operation.projectId!, name,
@@ -325,9 +367,11 @@ export class HostedController {
     const marker = prior?.marker ?? `Projects Git creation: ${snapshot.workspace.id}:${key}${description ? '\n\n' + description : ''}`;
     snapshot.operations[key] = {...prior, kind: 'repository-create', state: 'pending', fingerprint, resourceName: name, marker,
       projectId: prior?.projectId ?? crypto.randomUUID(), timestamp: prior?.timestamp ?? Math.floor(Date.now() / 1000),
+      ...(template?{seedTemplate:template.id,seedDigest}:{}),
       attemptId, leaseUntil: Date.now() + 60_000};
     this.save(snapshot);
     const current = () => {this.requireOwner(); return this.assertLease(key, attemptId);};
+    const beforeEffect=async()=>{if(template)await this.runtime!.trial!.validate();return current();};
     const ownsAttempt = () => {
       const retained = this.store.read(), operation = retained.operations[key];
       if (operation?.state !== 'pending' || operation.attemptId !== attemptId)
@@ -339,7 +383,7 @@ export class HostedController {
       try {handle = await this.artifacts.get(name);}
       catch (error) {if (!(error && typeof error === 'object' && 'code' in error && error.code === 'NOT_FOUND')) throw error;}
       if (!handle) {
-        current();
+        await beforeEffect();
         // Never persist or return the initial plaintext token. Owned-repo token
         // enumeration also recovers it if create() succeeded but its reply was lost.
         await this.artifacts.create(name, {description: marker, readOnly: false, setDefaultBranch: 'main'});
@@ -352,13 +396,15 @@ export class HostedController {
         throw new ApiError(409, snapshot.operations[key].repositoryId ? 'REPOSITORY_OWNERSHIP_CHANGED' : 'REPOSITORY_NAME_TAKEN', 'This name belongs to a different repository. Existing code is preserved.');
       if (snapshot.operations[key].repositoryId && snapshot.operations[key].repositoryId !== info.id)
         throw new ApiError(409, 'REPOSITORY_ID_CHANGED', 'The reserved repository was replaced. Creation is retained for operator review.');
+      if(typeof info.id!=='string'||!info.id||info.id.length>200)
+        throw new ApiError(502,'INVALID_REPOSITORY_METADATA','The repository identity was not confirmed. Setup is retained for operator review.');
       // Cleanup is authorized by the retained operation, even if the caller's
       // session expired during create(). A displaced attempt cannot revoke tokens.
       await this.revokeRunTokens(repo, ownsAttempt);
-      snapshot = current();
+      snapshot = await beforeEffect();
       snapshot.operations[key].repositoryId = info.id;
       this.save(snapshot);
-      if (info.defaultBranch !== 'main' || info.readOnly)
+      if (info.defaultBranch !== 'main' || info.readOnly!==false)
         throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The new repository settings changed. Creation is retained for operator review.');
       const remote = safeRemote(info.remote);
       let history: ArtifactsCommitMetadata[];
@@ -369,12 +415,13 @@ export class HostedController {
       if (history.length && (!expected || history[0]?.hash !== expected))
         throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The repository contains a different commit. No code was replaced; creation is retained for operator review.');
       if (!history.length) {
+        await beforeEffect();
         const credential = await repo.createToken('write', 180);
         try {
           snapshot = current();
-          const head = await this.runtime.git.seedRepository({remote, token: credential.plaintext, name, description,
+          const head = await this.runtime.git.seedRepository({remote, token: credential.plaintext, name, description,...(template?{files:template.files}:{}),
             timestamp: snapshot.operations[key].timestamp!, beforePush: async (head: string) => {
-              const fresh = current(), operation = fresh.operations[key];
+              const fresh = await beforeEffect(), operation = fresh.operations[key];
               commitId(head);
               if (operation.pendingCommit && operation.pendingCommit !== head) throw new ApiError(409, 'REPOSITORY_SEED_CHANGED', 'The saved initial commit changed. No code was replaced.');
               operation.pendingCommit = head;
@@ -390,16 +437,16 @@ export class HostedController {
       // Do not attach code until all credentials from creation, including any
       // uncertain token issuance, have been confirmed inactive.
       await this.revokeRunTokens(repo, ownsAttempt);
-      snapshot = current();
+      snapshot = await beforeEffect();
       if (Object.values(snapshot.workspace.projects ?? {}).some(project => project.repositoryName === name))
         throw new ApiError(409, 'REPOSITORY_CONNECTION_CHANGED', 'Another operation connected this repository. Creation is retained for operator review.');
       const operation = snapshot.operations[key], projectId = operation.projectId!;
-      snapshot.workspace.projects![projectId] = {id: projectId, name, repositoryName: name, mainCommit: head,
-        defaultBranch: 'main', kind: 'artifacts', acceptingWork: true, policyVersion: 1, owner: this.authority.principal.displayName, codeConnected: true};
+      snapshot.workspace.projects![projectId] = {id: projectId, name:template?.projectName??name, repositoryName: name, mainCommit: head,
+        defaultBranch: 'main', kind: 'artifacts', acceptingWork: !template, policyVersion: 1, owner: this.authority.principal.displayName, codeConnected: true};
       operation.state = 'complete'; operation.leaseUntil = 0; delete operation.errorCode;
       snapshot.workspace.version++;
       snapshot.workspace.events.push({id: crypto.randomUUID(), at: new Date().toISOString(), type: 'project.repository-created', projectId, taskId: null, runId: null,
-        message: `${name}: private repository created with an initial README commit and connected to this project.`});
+        message: template?`${template.projectName}: supplied starter repository prepared. No coding agents or checks have run.`:`${name}: private repository created with an initial README commit and connected to this project.`});
       this.save(snapshot);
       return await result(operation, Boolean(prior));
     } catch (error) {

@@ -73,14 +73,21 @@ export class ArtifactGit {
   constructor({ fetchImpl = fetch } = {}) { this.fetchImpl = fetchImpl; }
 
   /** A deterministic root commit; the remote branch must still be absent. */
-  async seedRepository({ remote, token, name, description, timestamp, beforePush }) {
+  async seedRepository({ remote, token, name, description, timestamp, beforePush, files }) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(name) || typeof description !== 'string' || description.length > 500
       || !Number.isSafeInteger(timestamp) || timestamp < 1) throw new Error('Invalid repository seed.');
+    const seed=files===undefined?[{path:'README.md',content:`# ${name}\n${description ? `\n${description}\n` : ''}`}]:files;
+    if(!Array.isArray(seed)||seed.length<1||seed.length>16||seed.some(file=>!file||typeof file.path!=='string'||typeof file.content!=='string'
+      ||!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,179}$/.test(file.path)||file.path.split('/').some(part=>['','.','..','.git'].includes(part.toLowerCase())))
+      ||new Set(seed.map(file=>file.path)).size!==seed.length||seed.reduce((bytes,file)=>bytes+new TextEncoder().encode(file.content).byteLength,0)>65536)
+      throw new Error('Repository seed files must be unique regular paths and fit within 64 KiB.');
     const repo = memoryRepo(), branch = 'main';
     const http = gitHttp([{remote, token}], {fetchImpl: this.fetchImpl});
     await git.init({...repo, defaultBranch: branch});
-    repo.fs.writeFileSync('/repo/README.md', `# ${name}\n${description ? `\n${description}\n` : ''}`, 'utf8');
-    await git.add({...repo, filepath: 'README.md'});
+    for(const file of [...seed].sort((a,b)=>a.path.localeCompare(b.path))){
+      const slash=file.path.lastIndexOf('/');if(slash>=0)repo.fs.mkdirSync('/repo/'+file.path.slice(0,slash),{recursive:true});
+      repo.fs.writeFileSync('/repo/'+file.path,file.content,'utf8');await git.add({...repo,filepath:file.path});
+    }
     const author = {name: 'Projects Git', email: 'coordinator@projects.invalid', timestamp, timezoneOffset: 0};
     const headCommit = await git.commit({...repo, message: 'Initialize repository', author, committer: author});
     const result = await git.push({...repo, http, url: remote, ref: branch, remoteRef: branch, force: false,

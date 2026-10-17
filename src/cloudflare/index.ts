@@ -21,7 +21,7 @@ import { ApiError, bodyJson, errorResponse, idempotencyKey, json, requireSameOri
 import { ArtifactGit } from './git-transport.mjs';
 import { WorkerChecks } from './sandbox.ts';
 import { chatProvider } from '../core/agent.mjs';
-import {isTrial,coordinatorWorkspaceId,trialRegistry,assertTrialRead,assertNoTrialBackground,configuredTrialPolicy} from './trial-scope.ts';
+import {isTrial,coordinatorWorkspaceId,trialRegistry,assertTrialRoute,assertNoTrialBackground,configuredTrialPolicy} from './trial-scope.ts';
 import {assertTrialActive,trialAccessPolicy,trialStatus,trialGrant} from './trial-admission.ts';
 import type {TrialGrant,TrialPolicy} from './trial-admission.ts';
 import type { ModelProvider } from '../core/agent.mjs';
@@ -68,7 +68,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS attempts (run_id TEXT PRIMARY KEY, receipt TEXT NOT NULL)');
   }
 
-  protected artifacts(): Artifacts { return this.env.ARTIFACTS; }
+  protected artifacts(): Artifacts { return isTrial(this.env)?this.env.TRIAL_ARTIFACTS!:this.env.ARTIFACTS; }
   protected artifactEventSource():ArtifactEventSource {return this.artifacts();}
 
   private subscriptionScope(){
@@ -146,8 +146,21 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
 
   private controller(authority: HostedAuthority,trial?:TrialGrant): HostedController {
     const provider = this.modelProvider();
+    let trialFailure:unknown;
+    const validateTrial=async()=>{
+      try {
+        if(authority.principal.kind!=='owner')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Sample setup requires the trial owner.');
+        assertTrialActive(trial!);
+        const fresh=trialGrant(await trialRegistry(this.env).authorize(trial!.workspaceId,authority.principal,configuredTrialPolicy(this.env)));
+        if(JSON.stringify(trialAccessPolicy(fresh))!==JSON.stringify(authority.policy)||fresh.policyRevision!==trial!.policyRevision
+          ||fresh.createdAt!==trial!.createdAt||fresh.expiresAt!==trial!.expiresAt)
+          throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Sample setup no longer matches its authenticated trial.');
+        assertTrialActive(fresh);Object.assign(trial!,fresh);
+      }catch(error){trialFailure=error;throw error;}
+    };
     return new HostedController(this.store, this.artifacts(), authority, {
-      guard:trial?()=>assertTrialActive(trial):undefined,
+      guard:trial?()=>{if(trialFailure)throw trialFailure;assertTrialActive(trial);}:undefined,
+      trial:trial?{workspaceId:trial.workspaceId,validate:validateTrial}:undefined,
       currentPolicy: () => currentPolicy(this.env.CURRENT_POLICY, this.env.WORKSPACE_ID),
       ensureSubscription:(repository,validate)=>this.ensureSubscription(repository,validate),
       checks: { verify: (source, commit, signal, attemptId) => this.verifyCheckout(source, commit, signal, attemptId) }, git: this.gitTransport(), provider,
@@ -281,7 +294,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     let trial:TrialGrant|undefined;
     const workspaceId=coordinatorWorkspaceId(this.ctx,this.env);
     if(isTrial(this.env)) {
-      assertTrialRead(call.method,call.path);
+      assertTrialRoute(call.method,call.path);
       if(!call.trialPolicy)throw new ApiError(503,'TRIAL_POLICY_REQUIRED','The authenticated Worker must supply its current trial policy.');
       trial=trialGrant(await trialRegistry(this.env).authorize(workspaceId,call.principal,call.trialPolicy));
       if(JSON.stringify(call.policy)!==JSON.stringify(trialAccessPolicy(trial)))throw new ApiError(403,'TRIAL_POLICY_MISMATCH','Trial authority differs from the retained admission.');
@@ -289,6 +302,12 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     assertAuthority(authority, workspaceId);
     authorizeRoute(call.principal, call.method, call.path);
     controller = this.controller(authority,trial);
+      if(call.path==='/api/trial/sample') {
+        if(!trial)throw new ApiError(404,'NOT_FOUND','Trial sample setup is not available in this application.');
+        if(call.search)throw new ApiError(400,'INVALID_TRIAL_SAMPLE','Sample setup accepts no query parameters.');
+        if(call.method==='GET')return reply(await controller.trialSampleStatus());
+        if(call.method==='POST'){const result=await controller.setupTrialSample(call.body,call.key);return reply(result,result.replayed?200:201);}
+      }
       if(call.method==='GET'&&call.path==='/api/repositories') return reply(await controller.repositoryCatalog(call.search ?? ''));
       if(call.method==='GET'&&call.path==='/api/workspace/backup')return reply(await controller.workspaceBackup());
       if(call.method==='GET'&&call.path==='/api/workspace/recovery-imports')return reply(controller.recoveryHistory());
@@ -476,7 +495,7 @@ export async function dispatchWorkspaceRequest(request:Request,env:Env,policy:Ac
   const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? WORKSPACE_BACKUP_REQUEST_BYTES : url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
   for(const expectedWorkspace of [request.headers.get('X-Workspace-Id'),body.expectedWorkspaceId])
     if (expectedWorkspace !== undefined && expectedWorkspace !== null && expectedWorkspace !== workspaceId) throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The request targets a different workspace.');
-  const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
+  const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore','/api/trial/sample'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
   const key = needsKey ? idempotencyKey(request) : "";
   const stub = env.WORKSPACES.getByName(workspaceId);
   return await stub.api({ principal, policy, forbiddenSecrets, method: request.method, path: url.pathname, body, key, search: url.search,

@@ -3,7 +3,7 @@ import {AccessVerifier} from './access.ts';
 import type {HumanAccessIdentity,AccessPrincipal} from './access.ts';
 import {TrialAdmissionStore,trialAccessPolicy,trialStatus,assertTrialActive,trialReply,trialGrant} from './trial-admission.ts';
 import type {TrialRegistry,TrialReply,TrialPolicy} from './trial-admission.ts';
-import {configuredTrialPolicy,trialRegistry,assertTrialRead} from './trial-scope.ts';
+import {configuredTrialPolicy,trialRegistry,assertTrialRoute} from './trial-scope.ts';
 import {dispatchWorkspaceRequest} from './index.ts';
 import {ApiError,bodyJson,errorResponse,idempotencyKey,json,requireSameOrigin,digest} from './security.ts';
 import {trialUiAsset} from './trial-ui-assets.mjs';
@@ -62,7 +62,12 @@ export function createTrialFetch(verifier:AccessVerifier) {
         const grant=ownGrant(url.pathname==='/api/trial'?await registry.admit(identity,key,policy):await registry.close(identity,policy));
         return json(status(grant));
       }
-      if(url.pathname.startsWith('/api/'))assertTrialRead(request.method,url.pathname);
+      if(url.pathname==='/api/trial/sample') {
+        if(url.search||request.headers.has('X-Workspace-Id'))throw new ApiError(400,'INVALID_TRIAL_SAMPLE','Sample setup accepts no workspace selectors or query parameters.');
+        if(request.method==='POST'&&request.headers.get('X-Trial-Identity')!==identityKey)
+          throw new ApiError(409,'TRIAL_IDENTITY_CHANGED','Check the signed-in trial identity before preparing its sample.');
+      }
+      if(url.pathname.startsWith('/api/'))assertTrialRoute(request.method,url.pathname);
       const grant=ownGrant(await trialRegistry(env).read(identity,policy));assertTrialActive(grant);
       for(const key of ['workspace','workspaceId','expectedWorkspaceId'])
         for(const value of url.searchParams.getAll(key))if(value!==grant.workspaceId)

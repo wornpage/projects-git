@@ -28,14 +28,15 @@ async function token(subject='person-a',changes={}){
     .setProtectedHeader({alg:'RS256',kid:jwk.kid}).sign(pair.privateKey);
 }
 function context(storage,name){return{storage:{...storage,getAlarm:async()=>null,setAlarm:async()=>{throw new Error('No background scheduling allowed');}},id:{name}};}
-function fixture(){
+function fixture({artifacts,git}={}){
   const contexts=new Map(),calls=[],assetCalls=[];
   let registry;
   const env={WORKSPACE_ID:'',ACCESS_OWNER_SUB:'',TRIAL_POLICY:JSON.stringify(policy),
+    ...(artifacts?{TRIAL_ARTIFACTS:artifacts}:{}),
     TRIAL_REGISTRY:{getByName:name=>{assert.equal(name,'trial-admissions-v1');return registry;}},
     WORKSPACES:{getByName:name=>{
       calls.push(name);
-      if(!contexts.has(name)){const sql=sqliteStorage();const ctx=context(sql.storage,name);contexts.set(name,{...sql,ctx,coordinator:new index.WorkspaceCoordinator(ctx,env)});}
+      if(!contexts.has(name)){const sql=sqliteStorage();const ctx=context(sql.storage,name);const coordinator=new index.WorkspaceCoordinator(ctx,env);if(git)coordinator.gitTransport=()=>git;contexts.set(name,{...sql,ctx,coordinator});}
       return contexts.get(name).coordinator;
     }},ASSETS:{fetch:async request=>{assetCalls.push(request.url);return new Response('static app');}}};
   const sql=sqliteStorage();registry=new trial.TrialAdmissions(context(sql.storage,'trial-admissions-v1'),env);

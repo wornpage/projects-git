@@ -8,8 +8,9 @@ human Access identities without invitations. It reserves one durable trial per
 routes allowed metadata reads to separate SQLite-backed workspace coordinators.
 
 The [signup UI](trial-signup.md) is implemented and reviewed locally. The trial is
-not deployed and its email login policy is not configured. There is no sample-
-repository provisioning, agent connection, hosted execution or cleanup implementation. `workflowReady`
+not deployed and its email login policy is not configured. [Supplied sample setup](trial-sample-setup.md)
+is implemented and checked with local provider fixtures; no Cloudflare repository
+has been provisioned. Agent connection, hosted execution and cleanup remain unavailable. `workflowReady`
 is explicitly false. All unsupported capabilities return a denial, including
 repository discovery, Git access, exports, search, assignments and execution.
 This stage must not be advertised as a working full-workflow trial.
@@ -27,6 +28,7 @@ verifies email; these fixtures do not prove delivery or the provider's policy.
 | `POST /api/trial` | Empty JSON object; valid idempotency key and `X-Trial-Identity` precondition; same-origin browser mutation | Stable admission status; no providers or Git operations |
 | `GET /api/trial` | No query or workspace header | Current identity's status, expiry and unavailable capabilities; no auto-enrollment |
 | `POST /api/trial/close` | Empty JSON object; valid idempotency key and `X-Trial-Identity` precondition | Idempotent closure; denies further workspace access; does not claim deletion |
+| `GET/POST /api/trial/sample` | Active admission; supplied sample contract only | Inspect or explicitly prepare/resume one fixed sample; separate trial Artifacts binding required |
 | `GET /api/workspace` | Optional matching workspace precondition | The admitted identity's isolated metadata; management and execution capabilities false |
 | `GET /api/projects/catalog` | Existing catalog paging contract | Only the selected identity's coordinator records |
 | `GET /api/projects/:id/metrics` or `/access` | Existing project read contract | A project in that identity's workspace, or a denial |
@@ -81,7 +83,8 @@ search/AI bindings or event services. Its Access issuer/audience are test values
 Its compatibility date is pinned to the installed local runtime's supported date.
 `trial-local-configuration.d.ts` is generated from this configuration.
 
-The trial runtime rejects a configured real workspace/owner or provider bindings.
+The trial runtime rejects a configured real workspace/owner and ordinary provider bindings.
+Only sample setup may use the dedicated `TRIAL_ARTIFACTS` binding; metadata reads do not need it.
 The existing `wrangler.jsonc` and private deployment configuration are unchanged.
 The application HTTP validation, controller and SQLite store are reused; there
 is no separate copy of the workflow or fallback to the maintainer's workspace.
@@ -104,7 +107,7 @@ request in process with a fixture JWKS response; any other outbound URL fails th
 test. The local runtime is disposed afterward. It is not a hosted workflow,
 benchmark or independent Cloudflare-installation claim.
 
-Before a hosted trial, implement and review sample-resource
-ownership, execution quotas, abuse controls, export/cleanup lifecycle and terms.
+Before a hosted trial, qualify sample-resource ownership on Cloudflare and implement
+and review execution quotas, abuse controls, export/cleanup lifecycle and terms.
 Then obtain a separate resource/configuration and spending decision. A capacity
 limit is not a guaranteed dollar spending cap.

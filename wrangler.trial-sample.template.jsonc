@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Source template only. Namespace is a placeholder; nothing is provisioned.
+  // The installed Miniflare has no Artifacts emulator. Use the test fixtures;
+  // do not enable remote bindings as a local-development fallback.
+  "name": "projects-git-trial-sample-template",
+  "main": "src/cloudflare/trial-worker.ts",
+  "compatibility_date": "2026-10-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "assets": {"directory":"./public","binding":"ASSETS","run_worker_first":true},
+  "artifacts": [{"binding":"TRIAL_ARTIFACTS","namespace":"replace-with-dedicated-trial-namespace","remote":false}],
+  "vars": {
+    "WORKSPACE_ID": "",
+    "ACCESS_OWNER_SUB": "",
+    "TRIAL_POLICY": "{\"revision\":\"local-sample-v1\",\"issuer\":\"https://fixture.cloudflareaccess.com\",\"audience\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"durationMs\":604800000,\"dailyAdmissions\":20,\"activeTrials\":50,\"totalAdmissions\":1000}"
+  },
+  "durable_objects": {"bindings":[
+    {"name":"TRIAL_REGISTRY","class_name":"TrialAdmissions"},
+    {"name":"WORKSPACES","class_name":"WorkspaceCoordinator"}
+  ]},
+  "migrations": [{"tag":"trial-sample-template-v1","new_sqlite_classes":["TrialAdmissions","WorkspaceCoordinator"]}]
+}
