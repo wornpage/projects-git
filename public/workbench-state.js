@@ -5,7 +5,7 @@ export { dependencyState } from './task-dependencies.js';
 
 /** A successful connection stays steady during routine background reads. */
 export function connectionLabel({loading, error, lastSyncedAt}) {
-  if (error) return loading ? 'Reconnecting…' : error.auth ? 'Authentication required' : 'Connection interrupted';
+  if (error) return loading ? 'Reconnecting…' : error.auth ? 'Authentication required' : error.accessLost ? 'Workspace access required' : 'Connection interrupted';
   return lastSyncedAt ? 'Workspace connected' : 'Connecting…';
 }
 

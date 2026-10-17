@@ -41,6 +41,17 @@ function renderFixture(f) {
   return {render:()=>{current=render();return current;},view:()=>current,calls,find:id=>nodes(current).find(node=>node.id===id)};
 }
 
+test('admission-only trial workspace replaces unavailable project onboarding with reservation management',()=>{
+  const f=fixture();f.workspace.projects={};f.workspace.tasks=[];f.workspace.runs=[];
+  f.workspace.authentication={permissions:{manage:false}};
+  f.workspace.trial={workflowReady:false,expiresAt:'2026-10-24T12:00:00.000Z'};
+  const before=structuredClone(f.workspace),ui=renderFixture(f),all=nodes(ui.view());
+  assert.match(ui.view().textContent,/Trial workspace preview/);
+  assert.doesNotMatch(ui.view().textContent,/Your first project|Choose an Artifacts repository|Connect agent/);
+  const link=all.find(node=>node.tagName==='A'&&node.textContent==='Manage trial reservation');
+  assert.equal(link.attrs.href,'/trial/signup');assert.deepEqual(f.workspace,before);assert.deepEqual(ui.calls,[]);
+});
+
 test('attention projection distinguishes failed checks, manual review, active work and an intentional pause without writing state',()=>{
   const f=fixture(),before=structuredClone(f.workspace);
   const repair=projectAttentionBrief(f.workspace,f.blocked.project.id),review=projectAttentionBrief(f.workspace,f.review.project.id);

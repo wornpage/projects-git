@@ -39,5 +39,6 @@ export function createProjectDiscovery({getContext,api,captureSession,onChange,s
     else if(preferences.pinned.length>=4){preferenceError='Pin up to four projects. Unpin one before adding another.';onChange();return;}else preferences.pinned.push(id);save();revision=null;void sync(getContext().selectedProject);}
   function retry(){revision=null;void sync(getContext().selectedProject);}
   function reset(){preferences={pinned:[],recent:[]};preferenceError='';catalogError='';unreadable=false;save();retry();}
-  return {find,sync,togglePin,reset,retry,needsReset:()=>unreadable,items:()=>shortcuts,pinned:id=>preferences.pinned.includes(id),error:()=>preferenceError||catalogError};
+  function leave(){scope=null;workspaceId=null;revision=null;preferences={pinned:[],recent:[]};shortcuts=[];preferenceError='';catalogError='';unreadable=false;request++;}
+  return {find,sync,togglePin,reset,retry,leave,needsReset:()=>unreadable,items:()=>shortcuts,pinned:id=>preferences.pinned.includes(id),error:()=>preferenceError||catalogError};
 }

@@ -142,3 +142,16 @@ test('malformed saved reviewer names are ignored without losing valid review dra
   const f=fixture();f.data.set('projects-git-ui:one',JSON.stringify({reviewerName:{token:'not-a-name'},drafts:[['saved',{runId:'run',note:'Keep',reviewer:'Explicit name'}]]}));
   f.session.enter(workspace);assert.equal(f.session.getReviewerName(),'');assert.equal(f.drafts.get('saved').reviewer,'Explicit name');
 });
+
+test('leaving a denied workspace detaches volatile data without deleting scoped recovery records',()=>{
+  const f=fixture(),owner={...workspace,authentication:{principal:{issuer:'fixture',kind:'owner',id:'a'}}};
+  f.session.enter(owner);f.drafts.set('saved',{runId:'run',note:'Private A note',reviewer:'A'});
+  f.session.rememberReviewerName('Private A reviewer');f.session.save(composer);
+  const records=[...f.data];for(const map of [f.disclosures,f.assignmentRequests,f.operationRequests,f.projectSelections])map.set('private','A');
+  f.session.leave();assert.equal(f.session.getReviewerName(),'');assert.equal(f.session.warning,false);
+  for(const key of ['drafts','disclosures','assignmentRequests','operationRequests','projectSelections'])assert.equal(f[key].size,0);
+  f.session.save(null);assert.deepEqual([...f.data],records,'Post-denial saves cannot overwrite A recovery.');
+  const other={...owner,authentication:{principal:{...owner.authentication.principal,id:'b'}}};
+  assert.equal(f.session.enter(other).composer,null);assert.equal(f.drafts.size,0);
+  assert.equal(f.session.enter(owner).composer.tasks[0].title,'Saved');assert.equal(f.drafts.get('saved').note,'Private A note');
+});

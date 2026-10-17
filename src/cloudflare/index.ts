@@ -21,6 +21,9 @@ import { ApiError, bodyJson, errorResponse, idempotencyKey, json, requireSameOri
 import { ArtifactGit } from './git-transport.mjs';
 import { WorkerChecks } from './sandbox.ts';
 import { chatProvider } from '../core/agent.mjs';
+import {isTrial,coordinatorWorkspaceId,trialRegistry,assertTrialRead,assertNoTrialBackground,configuredTrialPolicy} from './trial-scope.ts';
+import {assertTrialActive,trialAccessPolicy,trialStatus,trialGrant} from './trial-admission.ts';
+import type {TrialGrant,TrialPolicy} from './trial-admission.ts';
 import type { ModelProvider } from '../core/agent.mjs';
 export { RepositoryCheckContainer } from './check-container.ts';
 
@@ -33,6 +36,7 @@ interface ApiCall {
   body: Record<string, unknown>;
   key: string;
   search?: string;
+  trialPolicy?:TrialPolicy;
 }
 
 // Named RPC entrypoint only; the public HTTP handler never exposes this method.
@@ -58,7 +62,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   private checkoutExecutions = new Map<string, { abort: AbortController; finished: Promise<unknown> }>();
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.store = new WorkspaceStore(ctx.storage, env.WORKSPACE_ID);
+    this.store = new WorkspaceStore(ctx.storage, coordinatorWorkspaceId(ctx,env));
     this.artifactReceipts = new ArtifactEventReceipts(ctx.storage);
     this.subscriptions = new ArtifactSubscriptions(ctx.storage);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS attempts (run_id TEXT PRIMARY KEY, receipt TEXT NOT NULL)');
@@ -110,6 +114,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   }
 
   async artifactPush(body:unknown,messageId:string):Promise<Record<string,unknown>> {
+    assertNoTrialBackground(this.env);
     const policy=artifactEventPolicy(this.env);
     if(policy.automatic){
       const managed=this.subscriptions.bindings(this.subscriptionScope());
@@ -139,9 +144,10 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     return this.env.MODEL_API_KEY && this.env.MODEL ? chatProvider({ endpoint: this.env.MODEL_ENDPOINT, apiKey: this.env.MODEL_API_KEY, model: this.env.MODEL }) : undefined;
   }
 
-  private controller(authority: HostedAuthority): HostedController {
+  private controller(authority: HostedAuthority,trial?:TrialGrant): HostedController {
     const provider = this.modelProvider();
     return new HostedController(this.store, this.artifacts(), authority, {
+      guard:trial?()=>assertTrialActive(trial):undefined,
       currentPolicy: () => currentPolicy(this.env.CURRENT_POLICY, this.env.WORKSPACE_ID),
       ensureSubscription:(repository,validate)=>this.ensureSubscription(repository,validate),
       checks: { verify: (source, commit, signal, attemptId) => this.verifyCheckout(source, commit, signal, attemptId) }, git: this.gitTransport(), provider,
@@ -190,6 +196,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   }
 
   async alarm(): Promise<void> {
+    if(isTrial(this.env))return;
     const controller = this.controller(systemAuthority(accessPolicy(this.env)));
     await controller.drainJobs();
     try { await controller.drainAutomaticMerges(); }
@@ -198,6 +205,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   }
 
   private async schedule(controller: HostedController): Promise<void> {
+    if(isTrial(this.env))return;
     const indexDue = this.env.SEARCH_JOBS && this.env.SEARCH_DB ? this.store.nextIndexAttempt() : null;
     const due = this.store.hasSchedulingCandidates() && (controller.hasQueuedWork() || controller.hasAutomaticMergeWork()) ? Date.now() + 100 : indexDue === null ? null : Math.max(Date.now() + 100, indexDue);
     if (due !== null) {
@@ -217,6 +225,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
   }
 
   async indexProject(projectId: string, requestedRevision: number, terminal: boolean): Promise<void> {
+    assertNoTrialBackground(this.env);
     const previous = this.indexWork.get(projectId) ?? Promise.resolve();
     const work = previous.catch(() => {}).then(() => this.performIndexProject(projectId, requestedRevision, terminal));
     this.indexWork.set(projectId, work);
@@ -269,9 +278,17 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     // A retained DO environment can predate a settings-only Worker deployment.
     if (!call.policy) throw new ApiError(503, 'AUTH_POLICY_REQUIRED', 'The authenticated Worker must supply its current Access policy.');
     const authority = {policy:call.policy,principal:call.principal,forbiddenSecrets:call.forbiddenSecrets};
-    assertAuthority(authority, this.env.WORKSPACE_ID);
+    let trial:TrialGrant|undefined;
+    const workspaceId=coordinatorWorkspaceId(this.ctx,this.env);
+    if(isTrial(this.env)) {
+      assertTrialRead(call.method,call.path);
+      if(!call.trialPolicy)throw new ApiError(503,'TRIAL_POLICY_REQUIRED','The authenticated Worker must supply its current trial policy.');
+      trial=trialGrant(await trialRegistry(this.env).authorize(workspaceId,call.principal,call.trialPolicy));
+      if(JSON.stringify(call.policy)!==JSON.stringify(trialAccessPolicy(trial)))throw new ApiError(403,'TRIAL_POLICY_MISMATCH','Trial authority differs from the retained admission.');
+    }
+    assertAuthority(authority, workspaceId);
     authorizeRoute(call.principal, call.method, call.path);
-    controller = this.controller(authority);
+    controller = this.controller(authority,trial);
       if(call.method==='GET'&&call.path==='/api/repositories') return reply(await controller.repositoryCatalog(call.search ?? ''));
       if(call.method==='GET'&&call.path==='/api/workspace/backup')return reply(await controller.workspaceBackup());
       if(call.method==='GET'&&call.path==='/api/workspace/recovery-imports')return reply(controller.recoveryHistory());
@@ -288,6 +305,12 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
         try { pageRequest = parseWorkspacePage(call.search); }
         catch (error) { throw new ApiError(400,'INVALID_WORKSPACE_PAGE',(error as Error).message); }
         const snapshot = controller.workspacePage(pageRequest);
+        if(trial) {
+          assertTrialActive(trial);
+          return reply({...snapshot,sourceRevision:this.store.identity().revision,trial:trialStatus(trial),
+            authentication:{...snapshot.authentication,permissions:{manage:false,review:false,merge:false}},
+            capabilities:Object.fromEntries(Object.keys(snapshot.capabilities).map(name=>[name,false]))});
+        }
         return reply({ ...snapshot, sourceRevision: this.store.identity().revision,
           ...(call.principal.kind==='owner'?{artifactEvents:this.artifactReceipts.summary(),artifactSubscriptions:this.subscriptions.summary()}:{}),
           capabilities: { ...snapshot.capabilities, retainedSearch: Boolean(this.env.SEARCH_DB && this.env.SEARCH_JOBS), semanticSearch: String(this.env.SEARCH_EMBEDDINGS_ENABLED) === 'true' } });
@@ -396,6 +419,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
 
 export default {
   async queue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
+    assertNoTrialBackground(env);
     if(env.ARTIFACTS_EVENTS_QUEUE&&batch.queue===env.ARTIFACTS_EVENTS_QUEUE){
       const policy=artifactEventPolicy(env);
       for(const message of batch.messages){
@@ -432,20 +456,29 @@ export function createAuthenticatedFetch(verifier: AccessVerifier) {
       }
       const policy = accessPolicy(env);
       const principal = await verifier.authenticate(request, policy);
-      if (!url.pathname.startsWith('/api/')) return entranceEnabled
-        ? await privateWorkbench(request, env.ASSETS) : await env.ASSETS.fetch(request);
-      authorizeRoute(principal, request.method, url.pathname);
-      if (!env.WORKSPACE_ID || !/^[A-Za-z0-9_.-]{1,100}$/.test(env.WORKSPACE_ID)) throw new ApiError(503, "WORKSPACE_NOT_CONFIGURED", "Configure a valid WORKSPACE_ID.");
-      const mutation = request.method !== "GET" && request.method !== "HEAD";
-      if (mutation) requireSameOrigin(request);
-      const forbiddenSecrets = [request.headers.get('Cf-Access-Jwt-Assertion'), request.headers.get('CF-Access-Client-Secret'), env.MODEL_API_KEY].filter((value): value is string => Boolean(value));
-      const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? WORKSPACE_BACKUP_REQUEST_BYTES : url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
-      const expectedWorkspace = request.headers.get('X-Workspace-Id') ?? body.expectedWorkspaceId;
-      if (expectedWorkspace !== undefined && expectedWorkspace !== null && expectedWorkspace !== env.WORKSPACE_ID) throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The request targets a different workspace.');
-      const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
-      const key = needsKey ? idempotencyKey(request) : "";
-      const stub = env.WORKSPACES.getByName(env.WORKSPACE_ID);
-      return await stub.api({ principal, policy, forbiddenSecrets, method: request.method, path: url.pathname, body, key, search: url.search });
+      return await dispatchWorkspaceRequest(request,env,policy,principal);
     } catch (error) { return errorResponse(error); }
   };
+}
+
+// Both deployments enter this HTTP contract with authenticated, server-resolved
+// authority. Caller-supplied workspace IDs are equality conditions, never routes.
+export async function dispatchWorkspaceRequest(request:Request,env:Env,policy:AccessPolicy,principal:AccessPrincipal):Promise<Response> {
+  const url=new URL(request.url);
+  if (!url.pathname.startsWith('/api/')) return isTrial(env)||String(env.PUBLIC_ENTRANCE_ENABLED)==='true'
+    ? await privateWorkbench(request, env.ASSETS) : await env.ASSETS.fetch(request);
+  authorizeRoute(principal, request.method, url.pathname);
+  const workspaceId=policy.workspaceId;
+  if (!workspaceId || !/^[A-Za-z0-9_.-]{1,100}$/.test(workspaceId)) throw new ApiError(503, "WORKSPACE_NOT_CONFIGURED", "Configure a valid workspace identity.");
+  const mutation = request.method !== "GET" && request.method !== "HEAD";
+  if (mutation) requireSameOrigin(request);
+  const forbiddenSecrets = [request.headers.get('Cf-Access-Jwt-Assertion'), request.headers.get('CF-Access-Client-Secret'), env.MODEL_API_KEY].filter((value): value is string => Boolean(value));
+  const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? WORKSPACE_BACKUP_REQUEST_BYTES : url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
+  for(const expectedWorkspace of [request.headers.get('X-Workspace-Id'),body.expectedWorkspaceId])
+    if (expectedWorkspace !== undefined && expectedWorkspace !== null && expectedWorkspace !== workspaceId) throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The request targets a different workspace.');
+  const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
+  const key = needsKey ? idempotencyKey(request) : "";
+  const stub = env.WORKSPACES.getByName(workspaceId);
+  return await stub.api({ principal, policy, forbiddenSecrets, method: request.method, path: url.pathname, body, key, search: url.search,
+    ...(isTrial(env)?{trialPolicy:configuredTrialPolicy(env)}:{}) });
 }

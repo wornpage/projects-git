@@ -111,3 +111,29 @@ test('invalid source data is reported without replacing a usable workspace',asyn
   const f=fixture();f.connection.applySnapshot(snapshot());const read=f.connection.refresh();f.requests[0].resolve({tasks:[]});await read;
   assert.equal(f.context.workspace.version,1);assert.match(f.errors[0].message,/invalid workspace model/);
 });
+
+for(const code of ['UNAUTHORIZED','FORBIDDEN','SESSION_EXPIRED','SESSION_REVOKED','WORKSPACE_FORBIDDEN','WORKSPACE_OWNER_MISMATCH',
+  'HUMAN_IDENTITY_REQUIRED','TRIAL_NOT_ADMITTED','TRIAL_CLOSED','TRIAL_EXPIRED','TRIAL_IDENTITY_FORBIDDEN','TRIAL_IDENTITY_CHANGED'])
+test(`${code} clears the previous workspace, invalidates its session and stops polling`,async()=>{
+  const f=fixture();let read=f.connection.refresh();f.requests[0].resolve(snapshot('a'));await read;
+  const isCurrent=f.connection.captureSession();read=f.connection.refresh();f.connection.refresh(true);
+  f.requests[1].reject(Object.assign(Error('Access no longer available'),{code}));await read;
+  assert.equal(f.context.workspace,null);assert.equal(isCurrent(),false);
+  assert.equal(f.connection.state.lastSyncedAt,null);assert.equal(f.connection.state.lastSyncedVersion,null);
+  assert.equal(f.connection.state.error.accessLost,true);f.connection.schedulePoll();assert.equal(f.timers.size,0);
+  assert.equal(f.requests.length,2,'A denial must not start the queued forced read.');
+  f.connection.applySnapshot(snapshot('a'));assert.equal(isCurrent(),false,'Returning to the same ID cannot revive an old session.');
+});
+
+test('an action denial invalidates an in-flight read and its late success cannot restore private data',async()=>{
+  const f=fixture();f.connection.applySnapshot(snapshot('a'));const current=f.connection.captureSession(),read=f.connection.refresh();
+  f.connection.invalidate(Object.assign(Error('Trial closed'),{code:'TRIAL_CLOSED'}));
+  f.requests[0].resolve(snapshot('a',2));assert.equal(await read,false);
+  assert.equal(f.context.workspace,null);assert.equal(current(),false);assert.equal(f.received.length,0);assert.equal(f.errors.length,1);assert.equal(f.timers.size,0);
+});
+
+test('an old denial from a pending poll cannot disconnect a newly applied identity',async()=>{
+  const f=fixture();f.connection.applySnapshot(snapshot('a'));const read=f.connection.refresh();f.connection.applySnapshot(snapshot('b'));
+  f.requests[0].reject(Object.assign(Error('Old identity denied'),{code:'TRIAL_NOT_ADMITTED'}));await read;
+  assert.equal(f.context.workspace.id,'b');assert.equal(f.errors.length,0);assert.equal(f.connection.state.error,null);
+});

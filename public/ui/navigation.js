@@ -18,8 +18,9 @@ export function createNavigation({getContext, dialogs, announce, selectProject, 
     $('#command-results').replaceChildren();
     $('#command-support').replaceChildren();
     let projects=[],failure=null;
-    try {catalog=await projectDiscovery.find(query,offset,{at:offset?catalog?.revision??null:null});
-      if(!catalog||started!==request||identity!==scope()||!$('#command-dialog').open)return;
+    try {const result=await projectDiscovery.find(query,offset,{at:offset?catalog?.revision??null:null});
+      if(!result||started!==request||identity!==scope()||!$('#command-dialog').open)return;
+      catalog=result;
       projects=catalog.items.map(item=>({id:'project-'+item.id,group:'Projects',label:item.name,detail:item.taskCount+' tasks · '+item.candidateCount+' candidates',projectId:item.id}));
     }catch(error){if(started!==request||identity!==scope()||!$('#command-dialog').open)return;failure=error.message;catalog=null;}
     displayedCommands = [...projects,...all.slice(0,60)];
@@ -94,5 +95,10 @@ export function createNavigation({getContext, dialogs, announce, selectProject, 
   document.addEventListener('keydown', event => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommands(); }
   });
-  return {openCommands};
+  function leave() {
+    request++;commandIndex=0;displayedCommands=[];displayedScope=null;catalog=null;
+    $('#command-query').value='';$('#command-query').removeAttribute('aria-activedescendant');
+    for(const id of ['command-count','command-results','command-support'])$('#'+id).replaceChildren();
+  }
+  return {openCommands,leave};
 }

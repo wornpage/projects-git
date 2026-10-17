@@ -89,5 +89,10 @@ export function createArtifactPicker({getContext,api,isLocked,saveSession}) {
   $('#artifact-refresh-base').addEventListener('click',()=>{void readBase(name.value);});
   $('#repository-back').addEventListener('click',()=>{if(active())select.focus();});
   $('#task-launcher').addEventListener('close',leave);
-  return {update};
+  function reset() {
+    leave();scope='';page=null;cursor=null;previous=[];head=null;error='';optionsKey='';
+    select.replaceChildren(el('option',{value:''},'Choose an Artifacts repository'));select.value='';select.disabled=true;
+    for(const id of ['artifact-catalog-status','artifact-picker-error','artifact-base-status'])$('#'+id).textContent='';
+  }
+  return {update,reset};
 }
