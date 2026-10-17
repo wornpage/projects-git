@@ -122,7 +122,9 @@ copied from the same untrusted file as unverified provenance.
 
 Run the CLI from a source checkout with `npm ci` installed. All file/directory
 arguments must be absolute. The delivery directory must be new and outside source
-control; keep its evidence and receipt files private.
+control, including outside a bare or recovered repository; keep its evidence and
+receipt files private. Canonical source/target overlap and redirected parents are
+refused before the delivery directory is created.
 
 ```powershell
 node scripts/hosted-github-delivery.mjs prepare --handoff "C:/operator/task.json" --sha256 EXPORT_SHA256 --workspace WORKSPACE_ID --run RUN_UUID --base BASE_SHA --head HEAD_SHA --tree TREE_SHA --source "C:/operator/source.git" --directory "C:/operator/new-delivery" --repository "owner/private-repo"
@@ -152,7 +154,9 @@ ID, target branch, dedicated new branch, PR title/body and expiry. The generated
 PR body contains commit/digest references and boundary text; it does not copy
 freeform task notes, outputs, diffs or identities into GitHub.
 
-After inspection, copy that preview's `id` and `approvalSha256`. Choose a new UUID
+After inspection, copy that preview's `id` and `approvalSha256`. The approval
+digest covers the complete generated preview, including its title, body, expiry,
+exact source proof and GitHub destination. Choose a new UUID
 for `REQUEST_UUID` and preserve it. Only this explicit command authorizes the
 creation-only push and PR creation; repository workflows may run.
 
@@ -160,8 +164,9 @@ creation-only push and PR creation; repository workflows may run.
 node scripts/hosted-github-delivery.mjs publish --directory "C:/operator/new-delivery" --repository "owner/private-repo" --preview PREVIEW_UUID --request REQUEST_UUID --approve APPROVAL_SHA256
 ```
 
-The approval digest covers the entire preview binding, including source/export
-proofs, object-change digest, GitHub repository ID, base branch and new branch.
+The approval digest covers the full preview and its binding, including source/export
+proofs, object-change digest, sealed staging configuration, GitHub repository ID,
+base branch and new branch.
 An old approval cannot authorize another target or source. Current GitHub main
 must equal the original base. Advanced main is an explicit refusal; no automatic
 rebase, commit reconstruction or approval transfer happens.
@@ -179,6 +184,18 @@ a remote write that has never started. Repeating `publish` with the same preview
 request and approval returns its saved receipt. Interrupted push/PR reservations
 and observations survive restart; an absent remote result never permits blindly
 repeating the attempted write. GitHub merge and deployment remain separate.
+
+A synchronous-FULL SQLite journal is the cross-platform durable authority for
+preview, approval and remote-write reservations. `delivery.json` is a private
+readable projection; rollback or timestamp removal there cannot erase the journal.
+Status receipts disclose when that projection was reconstructed from the verified
+journal so local rollback is not silently treated as authoritative.
+Every provider write begins only after its journal commit. POSIX also fsyncs the
+projection directory; Windows relies on SQLite's FULL commit rather than claiming
+unsupported directory-fsync semantics. Staged Git configuration and the empty
+hooks directory are sealed on open and rechecked immediately before every Git push.
+The journal is capped at 512 monotonic states and refuses further changes instead
+of dropping prior reservations.
 
 A package lock prevents competing CLI processes. After a process crash, inspect
 the lock and release only its exact ID after its PID is confirmed stopped:

@@ -5,6 +5,7 @@ import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 import {createWorkspace,createTask,assignRun,startRun,completeRun,verifyRun,reviewRun,mergeRun} from '../src/core/workflow.mjs';
 import {buildTaskHandoff} from '../src/core/handoff.mjs';
 import {requirementsDigest} from '../src/core/check-definition.mjs';
@@ -97,6 +98,14 @@ test('wrong tree, changed paths, missing objects, unrelated base and reused stag
   await f.prepare();await assert.rejects(f.prepare());
 });
 
+test('bare repositories and canonical source overlap cannot contain a delivery directory',async t=>{
+  const f=await fixture(t),bare=path.join(f.root,'recovered.git');execFileSync('git',['clone','--bare',f.source,bare],{windowsHide:true});
+  await assert.rejects(f.prepare({source:bare,directory:path.join(bare,'delivery')}));
+  await assert.rejects(f.prepare({directory:f.root}));
+  await assert.rejects(f.prepare({directory:f.source}));
+  assert.deepEqual(f.calls,[]);
+});
+
 test('operator-local CLI fixture E2E previews, approves exact target, publishes once and retains local receipt',async t=>{
   const f=await fixture(t),file=path.join(f.root,'handoff.json');await writeFile(file,JSON.stringify(f.handoff));
   const args=['prepare','--handoff',file,'--sha256',f.handoff.sha256,'--workspace',f.state.id,'--run',f.run.id,'--base',f.expected.baseCommit,'--head',f.expected.headCommit,'--tree',f.expected.tree,'--source',f.source,'--directory',f.target,'--repository',f.provider.repository];
@@ -125,8 +134,7 @@ test('changed upstream, decision, export and staged objects never authorize late
   f.remote.base='0'.repeat(40);const record=await delivery.publish({previewId:preview.preview.id,requestId:randomUUID(),approvalSha256:preview.approvalSha256});
   assert.equal(record.error.code,'github_base_changed');assert.ok(!f.calls.includes('push'));
   const stateFile=path.join(f.target,'delivery.json'),state=JSON.parse(await readFile(stateFile,'utf8'));state.runs[0].review.note='changed';await writeFile(stateFile,JSON.stringify(state));
-  await assert.rejects(f.open());
-  state.runs[0].review.note=f.run.review.note;await writeFile(stateFile,JSON.stringify(state));
+  await f.open();assert.equal(JSON.parse(await readFile(stateFile,'utf8')).runs[0].review.note,f.run.review.note);
   await writeFile(path.join(f.target,'handoff.json'),JSON.stringify({...f.handoff,sha256:'0'.repeat(64)}));await assert.rejects(f.open());
 });
 
@@ -137,6 +145,58 @@ test('corrupt staged blobs and a different GitHub target cannot use the previous
   await writeFile(file,Buffer.from('corrupt object'));
   const result=await delivery.publish({previewId:prepared.preview.id,requestId:randomUUID(),approvalSha256:prepared.approvalSha256});
   assert.equal(result.status,'needs_attention');assert.ok(!f.calls.includes('push'));
+});
+
+test('staged config, includes, URL rewrites, helpers and hooks are refused before provider access',async t=>{
+  const f=await fixture(t);await f.prepare();const staged=path.join(f.target,'objects.git'),configFile=path.join(staged,'config'),original=await readFile(configFile,'utf8');
+  for(const addition of ['\n[include]\n\tpath = C:/untrusted/config\n','\n[url "https://elsewhere.invalid/"]\n\tinsteadOf = https://github.com/\n','\n[credential]\n\thelper = !untrusted\n']){
+    await writeFile(configFile,original+addition);await assert.rejects(f.open());await writeFile(configFile,original);
+  }
+  await writeFile(path.join(staged,'hooks','pre-push'),'untrusted hook');await assert.rejects(f.open());
+  assert.deepEqual(f.calls,[]);
+});
+
+test('full preview approval and SQLite journal override JSON rollback without repeating uncertain writes',async t=>{
+  const f=await fixture(t);await f.prepare();let delivery=await f.open(),preview=await delivery.preview(),id=randomUUID();
+  assert.equal(preview.approvalSha256,hash({action:'publish-private-pr',preview:preview.preview}));
+  const changed=structuredClone(preview.preview);changed.body+=' changed';
+  await assert.rejects(delivery.publish({previewId:preview.preview.id,requestId:id,approvalSha256:hash({action:'publish-private-pr',preview:changed})}));
+  f.remote.fault='push-absent';await delivery.publish({previewId:preview.preview.id,requestId:id,approvalSha256:preview.approvalSha256});assert.equal(f.calls.filter(call=>call==='push').length,1);
+  const projectionFile=path.join(f.target,'delivery.json'),projection=JSON.parse(await readFile(projectionFile,'utf8'));
+  projection.runs.find(run=>run.id===f.run.id).publication.pushStartedAt=null;projection.runs.find(run=>run.id===f.run.id).publication.body='changed after approval';
+  await writeFile(projectionFile,JSON.stringify(projection));f.remote.fault=null;delivery=await f.open();
+  assert.equal(delivery.receipt().localState.projectionRecovered,true);
+  const repaired=JSON.parse(await readFile(projectionFile,'utf8')),record=repaired.runs.find(run=>run.id===f.run.id).publication;
+  assert.ok(record.pushStartedAt);assert.notEqual(record.body,'changed after approval');await delivery.resume(id,preview.approvalSha256);
+  assert.equal(f.calls.filter(call=>call==='push').length,1);
+  const db=new DatabaseSync(path.join(f.target,'delivery.sqlite')),row=db.prepare('SELECT data FROM delivery_state WHERE id=1').get(),state=JSON.parse(row.data);
+  const publication=state.runs.find(run=>run.id===f.run.id).publication;publication.pushStartedAt=null;
+  const data=JSON.stringify(state),sha256=createHash('sha256').update(data).digest('hex'),guard={previewId:null,approvalSha256:state.operatorApproval.sha256,
+    publicationId:publication.id,publicationPreviewId:publication.previewId,pushStartedAt:null,prStartedAt:publication.prStartedAt};
+  db.prepare('UPDATE delivery_state SET data=?,sha256=? WHERE id=1').run(data,sha256);
+  db.prepare('UPDATE delivery_journal SET state_sha256=?,guard=? WHERE sequence=(SELECT max(sequence) FROM delivery_journal)').run(sha256,JSON.stringify(guard));db.close();
+  await assert.rejects(f.open());assert.equal(f.calls.filter(call=>call==='push').length,1);
+});
+
+for(const storageStage of ['before-state-commit','after-state-commit'])
+test('fault at '+storageStage+' cannot start a remote write without a durable reservation',async t=>{
+  const f=await fixture(t);await f.prepare();let armed=true;
+  const delivery=await openHostedDelivery(f.target,f.provider,{storageFault:({stage,transition})=>{
+    if(armed&&transition==='reserve-push'&&stage===storageStage){armed=false;throw Error('scripted storage interruption');}
+  }}),preview=await delivery.preview(),id=randomUUID();
+  const record=await delivery.publish({previewId:preview.preview.id,requestId:id,approvalSha256:preview.approvalSha256});
+  assert.equal(record.status,'needs_attention');assert.equal(f.calls.filter(call=>call==='push').length,0);
+  const restarted=await f.open();await restarted.resume(id,preview.approvalSha256);
+  assert.equal(f.calls.filter(call=>call==='push').length,storageStage==='before-state-commit'?1:0);
+});
+
+test('a committed PR reservation survives a projection crash and never repeats PR creation',async t=>{
+  const f=await fixture(t);await f.prepare();let armed=true;
+  const delivery=await openHostedDelivery(f.target,f.provider,{storageFault:({stage,transition})=>{
+    if(armed&&transition==='reserve-pr'&&stage==='after-state-commit'){armed=false;throw Error('scripted PR reservation interruption');}
+  }}),preview=await delivery.preview(),id=randomUUID(),record=await delivery.publish({previewId:preview.preview.id,requestId:id,approvalSha256:preview.approvalSha256});
+  assert.equal(record.status,'needs_attention');assert.equal(f.calls.filter(call=>call==='push').length,1);assert.equal(f.calls.filter(call=>call==='create').length,0);
+  const restarted=await f.open();await restarted.resume(id,preview.approvalSha256);assert.equal(f.calls.filter(call=>call==='create').length,0);
 });
 
 test('package locks serialize clients; live and mismatched stale locks cannot be released',async t=>{

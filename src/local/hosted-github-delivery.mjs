@@ -1,8 +1,7 @@
-import {mkdir,readFile,writeFile,lstat,realpath,open,unlink} from 'node:fs/promises';
-import {openSync,writeFileSync,fsyncSync,closeSync,renameSync,lstatSync,realpathSync} from 'node:fs';
+import {mkdir,readFile,writeFile,lstat,realpath,open,unlink,rm,readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
-import {GitHubPublication,githubRepository} from './github-publication.mjs';
+import {GitHubPublication,githubRepository,githubBranch} from './github-publication.mjs';
 import {RepositoryRunner} from './repository-runner.mjs';
 import {readOnlyGit} from './git-reader.mjs';
 import {captureGitObjects,readGitObjects,installGitObjects} from './git-object-capsule.mjs';
@@ -10,6 +9,7 @@ import {validateBackupHandoff} from '../core/backup-records.mjs';
 import {MAX_HANDOFF_BYTES} from '../core/handoff.mjs';
 import {requirementsDigest} from '../core/check-definition.mjs';
 import {independentReviewStatus} from '../../public/review-boundary.js';
+import {createDeliveryState,openDeliveryState} from './durable-delivery-state.mjs';
 
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sha=value=>typeof value==='string'&&/^[a-f0-9]{40}$/.test(value);
@@ -22,6 +22,16 @@ const canonical=value=>process.platform==='win32'?value.toLowerCase():value;
 const samePath=(a,b)=>canonical(a)===canonical(b);
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',');
 const keys=['workspaceId','runId','baseCommit','headCommit','tree','handoffSha256'];
+function journalGuard(state){const run=state.runs?.find(item=>item.id===state.expected?.runId),record=run?.publication;
+  return {previewId:run?.publicationPreview?.id??null,approvalSha256:state.operatorApproval?.sha256??null,publicationId:record?.id??null,
+    publicationPreviewId:record?.previewId??null,pushStartedAt:record?.pushStartedAt??null,prStartedAt:record?.prStartedAt??null};}
+function validJournalTransition(before,after){
+  if(before.publicationId!==null&&after.publicationId!==before.publicationId)return false;
+  if(before.publicationPreviewId!==null&&after.publicationId!==null&&after.publicationPreviewId!==before.publicationPreviewId)return false;
+  if(before.pushStartedAt!==null&&after.pushStartedAt!==before.pushStartedAt||before.prStartedAt!==null&&after.prStartedAt!==before.prStartedAt)return false;
+  if(before.publicationId!==null&&before.approvalSha256!==null&&after.approvalSha256!==before.approvalSha256)return false;
+  return true;
+}
 
 /** Closed nested schemas plus semantic bindings; a checksum remains historical, not authenticated authority. */
 export async function hostedDeliverySource(text, expected) {
@@ -67,12 +77,28 @@ async function directory(value) {
   requireThat(typeof value==='string'&&path.isAbsolute(value));const info=await lstat(value);
   requireThat(info.isDirectory()&&!info.isSymbolicLink()&&samePath(await realpath(value),value));return value;
 }
-async function privateTarget(target){
+async function exists(file,predicate){try{return predicate(await lstat(file));}catch(error){if(error.code==='ENOENT')return false;throw error;}}
+async function privateTarget(target,source){
   requireThat(typeof target==='string'&&path.isAbsolute(target));
+  const sourceRoot=await realpath(source),resolved=path.resolve(target),left=canonical(sourceRoot),right=canonical(resolved);
+  requireThat(left!==right&&!right.startsWith(left+path.sep)&&!left.startsWith(right+path.sep));
   for(let parent=path.dirname(target);;parent=path.dirname(parent)){
+    const parentInfo=await lstat(parent);requireThat(parentInfo.isDirectory()&&!parentInfo.isSymbolicLink()&&samePath(await realpath(parent),parent));
     try{await lstat(path.join(parent,'.git'));requireThat(false);}catch(error){if(error.code!=='ENOENT')throw error;}
+    const bare=await exists(path.join(parent,'HEAD'),info=>info.isFile()&&!info.isSymbolicLink())
+      &&await exists(path.join(parent,'objects'),info=>info.isDirectory()&&!info.isSymbolicLink())
+      &&await exists(path.join(parent,'refs'),info=>info.isDirectory()&&!info.isSymbolicLink())
+      &&await exists(path.join(parent,'config'),info=>info.isFile()&&!info.isSymbolicLink());
+    requireThat(!bare);
     if(path.dirname(parent)===parent)break;
   }
+}
+async function fileDigest(file){const info=await lstat(file);requireThat(info.isFile()&&!info.isSymbolicLink()&&samePath(await realpath(file),file));return createHash('sha256').update(await readFile(file)).digest('hex');}
+async function trustedStaging(repository,expectedConfig){
+  await directory(repository);requireThat(await fileDigest(path.join(repository,'config'))===expectedConfig);
+  const hooks=path.join(repository,'hooks'),hooksInfo=await lstat(hooks);requireThat(hooksInfo.isDirectory()&&!hooksInfo.isSymbolicLink()&&samePath(await realpath(hooks),hooks)&&(await readdir(hooks)).length===0);
+  for(const file of ['config.worktree','commondir',path.join('objects','info','alternates'),path.join('objects','info','http-alternates')])
+    requireThat(!await exists(path.join(repository,file),()=>true));
 }
 async function objectBinding(repository,source) {
   await directory(repository);const git=readOnlyGit(repository),{task,run,binding}=source;
@@ -95,31 +121,78 @@ async function objectBinding(repository,source) {
 /** Offline preparation only. Copy exact objects into a fresh bare repository; never checkout or import config/hooks. */
 export async function prepareHostedDelivery({handoffText,expected,source,directory:target,repository}) {
   repository=githubRepository(repository);const validated=await hostedDeliverySource(handoffText,expected);
-  await directory(source);await privateTarget(target);
+  await directory(source);await privateTarget(target,source);
   const objectChangesSha256=await objectBinding(source,validated),roots=[expected.baseCommit,expected.headCommit];
   const bytes=await captureGitObjects(roots,Object.fromEntries(roots.map(oid=>[oid,source])),budget());
   const objects=readGitObjects(bytes,roots,budget());
   await mkdir(target,{mode:0o700});await directory(target);
   const runner=new RepositoryRunner(target);await runner.initialize();const staged=path.join(target,'objects.git');
-  await mkdir(staged,{mode:0o700});await runner.git(staged,['init','--bare']);await installGitObjects(objects,staged);
+  await mkdir(staged,{mode:0o700});await runner.git(staged,['init','--bare']);await rm(path.join(staged,'hooks'),{recursive:true,force:true});await mkdir(path.join(staged,'hooks'),{mode:0o700});await installGitObjects(objects,staged);
   await runner.git(staged,['update-ref','refs/heads/source-base',expected.baseCommit,'0'.repeat(40)]);
   await runner.git(staged,['update-ref','refs/candidates/'+expected.runId,expected.headCommit,'0'.repeat(40)]);
   await runner.git(staged,['symbolic-ref','HEAD','refs/heads/source-base']);await runner.git(staged,['fsck','--strict','--full']);
+  const stagedConfigSha256=await fileDigest(path.join(staged,'config'));await trustedStaging(staged,stagedConfigSha256);
   requireThat(await objectBinding(staged,validated)===objectChangesSha256);
   await writeFile(path.join(target,'handoff.json'),handoffText,{flag:'wx',mode:0o600});
-  const state={format:'projects-git-hosted-delivery/v1',repository,expected,objectChangesSha256,operatorApproval:null,
+  const state={format:'projects-git-hosted-delivery/v1',repository,expected,objectChangesSha256,stagedConfigSha256,operatorApproval:null,
     id:validated.state.id,provider:'cloudflare-artifacts',tasks:[validated.task],runs:validated.state.runs,events:[],version:1};
   // Imported publication metadata is history only; it must never resume another coordinator's effects.
   for(const run of state.runs){requireThat(!run.publication);delete run.publicationPreview;}
-  await writeFile(path.join(target,'delivery.json'),JSON.stringify(state),{flag:'wx',mode:0o600});
+  createDeliveryState(target,state,{guard:journalGuard});
   return {format:state.format,source:validated.binding,repository,objectChangesSha256,historical:true,authenticatedHostedAuthority:false,providerRequests:0};
 }
 
-function persist(file,value) {
-  requireThat(!lstatSync(file).isSymbolicLink()&&samePath(realpathSync(file),file));
-  const temporary=file+'.'+randomUUID()+'.tmp',fd=openSync(temporary,'wx',0o600);
-  try{writeFileSync(fd,JSON.stringify(value));fsyncSync(fd);}finally{closeSync(fd);}renameSync(temporary,file);
+function publicationContent(source){const {task,run,binding}=source;return {title:'Projects Git candidate '+run.id,
+  body:`Historical hosted merged candidate: ${run.headCommit}\nBase: ${run.baseCommit}\nExport SHA-256: ${binding.handoffSha256}\nRequirements SHA-256: ${requirementsDigest(task)}\n\nDelivery requires separate operator-local approval. The export checksum is not authenticated or current hosted authority. GitHub review, merge and deployment remain separate.`};}
+const approvalDigest=preview=>hash({action:'publish-private-pr',preview});
+function validBinding(binding,state,source){
+  const local={...source.binding,objectChangesSha256:state.objectChangesSha256,stagedConfigSha256:state.stagedConfigSha256};
+  return exact(binding,['local','repository','repositoryId','baseBranch','headBranch'])&&equal(binding.local,local)&&binding.repository===state.repository
+    &&Number.isSafeInteger(binding.repositoryId)&&binding.repositoryId>0&&githubBranch(binding.baseBranch)===binding.baseBranch
+    &&binding.headBranch===githubBranch(`newwork/projects-${state.id}-${source.run.id}`);
 }
+function validPreview(preview,state,source){const content=publicationContent(source);
+  return exact(preview,['id','binding','createdAt','expiresAt','title','body'])&&uuid(preview.id)&&validBinding(preview.binding,state,source)
+    &&Number.isFinite(Date.parse(preview.createdAt))&&Number.isFinite(Date.parse(preview.expiresAt))&&Date.parse(preview.expiresAt)>Date.parse(preview.createdAt)
+    &&preview.title===content.title&&preview.body===content.body;
+}
+function validPR(value,binding){return value===null||exact(value,['number','url','headCommit','status','mergedAt','mergeCommit'])&&Number.isSafeInteger(value.number)&&value.number>0
+  &&value.url===`https://github.com/${binding.repository}/pull/${value.number}`&&sha(value.headCommit)&&['open','closed','merged','changed'].includes(value.status)
+  &&(value.mergedAt===null||typeof value.mergedAt==='string'&&Number.isFinite(Date.parse(value.mergedAt)))&&(value.mergeCommit===null||sha(value.mergeCommit));}
+function validPublication(record,state,source,approval){
+  if(!record||typeof record!=='object'||Array.isArray(record))return false;const required=['id','previewId','binding','title','body','createdAt','status','stage','pushStartedAt','prStartedAt','branchHead','pr','error','observations'];
+  if(!exact(record,[...required,...(Object.hasOwn(record,'lastCheckedAt')?['lastCheckedAt']:[])])||!uuid(record.id)||!uuid(record.previewId)||!validBinding(record.binding,state,source)
+    ||record.title!==publicationContent(source).title||record.body!==publicationContent(source).body||!Number.isFinite(Date.parse(record.createdAt))
+    ||!['pending','needs_attention','changed','open','closed','merged'].includes(record.status)||!['reserved','push','branch','create_pr','pr'].includes(record.stage)
+    ||record.pushStartedAt!==null&&!Number.isFinite(Date.parse(record.pushStartedAt))||record.prStartedAt!==null&&!Number.isFinite(Date.parse(record.prStartedAt))
+    ||record.lastCheckedAt!==undefined&&!Number.isFinite(Date.parse(record.lastCheckedAt))||record.branchHead!==null&&!sha(record.branchHead)
+    ||!validPR(record.pr,record.binding)||record.error!==null&&(!exact(record.error,['code','message'])||typeof record.error.code!=='string'||typeof record.error.message!=='string')
+    ||!Array.isArray(record.observations)||record.observations.length>100)return false;
+  if(record.prStartedAt!==null&&record.pushStartedAt===null||['create_pr','pr'].includes(record.stage)&&record.prStartedAt===null)return false;
+  if(!approval||approval.preview.id!==record.previewId||!equal(approval.preview.binding,record.binding)||approval.preview.title!==record.title||approval.preview.body!==record.body)return false;
+  return record.observations.every(item=>item&&typeof item==='object'&&!Array.isArray(item)&&Object.keys(item).every(key=>['at','status','stage','message','pr'].includes(key))
+    &&typeof item.at==='string'&&Number.isFinite(Date.parse(item.at))&&typeof item.status==='string'&&typeof item.stage==='string'&&typeof item.message==='string'
+    &&(item.pr===undefined||validPR(item.pr,record.binding)));
+}
+function validateDynamicState(state,source){
+  requireThat(exact(state,['format','repository','expected','objectChangesSha256','stagedConfigSha256','operatorApproval','id','provider','tasks','runs','events','version'])
+    &&state.format==='projects-git-hosted-delivery/v1'&&digest(state.objectChangesSha256)&&digest(state.stagedConfigSha256)
+    &&Number.isSafeInteger(state.version)&&state.version>0&&Array.isArray(state.events));
+  const selected=state.runs.find(run=>run.id===source.run.id),preview=selected?.publicationPreview,record=selected?.publication,approval=state.operatorApproval;
+  if(preview!==undefined)requireThat(validPreview(preview,state,source));
+  if(approval!==null)requireThat(exact(approval,['sha256','preview','at'])&&validPreview(approval.preview,state,source)
+    &&approval.sha256===approvalDigest(approval.preview)&&Number.isFinite(Date.parse(approval.at)));
+  if(record!==undefined)requireThat(validPublication(record,state,source,approval));
+  if(preview!==undefined&&approval!==null)requireThat(equal(preview,approval.preview));
+  if(record===undefined&&preview===undefined)requireThat(approval===null);
+}
+function transition(before,next,runId){const old=before.runs.find(run=>run.id===runId),fresh=next.runs.find(run=>run.id===runId);
+  if(before.operatorApproval===null&&next.operatorApproval!==null)return 'approve-preview';
+  if(old.publicationPreview?.id!==fresh.publicationPreview?.id)return 'preview';
+  if(!old.publication&&fresh.publication)return 'reserve-publication';
+  if(!old.publication?.pushStartedAt&&fresh.publication?.pushStartedAt)return 'reserve-push';
+  if(!old.publication?.prStartedAt&&fresh.publication?.prStartedAt)return 'reserve-pr';
+  return 'observe-publication';}
 
 class HostedPublication extends GitHubPublication {
   constructor(ports,source){super(ports);this.hostedSource=source;}
@@ -130,57 +203,57 @@ class HostedPublication extends GitHubPublication {
       &&equal(selected.task,this.hostedSource.task));
     const {publication,publicationPreview,...run}=selected.run;
     requireThat(equal(run,this.hostedSource.run));
-    return {...this.hostedSource.binding,objectChangesSha256:state.objectChangesSha256};
+    return {...this.hostedSource.binding,objectChangesSha256:state.objectChangesSha256,stagedConfigSha256:state.stagedConfigSha256};
   }
-  publicationContent(task,run){return {title:'Projects Git candidate '+run.id,
-    body:`Historical hosted merged candidate: ${run.headCommit}\nBase: ${run.baseCommit}\nExport SHA-256: ${this.hostedSource.binding.handoffSha256}\nRequirements SHA-256: ${requirementsDigest(task)}\n\nDelivery requires separate operator-local approval. The export checksum is not authenticated or current hosted authority. GitHub review, merge and deployment remain separate.`};}
+  publicationContent(){return publicationContent(this.hostedSource);}
 }
 
 /** Open only the operator-local package. No hosted request, imported execution or automatic publication. */
-export async function openHostedDelivery(target,provider,{now}={}) {
-  await directory(target);const file=path.join(target,'delivery.json');let state;
-  try{state=JSON.parse(await ordinary(file,MAX_HANDOFF_BYTES*2));}catch{requireThat(false);}
-  requireThat(exact(state,['format','repository','expected','objectChangesSha256','operatorApproval','id','provider','tasks','runs','events','version'])
-    &&state.format==='projects-git-hosted-delivery/v1'&&digest(state.objectChangesSha256)&&state.repository===githubRepository(provider.repository)
-    &&Number.isSafeInteger(state.version)&&state.version>0&&Array.isArray(state.events)
-    &&(state.operatorApproval===null||exact(state.operatorApproval,['sha256','previewId','at'])&&digest(state.operatorApproval.sha256)
-      &&uuid(state.operatorApproval.previewId)&&Number.isFinite(Date.parse(state.operatorApproval.at))));
+export async function openHostedDelivery(target,provider,{now,storageFault}={}) {
+  await directory(target);const durable=openDeliveryState(target,{storageFault,guard:journalGuard,validateTransition:validJournalTransition});let state=durable.read();
+  requireThat(state.repository===githubRepository(provider.repository));
   const source=await hostedDeliverySource(await ordinary(path.join(target,'handoff.json'),MAX_HANDOFF_BYTES),state.expected);
   source.expected=state.expected;
+  validateDynamicState(state,source);
   requireThat(state.id===source.state.id&&state.tasks.length===1&&equal(state.tasks[0],source.task)&&state.runs.length===source.state.runs.length);
   for(const original of source.state.runs){const retained=state.runs.find(run=>run.id===original.id);requireThat(retained);const {publication,publicationPreview,...run}=retained;requireThat(equal(run,original));}
-  const staged=path.join(target,'objects.git');
+  const staged=path.join(target,'objects.git');await trustedStaging(staged,state.stagedConfigSha256);
   const sourcePath=async()=>{
+    await trustedStaging(staged,state.stagedConfigSha256);
     requireThat(await objectBinding(staged,source)===state.objectChangesSha256);
     const git=readOnlyGit(staged);requireThat((await git(['rev-parse','refs/candidates/'+source.run.id])).trim()===source.run.headCommit);
     const roots=[source.run.baseCommit,source.run.headCommit];
     await captureGitObjects(roots,Object.fromEntries(roots.map(oid=>[oid,staged])),budget());
     return staged;
   };
-  const publisher=new HostedPublication({provider,read:()=>state,save:change=>{const next=structuredClone(state);change(next);next.version++;persist(file,next);state=next;},
+  const publisher=new HostedPublication({provider,read:()=>state,save:change=>{const next=structuredClone(state);change(next);
+    if(!next.runs.find(run=>run.id===source.run.id).publication&&next.runs.find(run=>run.id===source.run.id).publicationPreview?.id!==state.runs.find(run=>run.id===source.run.id).publicationPreview?.id)next.operatorApproval=null;
+    validateDynamicState(next,source);const kind=transition(state,next,source.run.id);try{state=durable.save(next,kind);}catch(error){state=durable.read();throw error;}},
     source:sourcePath,...(now?{now}:{})},source);
   publisher.binding(source.run.id);
-  const approve=(approvalSha256,binding,previewId)=>{
-    requireThat(digest(approvalSha256)&&approvalSha256===hash(binding));
-    const approval={sha256:approvalSha256,previewId,at:new Date().toISOString()};
-    if(state.operatorApproval)requireThat(state.operatorApproval.sha256===approvalSha256&&state.operatorApproval.previewId===previewId);
-    else {const next=structuredClone(state);next.operatorApproval=approval;persist(file,next);state=next;}
+  const approve=(approvalSha256,preview)=>{
+    requireThat(validPreview(preview,state,source)&&digest(approvalSha256)&&approvalSha256===approvalDigest(preview));
+    const approval={sha256:approvalSha256,preview:structuredClone(preview),at:new Date().toISOString()};
+    if(state.operatorApproval)requireThat(equal(state.operatorApproval,approval)||state.operatorApproval.sha256===approvalSha256&&equal(state.operatorApproval.preview,preview));
+    else {const next=structuredClone(state);next.operatorApproval=approval;validateDynamicState(next,source);state=durable.save(next,'approve-preview');}
   };
   return {
-    async preview(){const preview=await publisher.preview(source.run.id);return {preview,approvalSha256:hash(preview.binding)};},
+    async preview(){const preview=await publisher.preview(source.run.id);return {preview,approvalSha256:approvalDigest(preview)};},
     async publish({previewId,requestId,approvalSha256}){
       const run=publisher.selected(source.run.id).run,record=run.publication;
       requireThat(uuid(previewId)&&uuid(requestId)&&(record?record.previewId===previewId:run.publicationPreview?.id===previewId
         &&Date.parse(run.publicationPreview.expiresAt)>(now?now():Date.now())));
-      approve(approvalSha256,record?.binding??run.publicationPreview.binding,previewId);
+      if(record)requireThat(state.operatorApproval?.preview.id===previewId&&state.operatorApproval.sha256===approvalSha256);
+      else approve(approvalSha256,run.publicationPreview);
       return publisher.publish(source.run.id,{previewId,requestId});
     },
     async refresh(id){return publisher.refresh(source.run.id,id);},
-    async resume(id,approvalSha256){const record=publisher.record(source.run.id,id);approve(approvalSha256,record.binding,record.previewId);return publisher.continue(source.run.id,id);},
+    async resume(id,approvalSha256){const record=publisher.record(source.run.id,id);requireThat(state.operatorApproval?.preview.id===record.previewId&&state.operatorApproval.sha256===approvalSha256);return publisher.continue(source.run.id,id);},
     receipt(){const run=publisher.selected(source.run.id).run,record=run.publication;
       const publication=record?Object.fromEntries(['id','previewId','binding','createdAt','lastCheckedAt','status','stage','pushStartedAt','prStartedAt','branchHead','pr','error','observations'].filter(key=>record[key]!==undefined).map(key=>[key,record[key]])):null;
+      const operatorApproval=state.operatorApproval?{sha256:state.operatorApproval.sha256,previewId:state.operatorApproval.preview.id,at:state.operatorApproval.at}:null;
       return {format:state.format,source:publisher.binding(source.run.id),repository:state.repository,
-        operatorApproval:state.operatorApproval,historical:true,authenticatedHostedAuthority:false,publication};}
+        operatorApproval,localState:{journal:'verified',projectionRecovered:durable.projectionRecovered},historical:true,authenticatedHostedAuthority:false,publication};}
   };
 }
 
