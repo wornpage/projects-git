@@ -27,6 +27,7 @@ const hostedCommands = {
   fail: ['connection', 'run', 'message', 'request-id'],
   checkout: ['connection', 'run', 'directory', 'request-id'],
   push: ['connection', 'run', 'directory', 'head', 'request-id'], receipt: ['connection', 'request-id'],
+  locks: ['connection'], 'release-lock': ['connection', 'request-id', 'lock-id'],
 };
 const hostedOptional = {projects:['offset','revision'],checkout:['assignment','start-request-id'],submit:['directory']};
 let hostedClient;
@@ -43,6 +44,7 @@ function help(command) {
   if (!command || command==='checkout') console.log('\nHosted checkout accepts optional --assignment <absolute-private-response.json> for owner-issued resolution work. It verifies the live assignment before retaining its credential and cloning; it does not create or renew an assignment.');
   if (!command || command==='checkout') console.log('\nAdd --start-request-id <distinct-UUID> to explicitly start the assignment after checkout succeeds. Each stage retains its own receipt. If start is unconfirmed, inspect those receipts and use the separate start command with that UUID; do not repeat checkout.');
   if (!command || command==='submit') console.log('\nHosted submit accepts optional --directory <absolute-assigned-checkout> to push and confirm the exact head before submission. The Git step has a retained child request ID. No failed or uncertain operation is automatically retried.');
+  if (!command || ['locks','release-lock','receipt'].includes(command)) console.log('\nlocks and receipt inspect only local state. release-lock requires the original request UUID and exact lock UUID, and refuses a running or unknown process. It releases only matching local locks; remote outcomes and earlier uncertain receipts remain unresolved. Inspect status before any explicit retry.');
   if (!command || ['connect', 'queue', 'claim', 'assign'].includes(command)) console.log('\n--request-id is an explicit UUID. Reuse it only for the same action, label and input.\nTask stack --brief: {"tasks":[{"title":"Change","purpose":"Result","criteria":["Check"],"owner":"Coordinator"}]}');
   if (!command || command === 'revise') console.log('\nRevision --brief: {"purpose":"Updated result","criteria":["Current criterion"],"reason":"Why it changed"}\n--expected-revision is the current task revision from show. Old reports and decisions remain recorded.');
   if (!command || command === 'admission') console.log('\n--state must be on or off; --expected-version is policyVersion from projects or status.\nOff blocks new assignments and starts. Existing runs continue under their chat host. Queueing, existing submissions and checks remain available.');
@@ -92,7 +94,7 @@ try {
     const {HostedAgentClient,loadHostedConnection} = await import('../src/local/hosted-agent-client.mjs');
     const connection = await loadHostedConnection(options.connection);
     hostedClient = new HostedAgentClient(connection);
-    const output = await hostedClient.execute(command, { ...options, requestId: options['request-id'], startRequestId: options['start-request-id'] });
+    const output = await hostedClient.execute(command, { ...options, requestId: options['request-id'], startRequestId: options['start-request-id'], lockId: options['lock-id'] });
     console.log(hostedClient.serialize(output));
   }
   else {

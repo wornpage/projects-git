@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,readdir,stat,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {execFile} from 'node:child_process';
+import {execFile,spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {promisify} from 'node:util';
 import {pathToFileURL} from 'node:url';
 import {HostedAgentClient,loadHostedConnection} from '../src/local/hosted-agent-client.mjs';
@@ -253,4 +254,63 @@ test('real CLI process uses hosted mode and never prints its issued Git credenti
  assert.equal(data.candidate.status,'assigned');
  for(const secret of [configuration.clientSecret,f.credentials.token])assert.ok(!result.stdout.includes(secret)&&!result.stderr.includes(secret));
  assert.ok(data.browserUrl.startsWith(configuration.origin));
+});
+
+test('two clients sharing a connection refuse overlap before a second provider request',async t=>{
+ const f=await fixture(t),entered=Promise.withResolvers(),release=Promise.withResolvers(),key=crypto.randomUUID();
+ const first=new HostedAgentClient(f.connection,{fetchImpl:async(url,options)=>{
+   if(options.method==='POST'){entered.resolve();await release.promise;}
+   return f.fetchImpl(url,options);
+ }});
+ const operation=first.mutate('start',run,{},key);await entered.promise;
+ try {
+   const before=f.requests.length;
+   await assert.rejects(f.client.mutate('fail',run,{message:'Other attempt'},crypto.randomUUID()),/Another local operation/);
+   assert.equal(f.requests.length,before);
+   const receipt=await f.client.receipt(key);
+   assert.equal(receipt.recovery.unconfirmedAttempts,1);assert.equal(receipt.recovery.localLocks.length,2);
+   assert.equal(f.requests.length,before);
+ } finally {release.resolve();await operation;}
+ assert.equal(f.requests.filter(item=>item.method==='POST').length,1);
+});
+
+test('a terminated CLI operation retains uncertainty; local release and explicit reconciliation never repeat its effect', {timeout:15000},async t=>{
+ const f=await fixture(t),key=crypto.randomUUID(),moduleUrl=new URL('../src/local/hosted-agent-client.mjs',import.meta.url).href;
+ const source=`import {HostedAgentClient,loadHostedConnection} from ${JSON.stringify(moduleUrl)};
+   const c=JSON.parse(process.argv[1]),connection=await loadHostedConnection(c.file);
+   const client=new HostedAgentClient(connection,{fetchImpl:async(url,options)=>{
+     if(options.method==='GET')return Response.json(c.state);
+     process.send({effectStarted:true});setInterval(()=>{},1000);await new Promise(()=>{});
+   }});await client.mutate('start',c.run,{},c.key);`;
+ const child=spawn(process.execPath,['--input-type=module','-e',source,JSON.stringify({file:f.file,state:f.state,run,key})],{stdio:['ignore','ignore','pipe','ipc']});
+ let stderr='';child.stderr.on('data',chunk=>stderr+=chunk);
+ const exited=once(child,'exit'),stop=async()=>{if(child.exitCode===null&&child.signalCode===null)child.kill();await exited;};t.after(stop);
+ await Promise.race([once(child,'message'),exited.then(()=>{throw Error('Interrupted fixture exited early: '+stderr);})]);
+ const live=await f.client.execute('locks'),lockId=live.locks[0].lockId;
+ await assert.rejects(f.client.releaseLock(key,lockId),/owner is running/);
+ await stop();const before=await f.client.receipt(key);
+ assert.equal(before.recovery.totalAttempts,1);assert.equal(before.recovery.unconfirmedAttempts,1);assert.equal(before.recovery.recordedResults,0);
+ const originalAttempt=await readFile(path.join(f.connection.stateDirectory,'attempts',(await readdir(path.join(f.connection.stateDirectory,'attempts')))[0]),'utf8');
+ const script=path.resolve('scripts/repository-work.mjs'),loader=path.join(f.root,'offline.mjs');
+ await writeFile(loader,"globalThis.fetch=()=>{throw Error('Network forbidden in local recovery');};");
+ const result=await execute(process.execPath,['--import',pathToFileURL(loader).href,script,'release-lock','--connection',f.file,'--request-id',key,'--lock-id',lockId],{windowsHide:true});
+ assert.equal(JSON.parse(result.stdout).releasedLocalLocks,2);assert.equal(f.requests.length,0);
+ const receiptBeforeRetry=await f.client.receipt(key);assert.equal(receiptBeforeRetry.recovery.unconfirmedAttempts,1);
+ f.assignment.status='running';const replay=await f.client.mutate('start',run,{},key);
+ assert.equal(replay.remoteMutation,false);assert.equal(f.requests.filter(item=>item.method==='POST').length,0);
+ const after=await f.client.receipt(key);
+ assert.equal(after.recovery.recordedResults,1);assert.equal(after.recovery.unconfirmedAttempts,1);assert.equal(after.recovery.totalAttempts,2);
+ assert.equal(after.recovery.remoteState,'not-read');assert.equal(after.recovery.historicalResultsOnly,true);
+ assert.ok((await Promise.all((await readdir(path.join(f.connection.stateDirectory,'attempts'))).map(name=>readFile(path.join(f.connection.stateDirectory,'attempts',name),'utf8')))).includes(originalAttempt));
+ for(const secret of [configuration.clientSecret,f.credentials.token])assert.ok(!f.client.serialize(after).includes(secret));
+});
+
+test('receipt refuses mixed or malformed attempt evidence without fetching or changing it',async t=>{
+ const f=await fixture(t);await f.client.mutate('start',run,{},requestId);const before=f.requests.length;
+ const filename=path.join(f.connection.stateDirectory,'attempts',(await readdir(path.join(f.connection.stateDirectory,'attempts')))[0]),record=JSON.parse(await readFile(filename));
+ for(const candidate of [null,{...record,scope:{...record.scope,workspaceId:'foreign'}},{...record,startedAt:123},{...record,result:[]}]) {
+   const bytes=JSON.stringify(candidate);await writeFile(filename,bytes);
+   await assert.rejects(f.client.receipt(requestId),/history does not match/);
+   assert.equal(await readFile(filename,'utf8'),bytes);assert.equal(f.requests.length,before);
+ }
 });

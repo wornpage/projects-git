@@ -68,6 +68,8 @@ Every name has the `projects_git_` prefix.
 | `submit` | Submit an exact commit for independent checks and review; optional `directory` performs the guarded push first and retains its child receipt |
 | `fail` | Retain an assignment's failure and release its execution reservation |
 | `receipt` | Read this connection's retained operation attempts without network I/O |
+| `locks` | Inspect local operation ownership and process state without network I/O |
+| `release_lock` | Explicitly release an exact stopped owner's local locks; requires its original request UUID and lock UUID; no provider action |
 
 The coding host edits and commits using its own tools between `start` and `push`.
 The connection fixes the origin, workspace and builder identity at startup; tools
@@ -87,12 +89,27 @@ attempt receipts; no mutation is retried automatically. Read `receipt` and curre
 status before deciding what to do next. MCP and CLI use the same private state
 directory, so either can inspect an operation begun by the other.
 
+The same connection's request and run locks coordinate CLI and MCP processes. A
+push also holds its physical checkout lock across connection profiles. Different
+runs may proceed across clients, except while a claim is retaining its issued-once
+credential. These cooperative local locks do not replace hosted authorization or
+protect against ordinary Git commands, old clients or other machines.
+
 Only one mutation runs at a time in each MCP process. A competing mutation returns
 an error before starting; reads remain available. Cancellation or a disconnected
 host does not prove an admitted API/Git operation stopped. An admitted operation
 keeps its reservation in the MCP process until it finishes; after a process exit,
 inspect the durable receipts and remote state. Workspace-wide execution limits
 remain enforced by the hosted controller across all builders.
+
+An interrupted process can leave local locks. Read `locks` and `receipt`; their
+counts describe local history, not current remote success. Unknown attempts stay
+visible even after a later reconciliation succeeds. Only an explicit `release_lock`
+with the original request UUID and exact lock UUID may release a confirmed stopped
+owner. Active, unknown or reused process IDs block release. It does not retry work,
+restore credentials or change remote state. Incomplete or altered lock metadata can
+require manual inspection. See [CLI recovery](hosted-agent-client.md#overlapping-commands-and-stopped-processes)
+for the shared recovery sequence and limitations.
 
 Git credentials retain the client's existing 15-minute lifetime and issued-once
 behavior. MCP never returns them. A lost claim response cannot recreate a missing
@@ -108,7 +125,7 @@ bounded to 128 KiB. Diagnostics go to stderr; stdout carries only MCP messages.
 ## Validation
 
 ```sh
-node --test tests/hosted-mcp.test.mjs tests/hosted-agent-client.test.mjs tests/repository-cli.test.mjs tests/git-transport.test.mjs
+node --test tests/hosted-mcp.test.mjs tests/hosted-agent-client.test.mjs tests/hosted-client-locks.test.mjs tests/repository-cli.test.mjs tests/git-transport.test.mjs
 ```
 
 These tests use the real SDK and stdio process, controlled API fixtures and native

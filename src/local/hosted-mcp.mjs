@@ -31,6 +31,10 @@ const tools = [
     description: 'Record failure of this builder\'s own assignment and release its execution reservation. Confirmed closure retires its local Git credential.' },
   { name: 'receipt', command: 'receipt', readOnly: true, properties: { requestId },
     description: 'Read private attempts for an operation in this connection. Makes no network request and never retries work or recovers issued-once credentials.' },
+  { name: 'locks', command: 'locks', readOnly: true, properties: {},
+    description: 'Inspect local request/run locks and process state for this connection. Makes no network request and never takes over an abandoned lock.' },
+  { name: 'release_lock', command: 'release-lock', properties: {requestId, lockId: {...uuid, description: 'Exact local lock UUID from locks or receipt; never infer it.'}},
+    description: 'Explicitly release matching local locks only after the owning process is confirmed stopped. This does not settle remote outcomes or retry provider work. Inspect current status and the original receipt before continuing.' },
 ];
 
 /** MCP owns protocol handling; HostedAgentClient owns every workspace/Git action. */
@@ -45,7 +49,7 @@ export function createHostedMcpServer(client) {
       description: tool.description,
       inputSchema: fromJsonSchema({ type: 'object', properties: tool.properties, required: tool.required??Object.keys(tool.properties), additionalProperties: false }),
       annotations: { readOnlyHint: tool.readOnly === true, destructiveHint: !tool.readOnly,
-        idempotentHint: tool.readOnly === true, openWorldHint: tool.command !== 'receipt' },
+        idempotentHint: tool.readOnly === true, openWorldHint: !['receipt','locks','release-lock'].includes(tool.command) },
     }, async (args, context) => {
       if (context.mcpReq.signal.aborted) return errorResult('Call cancelled before admission. No builder operation was started.');
       if (!tool.readOnly && mutating) return errorResult('Another builder operation is still running in this MCP process. No operation was started for this call. Inspect status and receipts before an explicit retry with the same request ID and inputs.');
