@@ -22,7 +22,15 @@ export function createApiClient({captureSession = () => () => true, onAuthRequir
     }
     let data;
     try { data = await response.json(); }
-    catch { const error=new Error("The server returned an unreadable response. Refresh status to confirm the outcome."); error.uncertain=body!==undefined; throw error; }
+    catch {
+      const error=new Error(response.status===403 ? 'Access to this workspace was denied. Check your signed-in identity.'
+        : 'The server returned an unreadable response. Refresh status to confirm the outcome.');
+      error.status=response.status;error.uncertain=body!==undefined;
+      // Access may deny at the edge with HTML or an empty body. Project-level
+      // application refusals use structured JSON and keep their normal handling.
+      if(response.status===403){error.code='FORBIDDEN';if(isCurrent())onAccessLost?.(error);}
+      throw error;
+    }
     if (!response.ok) {
       const message = typeof data.error === "string" ? data.error : data.error?.message || data.message || `Request failed (${response.status}).`;
       const error = new Error(String(message));

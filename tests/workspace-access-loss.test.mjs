@@ -56,11 +56,22 @@ test('navigation cleanup removes private commands and ignores a delayed catalog 
   assert.equal($('#command-query').value,'');assert.equal($('#command-results').textContent,'');assert.equal($('#command-support').textContent,'');assert.equal($('#command-count').textContent,'');
 });
 
-for(const response of [()=>Response.json({code:'TRIAL_EXPIRED'},{status:410}),()=>new Response(null,{status:401})])
+for(const response of [()=>Response.json({code:'TRIAL_EXPIRED'},{status:410}),()=>new Response(null,{status:401}),
+  ()=>new Response('<html>Access denied</html>',{status:403,headers:{'Content-Type':'text/html'}}),()=>new Response(null,{status:403})])
 test('an old HTTP denial cannot clear a newly signed-in workspace',async()=>{
   const pending=defer();let id='a',cleared=0;
   const api=createApiClient({captureSession:()=>{const started=id;return()=>id===started;},onAccessLost:()=>cleared++,fetchRequest:()=>pending.promise});
   const old=api('/api/workspace');id='b';pending.resolve(response());await assert.rejects(old);assert.equal(cleared,0);
+});
+
+for(const response of [()=>new Response('<html>Access denied</html>',{status:403,headers:{'Content-Type':'text/html'}}),()=>new Response(null,{status:403})])
+test('a current non-JSON Access denial clears the rendered previous workspace',async()=>{
+  let workspace=snapshot('a'),rendered='Private A project',connection;
+  const api=createApiClient({captureSession:()=>connection.captureSession(),onAccessLost:error=>connection.invalidate(error),fetchRequest:async()=>response()});
+  connection=createWorkspaceConnection({api,getWorkspace:()=>workspace,setWorkspace:value=>{workspace=value;},activity:()=>({}),
+    onChange(){},onSnapshot(){},onError:()=>{rendered='Access required';},clearTimer(){},setTimer(){throw Error('No polling after denial');}});
+  const current=connection.captureSession();await assert.rejects(api('/api/workspace'),error=>error.status===403&&error.code==='FORBIDDEN');
+  assert.equal(workspace,null);assert.equal(current(),false);assert.equal(rendered,'Access required');assert.equal(connection.state.lastSyncedAt,null);
 });
 
 for(const reply of [()=>Response.json({code:'PROJECT_FORBIDDEN'},{status:403}),()=>Response.json({code:'SERVER_ERROR'},{status:503}),()=>{throw Error('offline');}])
