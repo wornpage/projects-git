@@ -57,8 +57,8 @@ export function createProjectsView({getContext, disclosure, collections, selectP
         el('button',{id:'projects-refresh','data-focus-fallback':'projects-page-status',class:'button button-small',disabled:busy,onclick:()=>changeProjectPage(0,true)},'Refresh projects'))) : null;
     return el('div',{class:'projects-home'},
       workspace.trial?.workflowReady===false ? panel('Trial workspace preview',el('div',{class:'panel-body'},
-        el('p',{},'Your reservation is saved. This separate workspace is read-only while repository setup is prepared.'),
-        el('p',{},'Repository creation, agents, checks and exports are not available yet.'),
+        el('p',{},'Your reservation is saved. This separate workspace is read-only. Any sample repository shown is supplied starter code.'),
+        el('p',{},'General repository creation, agents, checks and exports are not available yet.'),
         el('p',{class:'small muted'},'Trial access expires '+dateTime(workspace.trial.expiresAt)+'.'),
         el('a',{class:'button button-small',href:'/trial/signup'},'Manage trial reservation'))) : null,
       workspace.personalWorkspace && !projects.length ? panel('Your isolated workspace', el('div',{class:'panel-body'},

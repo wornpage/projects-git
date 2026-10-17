@@ -17,6 +17,10 @@ test('local workerd admission RPC and tenant DOs enforce isolation, replay and c
       const response=await request('/api/workspace',token);assert.equal(response.status,200,await response.clone().text());
       const data=await response.json();assert.equal(data.id,grant.workspaceId);assert.equal(data.trial.workflowReady,false);
       assert.equal(data.authentication.permissions.manage,false);
+      for(const body of [undefined,{}]){
+        const sample=await request('/api/trial/sample',token,body);assert.equal(sample.status,503);
+        assert.equal((await sample.json()).code,'TRIAL_SAMPLE_UNAVAILABLE');
+      }
     }
     assert.equal((await request('/api/workspace',a,undefined,{'X-Workspace-Id':gb.workspaceId})).status,403);
     assert.equal((await request('/api/model-runs',a,{})).status,409);

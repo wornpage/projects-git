@@ -1,4 +1,4 @@
-// Admission state and HTTP only. The view never reads credentials or selects a
+// Trial admission, sample state and HTTP. The view never reads credentials or selects a
 // workspace. Identity preconditions prevent mutations from a stale signed-in tab.
 export class TrialClientError extends Error {constructor(code){super(code);this.code=code;}}
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',');
@@ -23,8 +23,29 @@ function statusValue(value,identity) {
     ||value.capabilities.workspaceReads!==(value.status==='admitted'))throw new TrialClientError('INVALID_RESPONSE');
   return value;
 }
+function sampleValue(value,trial,mutation=false) {
+  const keys=['workspaceId','template','phase','retryable','repository','errorCode','workflowReady',...(mutation?['replayed']:[])];
+  if(!exact(value,keys))throw new TrialClientError('INVALID_RESPONSE');
+  if(value.workspaceId!==trial.workspaceId)throw new TrialClientError('TRIAL_IDENTITY_CHANGED');
+  const repo=value.repository,uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+  if(value.template!=='checkout-v1'||!['not-started','preparing','failed','ready'].includes(value.phase)||typeof value.retryable!=='boolean'
+    ||value.workflowReady!==false||mutation&&(typeof value.replayed!=='boolean'||value.phase!=='ready')
+    ||value.errorCode!==null&&(typeof value.errorCode!=='string'||!/^[A-Z_]{1,64}$/.test(value.errorCode)))throw new TrialClientError('INVALID_RESPONSE');
+  if(value.phase==='not-started') {
+    if(repo!==null||value.errorCode!==null||value.retryable!==true)throw new TrialClientError('INVALID_RESPONSE');
+  }else{
+    if(!exact(repo,['name','repositoryId','projectId','baseCommit'])||repo.name!=='sample-'+trial.workspaceId.slice(6)||!uuid(repo.projectId)
+      ||repo.repositoryId!==null&&(typeof repo.repositoryId!=='string'||!repo.repositoryId||repo.repositoryId.length>200)
+      ||repo.baseCommit!==null&&(typeof repo.baseCommit!=='string'||!/^[a-f0-9]{40}$/.test(repo.baseCommit)))throw new TrialClientError('INVALID_RESPONSE');
+    if(value.phase==='ready'&&(!repo.repositoryId||!repo.baseCommit||value.retryable||value.errorCode!==null)
+      ||value.phase==='preparing'&&(value.errorCode!==null||!value.retryable)
+      ||value.phase==='failed'&&value.errorCode===null)throw new TrialClientError('INVALID_RESPONSE');
+  }
+  return value;
+}
 async function readReply(response) {
-  if(response.status===401||response.type==='opaqueredirect')throw new TrialClientError('SESSION_REQUIRED');
+  if(response.status===401||response.type==='opaqueredirect'||response.status>=300&&response.status<400
+    ||response.status===403&&!response.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))throw new TrialClientError('SESSION_REQUIRED');
   if(!response.headers.get('Content-Type')?.toLowerCase().startsWith('application/json')||!response.body)throw new TrialClientError('INVALID_RESPONSE');
   const reader=response.body.getReader(),decoder=new TextDecoder('utf-8',{fatal:true});let length=0,text='';
   try {for(;;){const part=await reader.read();if(part.done)break;length+=part.value.byteLength;if(length>32768){await reader.cancel();throw new TrialClientError('INVALID_RESPONSE');}text+=decoder.decode(part.value,{stream:true});}text+=decoder.decode();}
@@ -32,7 +53,8 @@ async function readReply(response) {
   let value;try{value=JSON.parse(text);}catch{throw new TrialClientError('INVALID_RESPONSE');}
   if(!response.ok){
     const code=typeof value.code==='string'&&/^[A-Z_]{1,64}$/.test(value.code)?value.code:'UNAVAILABLE';
-    const expected={TRIAL_NOT_ADMITTED:404,TRIAL_CAPACITY_FULL:429,TRIAL_IDENTITY_CHANGED:409,HUMAN_IDENTITY_REQUIRED:403};
+    const expected={TRIAL_NOT_ADMITTED:404,TRIAL_CAPACITY_FULL:429,TRIAL_IDENTITY_CHANGED:409,HUMAN_IDENTITY_REQUIRED:403,
+      TRIAL_SAMPLE_UNAVAILABLE:503,TRIAL_SAMPLE_FORBIDDEN:403,TRIAL_CLOSED:403,TRIAL_EXPIRED:403};
     if(expected[code]&&response.status!==expected[code])throw new TrialClientError('INVALID_RESPONSE');
     throw new TrialClientError(code);
   }
@@ -40,15 +62,15 @@ async function readReply(response) {
 }
 
 export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.randomUUID(),setTimer=setTimeout,clearTimer=clearTimeout,now=()=>performance.now()}={}) {
-  let state={phase:'checking',identity:null,trial:null,error:null},generation=0,abort=null,lastIdentity=null;
+  let state={phase:'checking',identity:null,trial:null,error:null,sample:null},generation=0,abort=null,lastIdentity=null;
   let keys={},expiryTimer=null,expiryDeadline=0;
   const cancelExpiry=()=>{if(expiryTimer!==null){clearTimer(expiryTimer);expiryTimer=null;}};
   const publish=value=>{
-    cancelExpiry();state=value;
+    cancelExpiry();state={sample:null,...value};
     // One server read at the observed expiry, not a polling loop or a local
     // assumption that the trial has expired. It never repeats a mutation.
     if(['admitted','confirm-close'].includes(value.phase))expiryTimer=setTimer(()=>{void refresh();},Math.max(0,expiryDeadline-now())+100);
-    notify(structuredClone(value));
+    notify(structuredClone(state));
   };
   const begin=()=>{generation++;abort?.abort();abort=new AbortController();return {generation,signal:abort.signal};};
   const current=operation=>operation.generation===generation&&!operation.signal.aborted;
@@ -57,12 +79,29 @@ export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.
   const failed=(error,operation)=>{
     if(!current(operation))return;
     const code=error instanceof TrialClientError?error.code:'NETWORK_UNCERTAIN';
-    if(['SESSION_REQUIRED','UNAUTHORIZED','TRIAL_IDENTITY_CHANGED','TRIAL_IDENTITY_FORBIDDEN','WORKSPACE_FORBIDDEN'].includes(code)) {
+    if(['SESSION_REQUIRED','UNAUTHORIZED','FORBIDDEN','TRIAL_IDENTITY_CHANGED','TRIAL_IDENTITY_FORBIDDEN','TRIAL_SAMPLE_FORBIDDEN','WORKSPACE_FORBIDDEN'].includes(code)) {
       publish({phase:'signedOut',identity:null,trial:null,error:code});return;
     }
     if(code==='HUMAN_IDENTITY_REQUIRED'){publish({phase:'blocked',identity:null,trial:null,error:code});return;}
+    if(['TRIAL_CLOSED','TRIAL_EXPIRED'].includes(code)){publish({phase:code==='TRIAL_CLOSED'?'closed':'expired',identity:null,trial:null,error:null});return;}
     publish({phase:code==='TRIAL_CAPACITY_FULL'?'capacity':'failed',identity:null,trial:null,error:code});
   };
+  const sampleFailed=(error,operation,identity,trial)=>{
+    if(!current(operation))return;
+    const code=error instanceof TrialClientError?error.code:'NETWORK_UNCERTAIN';
+    if(['SESSION_REQUIRED','UNAUTHORIZED','FORBIDDEN','HUMAN_IDENTITY_REQUIRED','TRIAL_IDENTITY_CHANGED','TRIAL_IDENTITY_FORBIDDEN','TRIAL_SAMPLE_FORBIDDEN',
+      'WORKSPACE_FORBIDDEN','TRIAL_NOT_ADMITTED','TRIAL_CLOSED','TRIAL_EXPIRED','TRIAL_POLICY_CHANGED','INVALID_RESPONSE'].includes(code)){
+      failed(error,operation);return;
+    }
+    publish({phase:'admitted',identity,trial,error:null,sample:{phase:code==='TRIAL_SAMPLE_UNAVAILABLE'?'unavailable':code==='TRIAL_SAMPLE_STATE_CHANGED'?'blocked':'unknown',result:null,error:code}});
+  };
+  async function readSample(operation,identity,trial) {
+    publish({phase:'admitted',identity,trial,error:null,sample:{phase:'checking',result:null,error:null}});
+    try {
+      const result=sampleValue(await request('/api/trial/sample',operation),trial);
+      if(current(operation))publish({phase:'admitted',identity,trial,error:null,sample:{phase:result.phase,result,error:null}});
+    }catch(error){sampleFailed(error,operation,identity,trial);}
+  }
   async function refresh() {
     const operation=begin();publish({phase:'checking',identity:null,trial:null,error:null});
     let identity;
@@ -72,7 +111,11 @@ export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.
       let trial;
       try {trial=statusValue(await request('/api/trial',operation),identity);}
       catch(error){if(error instanceof TrialClientError&&error.code==='TRIAL_NOT_ADMITTED'){if(current(operation))publish({phase:'eligible',identity,trial:null,error:null});return;}throw error;}
-      if(current(operation)){expiryDeadline=now()+trial.remainingMs;publish({phase:trial.status,identity,trial,error:null});}
+      if(current(operation)){
+        expiryDeadline=now()+trial.remainingMs;
+        if(trial.status==='admitted')await readSample(operation,identity,trial);
+        else publish({phase:trial.status,identity,trial,error:null});
+      }
     }catch(error){failed(error,operation);}
   }
   async function mutate(action) {
@@ -81,11 +124,25 @@ export function createTrialClient({fetcher=fetch,notify=()=>{},nonce=()=>crypto.
     const operation=begin();publish({phase:action==='reserve'?'reserving':'closing',identity,trial,error:null});
     try {
       const result=statusValue(await request(action==='reserve'?'/api/trial':'/api/trial/close',operation,identity,action),identity);
-      if(current(operation)){expiryDeadline=now()+result.remainingMs;publish({phase:result.status,identity,trial:result,error:null});}
+      if(current(operation)){
+        expiryDeadline=now()+result.remainingMs;
+        if(result.status==='admitted')await readSample(operation,identity,result);
+        else publish({phase:result.status,identity,trial:result,error:null});
+      }
     }catch(error){failed(error,operation);}
   }
-  return {refresh,reserve:()=>mutate('reserve'),close:()=>mutate('close'),
-    confirmClose(){if(state.phase==='admitted')publish({...state,phase:'confirm-close'});},
+  async function prepareSample() {
+    if(state.phase!=='admitted'||!['not-started','preparing','failed'].includes(state.sample?.phase)||!state.sample.result?.retryable)return;
+    if(now()>=expiryDeadline)return refresh();
+    const {identity,trial}=state;if(!identity||!trial)return;
+    const operation=begin();publish({phase:'admitted',identity,trial,error:null,sample:{phase:'saving',result:null,error:null}});
+    try {
+      const result=sampleValue(await request('/api/trial/sample',operation,identity,'sample'),trial,true);
+      if(current(operation))publish({phase:'admitted',identity,trial,error:null,sample:{phase:result.phase,result,error:null}});
+    }catch(error){sampleFailed(error,operation,identity,trial);}
+  }
+  return {refresh,prepareSample,reserve:()=>mutate('reserve'),close:()=>mutate('close'),
+    confirmClose(){if(state.phase==='admitted'&&!['checking','saving'].includes(state.sample?.phase))publish({...state,phase:'confirm-close'});},
     cancelClose(){if(state.phase==='confirm-close')publish({...state,phase:'admitted'});},
     suspend(){generation++;abort?.abort();publish({phase:'checking',identity:null,trial:null,error:null});},
     getState:()=>structuredClone(state)};

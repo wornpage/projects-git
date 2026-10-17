@@ -98,7 +98,7 @@ test('closure and exact-boundary expiry revoke coordinator and assets access wit
 
 test('dedicated deployment refuses pinned-owner or provider bindings and missing deterministic object names',async()=>{
   const c=fixture(),jwt=await token();
-  for(const changes of [{WORKSPACE_ID:'real-private'},{ACCESS_OWNER_SUB:'real-owner'},{ARTIFACTS:{}},{SEARCH_DB:{}},{LOADER:{}},{CURRENT_POLICY:{}},{MODEL_API_KEY:'private-key'}])
+  for(const changes of [{WORKSPACE_ID:'real-private'},{ACCESS_OWNER_SUB:'real-owner'},{ARTIFACTS:{}},{SEARCH_DB:{}},{LOADER:{}},{CURRENT_POLICY:{}},{MODEL_API_KEY:'private-key'},{ARTIFACTS_EVENTS_AUTOMATIC:'true'}])
     assert.equal((await handler(req('/api/trial',jwt,{}),{...c.env,...changes})).status,503);
   assert.equal(c.sql.storage.sql.exec('SELECT count(*) n FROM trial_admissions').one().n,0);
   for(const name of [undefined,'competition','trial-short']){

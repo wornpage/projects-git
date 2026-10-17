@@ -113,7 +113,7 @@ test('invalid source data is reported without replacing a usable workspace',asyn
 });
 
 for(const code of ['UNAUTHORIZED','FORBIDDEN','SESSION_EXPIRED','SESSION_REVOKED','WORKSPACE_FORBIDDEN','WORKSPACE_OWNER_MISMATCH',
-  'HUMAN_IDENTITY_REQUIRED','TRIAL_NOT_ADMITTED','TRIAL_CLOSED','TRIAL_EXPIRED','TRIAL_IDENTITY_FORBIDDEN','TRIAL_IDENTITY_CHANGED'])
+  'HUMAN_IDENTITY_REQUIRED','TRIAL_NOT_ADMITTED','TRIAL_CLOSED','TRIAL_EXPIRED','TRIAL_IDENTITY_FORBIDDEN','TRIAL_IDENTITY_CHANGED','TRIAL_SAMPLE_FORBIDDEN'])
 test(`${code} clears the previous workspace, invalidates its session and stops polling`,async()=>{
   const f=fixture();let read=f.connection.refresh();f.requests[0].resolve(snapshot('a'));await read;
   const isCurrent=f.connection.captureSession();read=f.connection.refresh();f.connection.refresh(true);

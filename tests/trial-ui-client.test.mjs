@@ -9,7 +9,9 @@ const json=value=>Response.json(value),error=(code,http=503)=>Response.json({cod
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 function fixture(replies){const calls=[],states=[],timers=[];let i=0,clock=0;const client=createTrialClient({nonce:()=>`test-request-key-${++i}`,notify:s=>states.push(s),now:()=>clock,
   setTimer:(callback,ms)=>{const timer={callback,ms,cancelled:false};timers.push(timer);return timer;},clearTimer:timer=>{timer.cancelled=true;},
-  fetcher:async(path,options)=>{calls.push({path,options});const reply=replies.shift();assert.ok(reply,'Unexpected HTTP request '+path);return typeof reply==='function'?reply(path,options):reply;}});return{client,calls,states,timers,advance:ms=>{clock+=ms;}};}
+  // These admission tests deliberately use the existing metadata-only config.
+  fetcher:async(path,options)=>{calls.push({path,options});if(path==='/api/trial/sample')return error('TRIAL_SAMPLE_UNAVAILABLE');
+    const reply=replies.shift();assert.ok(reply,'Unexpected HTTP request '+path);return typeof reply==='function'?reply(path,options):reply;}});return{client,calls,states,timers,advance:ms=>{clock+=ms;}};}
 const eligible=()=>[json(session),error('TRIAL_NOT_ADMITTED',404)];
 
 test('bootstrap verifies identity before offering reservation and uses actual server duration',async()=>{
@@ -48,7 +50,7 @@ test('capacity has its own state and never retries or assumes when a slot will o
 test('closure requires confirmation and keeps an uncertain result out of an open-workspace success state',async()=>{
   const closed=status({status:'closed',remainingMs:0,capabilities:{...status().capabilities,workspaceReads:false},cleanup:'not-implemented'});
   const c=fixture([json(session),json(status()),()=>{throw Error('lost close');},json(session),json(closed)]);
-  await c.client.refresh();await c.client.close();assert.equal(c.calls.length,2);
+  await c.client.refresh();await c.client.close();assert.equal(c.calls.length,3);
   c.client.confirmClose();assert.equal(c.client.getState().phase,'confirm-close');c.client.cancelClose();assert.equal(c.client.getState().phase,'admitted');
   c.client.confirmClose();await c.client.close();assert.equal(c.client.getState().phase,'failed');
   await c.client.refresh();assert.equal(c.client.getState().phase,'closed');await c.client.reserve();assert.equal(c.calls.filter(x=>x.options.method==='POST').length,1);
@@ -56,7 +58,7 @@ test('closure requires confirmation and keeps an uncertain result out of an open
 
 test('identity changes on mutation clear all previous user data and deny automatic continuation',async()=>{
   const c=fixture([...eligible(),error('TRIAL_IDENTITY_CHANGED',409)]);await c.client.refresh();await c.client.reserve();
-  assert.deepEqual(c.client.getState(),{phase:'signedOut',identity:null,trial:null,error:'TRIAL_IDENTITY_CHANGED'});
+  assert.deepEqual(c.client.getState(),{phase:'signedOut',identity:null,trial:null,error:'TRIAL_IDENTITY_CHANGED',sample:null});
   await c.client.reserve();assert.equal(c.calls.length,3);
 });
 
@@ -74,7 +76,7 @@ test('a late old bootstrap cannot overwrite a newer identity or continue its sta
 
 test('suspending clears identity and prevents a delayed reservation result from repainting it',async()=>{
   const pending=deferred(),c=fixture([...eligible(),()=>pending.promise]);await c.client.refresh();const save=c.client.reserve();
-  c.client.suspend();pending.resolve(json(status()));await save;assert.deepEqual(c.client.getState(),{phase:'checking',identity:null,trial:null,error:null});
+  c.client.suspend();pending.resolve(json(status()));await save;assert.deepEqual(c.client.getState(),{phase:'checking',identity:null,trial:null,error:null,sample:null});
 });
 
 test('closed and expired results offer neither renewal nor closure mutations',async()=>{
@@ -97,15 +99,15 @@ test('an authentication failure after identity lookup clears the earlier email',
 });
 
 test('expiry schedules one status read and suspension cancels it without an automatic mutation',async()=>{
-  const c=fixture([json(session),json(status())]);await c.client.refresh();assert.equal(c.timers.length,1);assert.equal(c.timers[0].ms,604800100);
-  c.client.suspend();assert.equal(c.timers[0].cancelled,true);assert.equal(c.calls.length,2);assert.equal(c.client.getState().identity,null);
+  const c=fixture([json(session),json(status())]);await c.client.refresh();assert.equal(c.timers.filter(timer=>!timer.cancelled).length,1);assert.equal(c.timers.at(-1).ms,604800100);
+  c.client.suspend();assert.ok(c.timers.every(timer=>timer.cancelled));assert.equal(c.calls.length,3);assert.equal(c.client.getState().identity,null);
 });
 
 test('opening or cancelling closure never extends the observed expiry deadline',async()=>{
-  const c=fixture([json(session),json(status())]);await c.client.refresh();c.advance(5000);c.client.confirmClose();
-  assert.equal(c.timers[0].cancelled,true);assert.equal(c.timers[1].ms,604795100);
-  c.advance(1000);c.client.cancelClose();assert.equal(c.timers[1].cancelled,true);assert.equal(c.timers[2].ms,604794100);
-  c.client.suspend();assert.equal(c.timers[2].cancelled,true);assert.equal(c.calls.length,2);
+  const c=fixture([json(session),json(status())]);await c.client.refresh();const initial=c.timers.at(-1);c.advance(5000);c.client.confirmClose();
+  assert.equal(initial.cancelled,true);assert.equal(c.timers.at(-1).ms,604795100);const confirming=c.timers.at(-1);
+  c.advance(1000);c.client.cancelClose();assert.equal(confirming.cancelled,true);assert.equal(c.timers.at(-1).ms,604794100);
+  c.client.suspend();assert.ok(c.timers.every(timer=>timer.cancelled));assert.equal(c.calls.length,3);
 });
 
 test('HTML, oversized JSON and unsupported capability claims fail without fabricated success',async()=>{
