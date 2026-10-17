@@ -69,8 +69,10 @@ The owner approved activation: email-PIN signup is enabled at
 browser login; the Worker requires a valid role/workspace-scoped trial token and
 rejects anonymous or invalid credentials. Real email login, trial reservation,
 sample repository/task creation, and connection issuance/revocation have been
-verified on the deployed pilot. Multi-user hosted isolation, checks, review, merge,
-export and scheduled cleanup remain separate from the completed local proof.
+verified on the deployed pilot. A manually implemented qualification candidate was
+claimed through the scoped agent API, published as a real Git commit, submitted,
+and passed all 16 hosted checkout checks. Multi-user hosted isolation, independent
+code review, merge, export and scheduled cleanup remain separate from that proof.
 
 ## Local validation
 

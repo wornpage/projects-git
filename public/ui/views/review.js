@@ -273,6 +273,7 @@ export function createReviewView({
 
   function baseUpdatePanel(task, run) {
     const {workspace, busy} = getContext();
+    if (workspace.capabilities?.baseUpdate === false) return null;
     if (workspace.authentication && !workspace.authentication.permissions.manage) return null;
     const project = workspace.projects?.[task.projectId];
     if (!project || task.mergedCommit || !run?.headCommit || run.status === 'superseded') return null;

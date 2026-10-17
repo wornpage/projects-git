@@ -112,7 +112,7 @@ export function candidateOutcome(workspace, run) {
   if (run.status === 'rejected') return { label: 'Rejected', action: 'Read rejection', section: 'review-decision', tone: 'rejected', next: 'Inspect another candidate. The rejection and its evidence are retained.' };
   if (run.status === 'failed') return { label: 'Execution failed', action: 'Inspect error', section: 'candidate-changes', tone: 'failed', next: 'Inspect the retained error. This run produced no reviewable result.' };
   if (['assigned', 'running'].includes(run.status)) return { action:'Follow agent work',section:'candidate-changes',label: run.origin === 'external-agent' ? run.status === 'running' ? 'Agent reported start' : run.checkoutState === 'preparing' ? 'Preparing code access' : workspace.provider === 'cloudflare-artifacts' ? 'Fork ready' : 'Checkout ready' : run.status === 'running' ? 'Running' : 'Waiting', tone: run.status, next: run.origin === 'external-agent' ? run.status === 'running' ? 'Continue directing this agent in its chat. Its submitted commit will appear here.' : 'Give the checkout and handoff instructions to your agent. Its submitted commit will appear here.' : 'The result will appear when execution finishes.' };
-  if (!run.evidence) return { label: 'Checks needed', action: 'Configure checks', section: 'verification', tone: 'awaiting_review', next: run.checksConfigured ? 'Run the preserved check definition for this new commit, then inspect the result.' : 'Configure and run independent checks for this submitted commit before accepting it.' };
+  if (!run.evidence) return { label: 'Checks needed', action: run.checksConfigured || task?.checkProfile === 'checkout' ? 'Run checks' : 'Configure checks', section: 'verification', tone: 'awaiting_review', next: task?.checkProfile === 'checkout' ? 'Run the supplied checkout checks for this commit, then inspect the result.' : run.checksConfigured ? 'Run the preserved check definition for this new commit, then inspect the result.' : 'Configure and run independent checks for this submitted commit before accepting it.' };
   if (!independentlyVerified(workspace, run)) return { label: 'Recheck needed', action: 'Review current checks', section: 'verification', tone: 'fail', next: 'Check this commit against the current requirements before accepting.' };
   if (run.evidence.passed !== run.evidence.total || run.evidence.total === 0 || run.evidence.exitCode !== 0) return { label: 'Checks failed', action: 'Inspect failed checks', section: 'verification', tone: 'fail', next: 'Inspect the failures or record a rejection. Acceptance is unavailable.' };
   const codeReview = independentReviewStatus(workspace, run);
@@ -151,7 +151,7 @@ export function taskOutcome(workspace, task) {
     const outcome = candidateOutcome(workspace, candidate);
     let action = 'Review changes';
     if (candidate.verificationPending) action = 'Follow checks';
-    else if (!candidate.evidence) action = candidate.checksConfigured ? 'Run checks' : 'Configure checks';
+    else if (!candidate.evidence) action = candidate.checksConfigured || task.checkProfile === 'checkout' ? 'Run checks' : 'Configure checks';
     else if (!independentlyVerified(workspace, candidate)) action = (candidate.evidence.taskRevision ?? 1) !== (task.revision ?? 1)
       && (task.origin === 'connected-git' || task.verificationProfile === 'commands') ? 'Update checks' : 'Recheck result';
     else if (candidate.evidence.passed !== candidate.evidence.total || !candidate.evidence.total || candidate.evidence.exitCode !== 0) action = 'Inspect failures';

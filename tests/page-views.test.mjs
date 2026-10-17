@@ -47,6 +47,12 @@ function fixture(){
   return {workspace,task,run,context,ports,calls};
 }
 
+test('an unavailable base-update capability offers no unusable update action',()=>{
+  const f=fixture();f.workspace.provider='cloudflare-artifacts';f.workspace.capabilities.baseUpdate=false;
+  const page=createReviewView(f.ports)();
+  assert.doesNotMatch(page.textContent,/Update to newer project code/);
+});
+
 function ownerReviewFixture(){
   const f=fixture();location.pathname='/workspace/';location.search='?token=must-not-copy';
   f.workspace.provider='cloudflare-artifacts';

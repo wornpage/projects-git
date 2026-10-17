@@ -33,6 +33,11 @@ test('candidate guidance points to the current guarded stage without mutating wo
   mergeRun(state,run.id,{headCommit:run.headCommit,baseCommit:task.baseCommit,mergedCommit:run.headCommit});check('evidence','View merged record');
 });
 
+test('supplied checkout contracts offer execution without command setup',()=>{
+  const {state,task,runs:[run]}=fixture();state.runs=[run];run.evidence=null;task.checkProfile='checkout';
+  assert.equal(candidateOutcome(state,run).action,'Run checks');assert.equal(taskOutcome(state,task).action,'Run checks');
+});
+
 for (const status of ['assigned', 'running', 'failed']) test(`one committed result does not request comparison with an uncommitted ${status} attempt`, () => {
   const {state, task, runs: [delta]} = fixture();
   state.runs = [delta];
