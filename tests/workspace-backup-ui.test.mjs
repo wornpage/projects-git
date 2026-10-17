@@ -6,7 +6,9 @@ import {buildWorkspaceBackup,workspaceBackupPreview} from '../src/core/workspace
 import {createWorkspaceBackupPanel,canInspectWorkspaceBackup,readWorkspaceBackupPreview} from '../public/ui/workspace-backup.js';
 import {createApiClient} from '../public/api-client.js';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-async function archive(){return buildWorkspaceBackup({revision:1,workspace:{...createWorkspace({id:'fixture-workspace',provider:'cloudflare-artifacts'}),projects:{}},operations:{},repositories:{},forks:{},jobs:{},checkPolicies:{}});}
+const testLedgers=()=>({capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
+const buildBackup=(snapshot,exportedAt)=>buildWorkspaceBackup(snapshot,exportedAt,testLedgers());
+async function archive(){return buildBackup({revision:1,workspace:{...createWorkspace({id:'fixture-workspace',provider:'cloudflare-artifacts'}),projects:{}},operations:{},repositories:{},forks:{},jobs:{},checkPolicies:{}});}
 function panel(api){
   installFakeDOM();let generation=0;const downloads=[],context={workspace:{id:'fixture-workspace',authentication:{mode:'cloudflare-access',permissions:{manage:true}}}};
   const root=createWorkspaceBackupPanel({getContext:()=>context,captureSession:()=>{const captured=generation;return()=>captured===generation;},api,downloadJson:(...args)=>downloads.push(args)});
@@ -24,6 +26,8 @@ test('backup preview is explicit, validates without applying and displays comple
   assert.equal(calls.length,1);assert.equal(calls[0][0],'/api/workspace/backup-preview');
   assert.deepEqual(calls[0][1],{archive:value,expectedSha256:value.sha256});assert.equal(p.downloads.length,0);
   assert.match(p.root.textContent,/0 unresolved operation receipts/);assert.match(p.root.textContent,/No work will be resumed/);
+  assert.match(p.root.textContent,/0 artifact subscriptions/);assert.match(p.root.textContent,/0 artifact events/);
+  assert.match(p.root.textContent,/one coherent SQLite read transaction/);
 });
 
 test('backup preview crosses the real API client as the exact server DTO without an options wrapper',async()=>{
@@ -56,7 +60,8 @@ test('non-owner/demo views and oversized or malformed files cannot invoke recove
 test('preview cannot hide historical populations or contradict resource, policy and mapping denominators',async()=>{
   const value=await archive(),preview=workspaceBackupPreview(value);
   for(const mutate of [p=>{p.counts.historicalTasks++;},p=>{delete p.counts.historicalRuns;},p=>{p.counts.resources++;},
-    p=>{p.counts.operationReports++;},p=>{p.counts.gitMappings++;},p=>{p.counts.historicalPolicies++;},p=>{p.counts.priorImports++;}]){
+    p=>{p.counts.operationReports++;},p=>{p.counts.gitMappings++;},p=>{p.counts.historicalPolicies++;},p=>{p.counts.priorImports++;},
+    p=>{p.counts.pendingArtifactSubscriptions=p.counts.artifactSubscriptions+1;},p=>{delete p.counts.artifactEventAttempts;},p=>{delete p.ledgerCapture;}]){
     const changed=structuredClone(preview);mutate(changed);assert.throws(()=>readWorkspaceBackupPreview(changed,value.sha256),/incomplete/);
   }
 });

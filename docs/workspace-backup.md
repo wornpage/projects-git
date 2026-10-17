@@ -19,6 +19,11 @@ The file includes task/candidate handoffs, historical reports, workspace events,
 safe operation receipt fields and their sole retained verifier reports, timing
 observations, job status observations,
 resource-name mappings, historical check definitions and required commit roots.
+The same point-in-time SQLite read includes secret-safe Artifacts subscription,
+subscription-attempt, event, event-attempt and delivery ledgers. Their repository
+name, phase/status, stable identities, timestamps and sanitized error codes retain
+uncertain create/enable/read boundaries. Subscription plan JSON, owner keys,
+account/queue configuration and raw provider replies are excluded.
 Access grants, authentication configuration, credentials, raw provider replies
 and runnable job inputs are excluded. Receipts for pending effects remain
 pending history even when their lease has expired.
@@ -87,6 +92,15 @@ operations whose project has not yet been attached; these are separate resources
 not fabricated projects. Every nested archive schema is closed. Recomputing
 digests cannot admit excluded structured fields.
 
+The workflow snapshot and these coordinator ledgers are read in one synchronous
+SQLite transaction before hashing. The archive labels this as a coherent
+point-in-time capture. The workspace revision still detects later workflow
+changes before the HTTP response, while ledger changes after the transaction do
+not rewrite or invalidate the captured point in time. Missing canonical ledger
+tables fail the export; capture never creates them or assumes they were empty.
+Ledger resource references consistently use `repositoryName`; recovery tooling
+can quarantine those names without parsing excluded subscription plans.
+
 ## Package every referenced commit locally
 
 Use the metadata file's exact `sha256`. Supply one explicit absolute local
@@ -150,6 +164,10 @@ Metadata and each CLI JSON input are limited to 1 MiB. The archive supports
 16 projects, 64 recovery resources, 256 task records, 512 candidate records,
 2,000 operation receipts, 10,000 event records, 512 check policies, 1,024 Git
 mappings and 512 job records. Record limits include current and imported history.
+Artifacts ledgers are additionally limited to 128 subscriptions, 4,096
+subscription attempts, 4,096 events, 16,384 event attempts and 4,096 delivery
+identities. The 1 MiB metadata limit applies to their combined serialized data,
+so large histories can reach the byte limit before these row-count ceilings.
 Each project supports 128 required commit roots. The aggregate encoded-object
 and expanded-object budgets are each 64 MiB, with at most 16,384 stored objects
 across all resources. Duplicate objects stored in different resources are charged

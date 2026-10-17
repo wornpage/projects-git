@@ -7,7 +7,9 @@ export function createWorkspaceRecoveryPanel({getContext,captureSession,api,down
   async function readHistory(){
     if(!current()||busy)return;busy=true;error='';render();
     try{const result=await api('/api/workspace/recovery-imports');if(!current())return;
-      if(result.workspaceId!==workspaceId||!Number.isSafeInteger(result.revision)||!Array.isArray(result.imports))throw Error('Incomplete history readback.');
+      if(result.workspaceId!==workspaceId||!Number.isSafeInteger(result.revision)||!Array.isArray(result.imports)||typeof result.restoreAllowed!=='boolean'
+        ||!Number.isSafeInteger(result.current?.liveLedgerRows)||result.current.liveLedgerRows<0
+        ||result.restoreAllowed&&(result.current.liveLedgerRows>0||result.current.projects>0||result.current.tasks>0||result.current.runs>0))throw Error('Incomplete history readback.');
       history=result;if(pending&&history.imports.some(item=>item.id===pending.body.expectedSha256))pending=null;
     }catch{if(current())error='Could not read current recovery history. Preserve the earlier request; do not assume an unconfirmed restore failed.';}
     if(current()){busy=false;render();}
@@ -46,7 +48,7 @@ export function createWorkspaceRecoveryPanel({getContext,captureSession,api,down
       el('h3',{},'Restore and read historical workspace records'),
       el('p',{},'Destination workspace: '+workspaceId+'. Current identity and permissions stay in force. Historical imports do not restore code, activate tasks or resume external effects.'),
       el('button',{type:'button',class:'button button-small',disabled:busy,onclick:readHistory},'Read destination and recovery history'),
-      history?el('div',{},el('p',{},`Destination revision ${history.revision} · current projects ${history.current.projects}, tasks ${history.current.tasks}, candidates ${history.current.runs} · ${history.imports.length} historical imports`),
+      history?el('div',{},el('p',{},`Destination revision ${history.revision} · current projects ${history.current.projects}, tasks ${history.current.tasks}, candidates ${history.current.runs} · ${history.current.liveLedgerRows} live provider ledger records · ${history.imports.length} historical imports`),
         el('p',{},history.quarantinedNames.length+' original resource names quarantined. Use explicitly fresh names when connecting independently restored code.'),
         ...history.imports.map(item=>el('div',{},el('p',{},`Historical source ${item.sourceWorkspaceId} · ${item.id} · imported by current owner ${item.importedBy} at ${item.importedAt} · code unavailable here`),
           el('button',{type:'button',class:'button button-small',disabled:busy,onclick:()=>inspect(item.id)},'Read historical import'),
@@ -56,7 +58,7 @@ export function createWorkspaceRecoveryPanel({getContext,captureSession,api,down
         el('label',{for:'restore-archive-digest'},'Separately recorded archive SHA-256'),el('input',{id:'restore-archive-digest',value:expectedDigest,disabled:busy||Boolean(pending),oninput:event=>{expectedDigest=event.target.value;}}),
         el('label',{for:'restore-history-confirmation'},'Type RESTORE HISTORY ONLY to confirm this destination and revision'),
         el('input',{id:'restore-history-confirmation',value:confirmation,disabled:busy||Boolean(pending),oninput:event=>{confirmation=event.target.value;}}),
-        el('button',{type:'button',class:'button button-small',disabled:busy||history.current.projects>0||history.current.tasks>0||history.current.runs>0,onclick:restore},pending?'Retry same history restore request':'Restore history into this empty workspace')):null,
+        el('button',{type:'button',class:'button button-small',disabled:busy||!history.restoreAllowed,onclick:restore},pending?'Retry same history restore request':'Restore history into this empty workspace')):null,
       detail?el('div',{},el('h4',{},'Historical records · '+detail.sourceWorkspaceId),
         el('p',{},`Historical tasks ${detail.counts.tasks}, candidates ${detail.counts.runs}, events ${detail.counts.events}, operation receipts ${detail.counts.operations}. Earlier approvals and uncertain effects grant no current authority.`),
         el('button',{type:'button',class:'button button-small',disabled:busy,onclick:readRecords},'Read all original historical records'),

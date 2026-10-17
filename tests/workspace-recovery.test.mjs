@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {HostedController,initialSnapshot} from '../src/cloudflare/controller.ts';
 import {WorkspaceStore} from '../src/cloudflare/workspace-store.ts';
+import {ArtifactEventReceipts} from '../src/cloudflare/artifact-events.ts';
+import {ArtifactSubscriptions} from '../src/cloudflare/artifact-subscriptions.ts';
 import {sqliteStorage} from './helpers/sqlite-store.mjs';
 import {testAuthority,testReviewerAuthority,AGENT_CLIENT} from './helpers/hosted-authority.mjs';
 import {buildWorkspaceBackup,workspaceBackupPreview} from '../src/core/workspace-backup.mjs';
@@ -13,7 +15,7 @@ import {transformSync} from 'esbuild';
 import {systemAuthority} from '../src/cloudflare/access.ts';
 import {setRepositoryAccess} from '../src/core/repository-access.mjs';
 
-const emptyLedgers=()=>({artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
+const emptyLedgers=()=>({capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]});
 async function archive(){
   const source=initialSnapshot('source-workspace'),projectId=crypto.randomUUID();
   source.workspace.projects[projectId]={id:projectId,name:'Historical project',repositoryName:'original-project',mainCommit:'a'.repeat(40),defaultBranch:'main',restoredHistory:[],restoredCheckPolicies:[]};
@@ -24,6 +26,7 @@ async function archive(){
 }
 function destination(t){
   const {storage,db}=sqliteStorage();t.after(()=>db.close());let store=new WorkspaceStore(storage,'destination-workspace');
+  new ArtifactEventReceipts(storage);new ArtifactSubscriptions(storage);
   const artifacts=new Proxy({},{get(){throw Error('Restore must not contact a provider');}}),authority=testAuthority('destination-workspace');
   const owner=()=>new HostedController(store,artifacts,authority);owner().adoptOwner();
   return {storage,db,authority,artifacts,store:()=>store,owner,restart:()=>{store=new WorkspaceStore(storage,'destination-workspace');return owner();}};
@@ -117,4 +120,34 @@ test('assignment cannot reuse a quarantined original repository even if old meta
   task.projectId=project.id;task.origin='artifacts';snapshot.repositories[task.id]=project.repositoryName;snapshot.revision++;f.store().write(snapshot,snapshot.revision-1);
   await assert.rejects(f.owner().assign(task.id,{agentClientId:AGENT_CLIENT,label:'Must refuse'},crypto.randomUUID()),{code:'RECOVERY_RESOURCE_QUARANTINED'});
   assert.equal(f.store().read().workspace.runs.length,0);
+});
+
+function pendingLiveSubscription(storage){
+  const id=crypto.randomUUID();storage.sql.exec('INSERT INTO artifact_subscriptions(repository,fingerprint,plan,phase,attempt_id) VALUES (?,?,?,?,?)',
+    'live-uncertain','f'.repeat(64),'{}','creating',id);
+  storage.sql.exec('INSERT INTO artifact_subscription_attempts(id,repository,started_at,status) VALUES (?,?,?,?)',id,'live-uncertain',new Date().toISOString(),'pending');
+}
+test('provider ledgers make an otherwise empty destination unavailable without forgetting their uncertainty',async t=>{
+  const f=destination(t),value=await archive(),before=f.store().read();pendingLiveSubscription(f.storage);
+  const history=f.owner().recoveryHistory();assert.equal(history.restoreAllowed,false);assert.equal(history.current.liveLedgerRows,2);
+  await assert.rejects(f.owner().restoreWorkspaceHistory(input(value,before.revision),crypto.randomUUID()),{code:'WORKSPACE_RESTORE_NOT_EMPTY'});
+  assert.deepEqual(f.store().read(),before);assert.equal(f.store().captureBackup().backupLedgers.artifactSubscriptions[0].phase,'creating');
+});
+test('a live-ledger change during asynchronous import validation fences the commit even without a workflow revision change',async t=>{
+  const f=destination(t),value=await archive(),store=f.store(),before=store.read(),capture=store.captureBackup.bind(store);let captures=0;
+  store.captureBackup=()=>{if(++captures===2)pendingLiveSubscription(f.storage);return capture();};
+  await assert.rejects(f.owner().restoreWorkspaceHistory(input(value,before.revision),crypto.randomUUID()),{code:'STATE_CONFLICT'});
+  assert.deepEqual(store.read(),before);assert.equal(capture().backupLedgers.artifactSubscriptions.length,1);
+});
+test('aggregate history limits refuse the next import before saving and preserve complete re-export',async t=>{
+  const f=destination(t),empty={capture:'coherent-sqlite-transaction',...emptyLedgers()};
+  for(let index=0;index<5;index++){
+    const source=initialSnapshot('bounded-source-'+index);for(let p=0;p<16;p++){const id=crypto.randomUUID();source.workspace.projects[id]={id,name:'Project '+p,
+      repositoryName:'source-'+index+'-'+p,mainCommit:'a'.repeat(40),defaultBranch:'main',kind:'artifacts',acceptingWork:false,policyVersion:1};}
+    const value=await buildWorkspaceBackup(source,new Date().toISOString(),empty),before=f.store().read();
+    if(index<4)await f.owner().restoreWorkspaceHistory(input(value,before.revision),'bounded-import-'+index);
+    else{await assert.rejects(f.owner().restoreWorkspaceHistory(input(value,before.revision),'bounded-import-'+index),{code:'WORKSPACE_BACKUP_INVALID'});assert.deepEqual(f.store().read(),before);}
+    const exported=await f.owner().workspaceBackup();assert.equal(workspaceBackupPreview(exported).counts.historicalProjects,Math.min(index+1,4)*16);
+  }
+  assert.equal(Object.keys(f.store().read().recoveryImports).length,4);assert.equal(Object.keys(f.store().read().operations).length,4);
 });

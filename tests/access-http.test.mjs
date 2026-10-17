@@ -7,6 +7,8 @@ import {generateKeyPair,exportJWK,SignJWT} from 'jose';
 import {AccessVerifier,ownerBinding} from '../src/cloudflare/access.ts';
 import {HostedController} from '../src/cloudflare/controller.ts';
 import {WorkspaceStore} from '../src/cloudflare/workspace-store.ts';
+import {ArtifactEventReceipts} from '../src/cloudflare/artifact-events.ts';
+import {ArtifactSubscriptions} from '../src/cloudflare/artifact-subscriptions.ts';
 import {sqliteStorage} from './helpers/sqlite-store.mjs';
 import {testAuthority,AGENT_CLIENT,REVIEWER_CLIENT} from './helpers/hosted-authority.mjs';
 
@@ -142,7 +144,7 @@ test('repository metrics traverse signed HTTP and SQLite without writes or provi
 
 test('owner-only backup export and preview preserve the SQLite revision and reject stale captures',async t=>{
   const f=fixture(),{db,storage}=sqliteStorage();t.after(()=>db.close());
-  const store=new WorkspaceStore(storage,policy.workspaceId),snapshot=store.read();snapshot.workspace.authentication=ownerBinding(policy);
+  const store=new WorkspaceStore(storage,policy.workspaceId),snapshot=store.read();new ArtifactEventReceipts(storage);new ArtifactSubscriptions(storage);snapshot.workspace.authentication=ownerBinding(policy);
   const projectId=crypto.randomUUID();snapshot.workspace.projects[projectId]={id:projectId,name:'Backup fixture',repositoryName:'fixture',mainCommit:'a'.repeat(40),
     defaultBranch:'main',kind:'artifacts',acceptingWork:true,policyVersion:1};snapshot.revision++;store.write(snapshot,0);
   const before=store.read(),artifacts={get:()=>assert.fail('Backup export and preview cannot use providers')};
@@ -156,7 +158,8 @@ test('owner-only backup export and preview preserve the SQLite revision and reje
   }
   const response=await handler(await request('/api/workspace/backup',owner),f.env);assert.equal(response.status,200);
   const archive=await response.json();assert.equal(archive.payload.projects.length,1);assert.equal(archive.payload.sourceRevision,before.revision);
-  assert.ok(!Object.hasOwn(archive.payload.workspace,'authentication'));
+  assert.ok(!Object.hasOwn(archive.payload.workspace,'authentication'));assert.equal(archive.payload.ledgers.capture,'coherent-sqlite-transaction');
+  assert.deepEqual(archive.payload.ledgers.artifactSubscriptions,[]);
   const preview=await handler(await request('/api/workspace/backup-preview',owner,{archive,expectedSha256:archive.sha256}),f.env);
   assert.equal(preview.status,200);assert.equal((await preview.json()).resumesWork,false);assert.deepEqual(store.read(),before);
   const bad=await handler(await request('/api/workspace/backup-preview',owner,{archive,expectedSha256:'0'.repeat(64)}),f.env);assert.equal(bad.status,422);

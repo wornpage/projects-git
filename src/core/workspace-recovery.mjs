@@ -5,6 +5,18 @@ export const HISTORY_RESTORE_CONFIRMATION='RESTORE HISTORY ONLY';
 const refuse=(code,message)=>{throw new WorkflowError(code,message,409);};
 const digest=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',');
+export function recoveryDestinationEmpty(snapshot){
+  const state=snapshot.workspace;
+  return !state.tasks.length&&!state.runs.length&&!Object.keys(state.projects??{}).length
+    &&!['repositories','forks','jobs','checkPolicies'].some(key=>Object.keys(snapshot[key]??{}).length)
+    &&!Object.values(snapshot.operations).some(operation=>operation.kind!=='workspace-restore'||operation.state!=='complete');
+}
+export function recoveryLiveLedgerRows(ledgers){
+  if(ledgers?.capture!=='coherent-sqlite-transaction')refuse('BACKUP_LEDGER_UNAVAILABLE','A coherent live-ledger capture is required before recovery.');
+  return ['artifactSubscriptions','artifactSubscriptionAttempts','artifactEvents','artifactEventAttempts','artifactDeliveries'].reduce((total,name)=>{
+    if(!Array.isArray(ledgers[name]))refuse('BACKUP_LEDGER_UNAVAILABLE','Complete live-ledger arrays are required before recovery.');return total+ledgers[name].length;
+  },0);
+}
 
 export async function readWorkspaceRecovery(input){
   if(!exact(input,['archive','expectedSha256','expectedSourceWorkspaceId','expectedWorkspaceId','expectedRevision','confirmation'])
@@ -22,10 +34,7 @@ export function retainWorkspaceRecovery(snapshot,request,{ownerSubject,importedA
   if(snapshot.workspace.id!==request.expectedWorkspaceId)refuse('WORKSPACE_RESTORE_DESTINATION','The current destination differs from the confirmed workspace.');
   if(snapshot.revision!==request.expectedRevision)refuse('STATE_CONFLICT','The destination changed. Preview its current revision before confirming another restore.');
   if(!ownerSubject||!Number.isFinite(Date.parse(importedAt)))refuse('WORKSPACE_RESTORE_PROVENANCE','Current owner import provenance is required.');
-  const state=snapshot.workspace;
-  if(state.tasks.length||state.runs.length||Object.keys(state.projects??{}).length
-    ||['repositories','forks','jobs','checkPolicies'].some(key=>Object.keys(snapshot[key]??{}).length)
-    ||Object.values(snapshot.operations).some(operation=>operation.kind!=='workspace-restore'||operation.state!=='complete'))
+  if(!recoveryDestinationEmpty(snapshot))
     refuse('WORKSPACE_RESTORE_NOT_EMPTY','Restore only into an empty destination. Existing workflow and unresolved effects are preserved.');
   const id=request.archive.sha256;
   if(Object.hasOwn(snapshot.recoveryImports??{},id))refuse('WORKSPACE_RESTORE_EXISTS','This archive is already retained. Read the existing history instead of importing it again.');

@@ -6,12 +6,15 @@ import {sqliteStorage} from './helpers/sqlite-store.mjs';
 import {testAuthority,testReviewerAuthority,AGENT_CLIENT} from './helpers/hosted-authority.mjs';
 import {authorizeRoute} from '../src/cloudflare/access.ts';
 import {errorResponse} from '../src/cloudflare/security.ts';
+import {ArtifactEventReceipts} from '../src/cloudflare/artifact-events.ts';
+import {ArtifactSubscriptions} from '../src/cloudflare/artifact-subscriptions.ts';
 
 const HEAD='a'.repeat(40), INITIAL='sensitive-initial-token', WRITE='sensitive-write-token';
 const input={name:'customer-portal',description:'A small customer portal.'};
 function fixture(t) {
   const {db,storage}=sqliteStorage();t.after(()=>db.close());
   const store=new WorkspaceStore(storage,'mock-workspace'), calls=[], repositories=new Map();
+  new ArtifactEventReceipts(storage);new ArtifactSubscriptions(storage);
   const artifacts={
     async get(name) {calls.push(['get',name]);if(!repositories.has(name))throw Object.assign(Error('No repository'),{code:'NOT_FOUND'});return repositories.get(name);},
     async create(name,options) {

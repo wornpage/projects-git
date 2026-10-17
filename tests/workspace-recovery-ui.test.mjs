@@ -9,9 +9,9 @@ const nodes=root=>[root,...(root.children??[]).flatMap(nodes)];
 const button=(root,label)=>nodes(root).find(node=>node.tagName==='BUTTON'&&node.textContent===label);
 async function fixture(fetchRequest){
   installFakeDOM();let generation=0;
-  const archive=await buildWorkspaceBackup(initialSnapshot('original-source'),new Date().toISOString(),{artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]}),preview=workspaceBackupPreview(archive);
+  const archive=await buildWorkspaceBackup(initialSnapshot('original-source'),new Date().toISOString(),{capture:'coherent-sqlite-transaction',artifactSubscriptions:[],artifactSubscriptionAttempts:[],artifactEvents:[],artifactEventAttempts:[],artifactDeliveries:[]}),preview=workspaceBackupPreview(archive);
   const context={workspace:{id:'destination',authentication:{permissions:{manage:true}}}},downloads=[];
-  const history={workspaceId:'destination',revision:7,current:{projects:0,tasks:0,runs:0},imports:[],quarantinedNames:[]};
+  const history={workspaceId:'destination',revision:7,restoreAllowed:true,current:{projects:0,tasks:0,runs:0,liveLedgerRows:0},imports:[],quarantinedNames:[]};
   const panel=createWorkspaceRecoveryPanel({getContext:()=>context,captureSession:()=>{const started=generation;return()=>started===generation;},
     canManage:()=>context.workspace.authentication.permissions.manage,api:createApiClient({fetchRequest}),downloadJson:(...args)=>downloads.push(args),getSelection:()=>({archive,preview})});
   return {root:panel.root,archive,preview,history,context,downloads,changeSession:()=>generation++};

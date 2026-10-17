@@ -8,10 +8,56 @@ import {selectCatalogEntries,parseProjectCatalog,ProjectCatalogError} from '../.
 type Storage = Pick<DurableObjectStorage, 'sql' | 'transactionSync'>;
 type RecordRow = { kind: string; id: string; position: number; data: string };
 type Header = { revision: number; data: string };
+export interface BackupLedgers {
+  capture: 'coherent-sqlite-transaction';
+  artifactSubscriptions: {repositoryName:string;fingerprint:string;phase:string;subscriptionId:string|null;attemptId:string}[];
+  artifactSubscriptionAttempts: {id:string;repositoryName:string;startedAt:string;finishedAt:string|null;status:string;errorCode:string|null}[];
+  artifactEvents: {eventKey:string;status:string;attemptId:string;event:{subscriptionId:string;repositoryName:string;ref:string;before:string;after:string;timestamp:string};
+    result:{key:string;state:string;headCommit?:string|null;repositoryName?:string;ref?:string;runIds?:string[];projectIds?:string[]}|null}[];
+  artifactEventAttempts: {attemptId:string;eventKey:string;startedAt:string;finishedAt:string|null;status:string;errorCode:string|null}[];
+  artifactDeliveries: {messageId:string;eventKey:string}[];
+}
+export interface BackupCapture {snapshot:HostedSnapshot;backupLedgers:BackupLedgers}
 export type IndexState = { project_id: string; revision: number; delivered_revision: number; indexed_revision: number; attempts: number; next_attempt_at: number; error_code: string | null; automatic: number };
 const mapKinds = ['repositories', 'forks', 'operations', 'jobs', 'checkPolicies', 'recoveryImports'] as const;
 const historyKinds = { tasks: ['revisions', 'ownerHistory', 'baseHistory'], runs: ['evidenceHistory', 'reviewHistory'] } as const;
 const MAX_RECORD_BYTES = 1_900_000;
+const backupTables=['artifact_subscriptions','artifact_subscription_attempts','artifact_events','artifact_event_attempts','artifact_deliveries'] as const;
+
+function backupLedgerError(message:string):never {throw new ApiError(503,'BACKUP_LEDGER_UNAVAILABLE',message);}
+function parsedRecord(value:string,label:string):Record<string,unknown>{
+  let parsed:unknown;try{parsed=JSON.parse(value);}catch{backupLedgerError('Retained '+label+' JSON is invalid.');}
+  if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))backupLedgerError('Retained '+label+' JSON has an unsupported shape.');
+  return parsed as Record<string,unknown>;
+}
+function exact(value:Record<string,unknown>,keys:string[],label:string):void{
+  if(Object.keys(value).sort().join(',')!==[...keys].sort().join(','))backupLedgerError('Retained '+label+' has unsupported fields.');
+}
+const commit=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9]{40}$/.test(value);
+const eventId=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9-]{16,64}$/.test(value);
+const repository=(value:unknown):value is string=>typeof value==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(value);
+const branch=(value:unknown):value is string=>typeof value==='string'&&/^refs\/heads\/[A-Za-z0-9._/-]{1,250}$/.test(value)&&!value.includes('..')&&!value.includes('//')&&!/[/.]$/.test(value);
+function safeEvent(eventText:string):BackupLedgers['artifactEvents'][number]['event']{
+  const event=parsedRecord(eventText,'artifact event');
+  exact(event,['accountId','subscriptionId','namespace','repositoryName','ref','before','after','timestamp'],'artifact event');
+  const {subscriptionId,repositoryName,ref,before,after,timestamp}=event;
+  if(!eventId(subscriptionId)||!repository(repositoryName)||!branch(ref)||!commit(before)||!commit(after)
+    ||typeof timestamp!=='string'||timestamp.length>32||!Number.isFinite(Date.parse(timestamp)))backupLedgerError('Retained artifact event values are invalid.');
+  return {subscriptionId:subscriptionId as string,repositoryName:repositoryName as string,ref:ref as string,before:before as string,after:after as string,timestamp:timestamp as string};
+}
+function safeEventResult(resultText:string|null):BackupLedgers['artifactEvents'][number]['result']{
+  if(resultText===null)return null;
+  const result=parsedRecord(resultText,'artifact event result'),allowed=['key','state','headCommit','repositoryName','ref','runIds','projectIds'];
+  if(Object.keys(result).some(key=>!allowed.includes(key)))backupLedgerError('Retained artifact event result has unsupported fields.');
+  if(typeof result.key!=='string'||!/^[a-f0-9]{64}$/.test(result.key)||!['unowned-ref','observed','superseded-notification'].includes(String(result.state))
+    ||result.headCommit!==undefined&&result.headCommit!==null&&!commit(result.headCommit)
+    ||result.repositoryName!==undefined&&!repository(result.repositoryName)||result.ref!==undefined&&!branch(result.ref)
+    ||result.runIds!==undefined&&(!Array.isArray(result.runIds)||result.runIds.some(value=>typeof value!=='string'))
+    ||result.projectIds!==undefined&&(!Array.isArray(result.projectIds)||result.projectIds.some(value=>typeof value!=='string')))
+    backupLedgerError('Retained artifact event result values are invalid.');
+  exact(result,result.state==='unowned-ref'?['key','state']:allowed,'artifact event result');
+  return result as BackupLedgers['artifactEvents'][number]['result'];
+}
 
 function encode(value: unknown): string {
   const data = JSON.stringify(value);
@@ -250,6 +296,35 @@ export class WorkspaceStore implements SnapshotStore {
     const header = this.storage.sql.exec<Header>('SELECT revision, data FROM workspace_header WHERE id = 1').one();
     const rows = this.storage.sql.exec<RecordRow>('SELECT kind, id, position, data FROM workspace_records ORDER BY kind, position').toArray();
     return this.assemble(header,rows);
+  }
+
+  /** One read transaction captures workflow records and the separate provider-effect
+   * ledgers. The returned ledgers are export-only data and are never persisted in
+   * the workspace snapshot. Missing canonical tables are an explicit operator error. */
+  captureBackup(): BackupCapture {
+    return this.storage.transactionSync(() => {
+      const present=new Set(this.storage.sql.exec<{name:string}>("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('artifact_subscriptions','artifact_subscription_attempts','artifact_events','artifact_event_attempts','artifact_deliveries')").toArray().map(row=>row.name));
+      const missing=backupTables.filter(name=>!present.has(name));
+      if(missing.length)backupLedgerError('Workspace backup requires the canonical coordinator ledger tables: '+missing.join(', ')+'.');
+      const snapshot=this.read();
+      const subscriptions=this.storage.sql.exec<{repository:string;fingerprint:string;phase:string;subscription_id:string|null;attempt_id:string}>(
+        'SELECT repository,fingerprint,phase,subscription_id,attempt_id FROM artifact_subscriptions ORDER BY repository').toArray();
+      const subscriptionAttempts=this.storage.sql.exec<{id:string;repository:string;started_at:string;finished_at:string|null;status:string;error_code:string|null}>(
+        'SELECT id,repository,started_at,finished_at,status,error_code FROM artifact_subscription_attempts ORDER BY started_at,id').toArray();
+      const events=this.storage.sql.exec<{event_key:string;event:string;status:string;attempt_id:string;result:string|null}>(
+        'SELECT event_key,event,status,attempt_id,result FROM artifact_events ORDER BY event_key').toArray();
+      const eventAttempts=this.storage.sql.exec<{attempt_id:string;event_key:string;started_at:string;finished_at:string|null;status:string;error_code:string|null}>(
+        'SELECT attempt_id,event_key,started_at,finished_at,status,error_code FROM artifact_event_attempts ORDER BY started_at,attempt_id').toArray();
+      const deliveries=this.storage.sql.exec<{message_id:string;event_key:string}>(
+        'SELECT message_id,event_key FROM artifact_deliveries ORDER BY message_id').toArray();
+      const backupLedgers:BackupLedgers={capture:'coherent-sqlite-transaction',
+        artifactSubscriptions:subscriptions.map(row=>({repositoryName:row.repository,fingerprint:row.fingerprint,phase:row.phase,subscriptionId:row.subscription_id,attemptId:row.attempt_id})),
+        artifactSubscriptionAttempts:subscriptionAttempts.map(row=>({id:row.id,repositoryName:row.repository,startedAt:row.started_at,finishedAt:row.finished_at,status:row.status,errorCode:row.error_code})),
+        artifactEvents:events.map(row=>({eventKey:row.event_key,status:row.status,attemptId:row.attempt_id,event:safeEvent(row.event),result:safeEventResult(row.result)})),
+        artifactEventAttempts:eventAttempts.map(row=>({attemptId:row.attempt_id,eventKey:row.event_key,startedAt:row.started_at,finishedAt:row.finished_at,status:row.status,errorCode:row.error_code})),
+        artifactDeliveries:deliveries.map(row=>({messageId:row.message_id,eventKey:row.event_key}))};
+      return {snapshot,backupLedgers};
+    });
   }
 
   private assemble(header:Header,rows:RecordRow[]): HostedSnapshot {

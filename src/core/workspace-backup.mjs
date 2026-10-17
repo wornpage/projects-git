@@ -6,7 +6,8 @@ import {validateBackupHandoff,validateBackupCheckPolicy,portableBackupEvidence,v
 
 export const WORKSPACE_BACKUP_FORMAT='projects-git-workspace-backup/v1';
 export const MAX_WORKSPACE_BACKUP_BYTES=1024*1024;
-export const BACKUP_LIMITS=Object.freeze({projects:80,currentProjects:16,historicalProjects:64,resources:64,tasks:256,runs:512,operations:2000,events:10000,policies:512,gitMappings:1024,jobs:512});
+export const BACKUP_LIMITS=Object.freeze({projects:80,currentProjects:16,historicalProjects:64,resources:64,tasks:256,runs:512,operations:2000,events:10000,policies:512,gitMappings:1024,jobs:512,
+  artifactSubscriptions:128,artifactSubscriptionAttempts:4096,artifactEvents:4096,artifactEventAttempts:16384,artifactDeliveries:4096});
 const encoder=new TextEncoder(),hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
 const commit=value=>typeof value==='string'&&/^[a-f0-9]{40}$/.test(value);
 const record=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
@@ -20,6 +21,70 @@ const operationFields=['fingerprint','kind','state','itemId','taskId','taskIds',
   'baseCommit','pendingCommit','sourceRunId','errorCode','leaseUntil','timestamp','contextId','assignmentId','reviewerId','reviewerIssuer','model','startedAt',
   'reservesExecution','cancelled','accessVersion','revokeRunIds','revokedRunIds','timings','report','idleResult','recoveryImportId'];
 const boundary='Historical recovery data only. No credentials, access grants, runnable jobs, current approval or automatic retry authority are restored. Pending effects remain unresolved.';
+const providerId=value=>typeof value==='string'&&/^[a-f0-9-]{16,64}$/.test(value);
+const repositoryName=value=>typeof value==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(value);
+const errorCode=value=>value===null||typeof value==='string'&&/^[A-Z_]{1,80}$/.test(value);
+const branch=value=>typeof value==='string'&&/^refs\/heads\/[A-Za-z0-9._/-]{1,250}$/.test(value)&&!value.includes('..')&&!value.includes('//')&&!/[/.]$/.test(value);
+const dated=value=>typeof value==='string'&&value.length<=32&&Number.isFinite(Date.parse(value));
+
+function validateBackupLedgers(value){
+  if(!fields(value,['capture','artifactSubscriptions','artifactSubscriptionAttempts','artifactEvents','artifactEventAttempts','artifactDeliveries'])
+    ||value.capture!=='coherent-sqlite-transaction')refuse('A coherent coordinator ledger capture is required.');
+  for(const name of ['artifactSubscriptions','artifactSubscriptionAttempts','artifactEvents','artifactEventAttempts','artifactDeliveries'])
+    if(!Array.isArray(value[name]))refuse('Coordinator backup ledgers must be complete arrays.');
+  const ledgers=structuredClone(value),subscriptions=new Map(),subscriptionAttempts=new Map(),events=new Map(),eventAttempts=new Map(),deliveries=new Set(),subscriptionIds=new Set();
+  for(const row of ledgers.artifactSubscriptions){
+    if(!fields(row,['repositoryName','fingerprint','phase','subscriptionId','attemptId'])||!repositoryName(row.repositoryName)||subscriptions.has(row.repositoryName)||!hash(row.fingerprint)
+      ||!['reserved','creating','bound','ready'].includes(row.phase)||row.subscriptionId!==null&&!providerId(row.subscriptionId)||!uuid(row.attemptId)
+      ||['bound','ready'].includes(row.phase)!==(row.subscriptionId!==null)||row.subscriptionId!==null&&subscriptionIds.has(row.subscriptionId))refuse('Invalid or duplicate artifact subscription ledger row.');
+    subscriptions.set(row.repositoryName,row);if(row.subscriptionId!==null)subscriptionIds.add(row.subscriptionId);
+  }
+  for(const row of ledgers.artifactSubscriptionAttempts){
+    if(!fields(row,['id','repositoryName','startedAt','finishedAt','status','errorCode'])||!uuid(row.id)||subscriptionAttempts.has(row.id)||!repositoryName(row.repositoryName)
+      ||timestamp(row.startedAt)===null||row.finishedAt!==null&&timestamp(row.finishedAt)===null||!['pending','complete','failed','superseded'].includes(row.status)||!errorCode(row.errorCode)
+      ||row.finishedAt!==null&&timestamp(row.finishedAt)<timestamp(row.startedAt)||row.status==='pending'&&(row.finishedAt!==null||row.errorCode!==null)
+      ||row.status!=='pending'&&row.finishedAt===null||row.status==='failed'&&row.errorCode===null||row.status!=='failed'&&row.errorCode!==null)refuse('Invalid or duplicate artifact subscription attempt.');
+    subscriptionAttempts.set(row.id,row);
+  }
+  for(const row of ledgers.artifactEvents){
+    if(!fields(row,['eventKey','status','attemptId','event','result'])||!hash(row.eventKey)||events.has(row.eventKey)||!['pending','complete','failed'].includes(row.status)||!uuid(row.attemptId)
+      ||!fields(row.event,['subscriptionId','repositoryName','ref','before','after','timestamp'])||!providerId(row.event.subscriptionId)||!repositoryName(row.event.repositoryName)
+      ||!branch(row.event.ref)||!commit(row.event.before)||!commit(row.event.after)||!dated(row.event.timestamp))refuse('Invalid or duplicate artifact event ledger row.');
+    if(row.result!==null){
+      const allowed=['key','state','headCommit','repositoryName','ref','runIds','projectIds'];
+      if(!record(row.result)||Object.keys(row.result).some(key=>!allowed.includes(key))||!hash(row.result.key)||row.result.key!==row.eventKey
+        ||!['unowned-ref','observed','superseded-notification'].includes(row.result.state)||row.result.headCommit!==undefined&&row.result.headCommit!==null&&!commit(row.result.headCommit)
+        ||row.result.repositoryName!==undefined&&row.result.repositoryName!==row.event.repositoryName||row.result.ref!==undefined&&row.result.ref!==row.event.ref
+        ||row.result.runIds!==undefined&&(!Array.isArray(row.result.runIds)||row.result.runIds.some(id=>!identifier(id)))
+        ||row.result.projectIds!==undefined&&(!Array.isArray(row.result.projectIds)||row.result.projectIds.some(id=>!identifier(id))))refuse('Invalid artifact event outcome.');
+      if(!fields(row.result,row.result.state==='unowned-ref'?['key','state']:allowed))refuse('Artifact event outcome fields are incomplete.');
+    }
+    if((row.status==='complete')!==(row.result!==null))refuse('Artifact event completion and its retained outcome differ.');
+    events.set(row.eventKey,row);
+  }
+  for(const row of ledgers.artifactEventAttempts){
+    if(!fields(row,['attemptId','eventKey','startedAt','finishedAt','status','errorCode'])||!uuid(row.attemptId)||eventAttempts.has(row.attemptId)||!hash(row.eventKey)
+      ||timestamp(row.startedAt)===null||row.finishedAt!==null&&timestamp(row.finishedAt)===null||!['pending','complete','failed','superseded'].includes(row.status)||!errorCode(row.errorCode)
+      ||row.finishedAt!==null&&timestamp(row.finishedAt)<timestamp(row.startedAt)||row.status==='pending'&&(row.finishedAt!==null||row.errorCode!==null)
+      ||row.status!=='pending'&&row.finishedAt===null||row.status==='failed'&&row.errorCode===null||row.status!=='failed'&&row.errorCode!==null)refuse('Invalid or duplicate artifact event attempt.');
+    eventAttempts.set(row.attemptId,row);
+  }
+  for(const row of ledgers.artifactDeliveries){
+    if(!fields(row,['messageId','eventKey'])||typeof row.messageId!=='string'||!/^[A-Za-z0-9_.:-]{1,128}$/.test(row.messageId)||deliveries.has(row.messageId)||!hash(row.eventKey))refuse('Invalid or duplicate artifact delivery.');
+    deliveries.add(row.messageId);
+  }
+  for(const row of subscriptions.values()){
+    const attempt=subscriptionAttempts.get(row.attemptId);if(!attempt||attempt.repositoryName!==row.repositoryName||attempt.status==='superseded'
+      ||(row.phase==='ready')!==(attempt.status==='complete'))refuse('Artifact subscription current-attempt reference is missing or inconsistent.');
+  }
+  for(const row of subscriptionAttempts.values())if(!subscriptions.has(row.repositoryName))refuse('Artifact subscription attempt has no retained subscription.');
+  for(const row of events.values()){
+    const attempt=eventAttempts.get(row.attemptId);if(!attempt||attempt.eventKey!==row.eventKey||attempt.status!==row.status)refuse('Artifact event current-attempt reference differs.');
+  }
+  for(const row of eventAttempts.values())if(!events.has(row.eventKey))refuse('Artifact event attempt has no retained event.');
+  for(const row of ledgers.artifactDeliveries)if(!events.has(row.eventKey))refuse('Artifact delivery has no retained event.');
+  return ledgers;
+}
 
 function canonical(value,depth=0){
   if(depth>40)refuse('Workspace backup nesting exceeds 40 levels.');
@@ -89,6 +154,28 @@ function recoveryResources(projects,handoffs,operations,jobs,events,priorImports
       anchorCommit:resource.anchorCommit,defaultBranch:resource.defaultBranch,commits:[...resource.commits]});
   return resources;
 }
+function ledgerRecordCounts(ledgers){
+  return {
+    artifactSubscriptions:ledgers.artifactSubscriptions.length,
+    pendingArtifactSubscriptions:ledgers.artifactSubscriptions.filter(row=>row.phase!=='ready').length,
+    reservedArtifactSubscriptions:ledgers.artifactSubscriptions.filter(row=>row.phase==='reserved').length,
+    creatingArtifactSubscriptions:ledgers.artifactSubscriptions.filter(row=>row.phase==='creating').length,
+    boundArtifactSubscriptions:ledgers.artifactSubscriptions.filter(row=>row.phase==='bound').length,
+    readyArtifactSubscriptions:ledgers.artifactSubscriptions.filter(row=>row.phase==='ready').length,
+    artifactSubscriptionAttempts:ledgers.artifactSubscriptionAttempts.length,
+    pendingArtifactSubscriptionAttempts:ledgers.artifactSubscriptionAttempts.filter(row=>row.status==='pending').length,
+    completedArtifactSubscriptionAttempts:ledgers.artifactSubscriptionAttempts.filter(row=>row.status==='complete').length,
+    failedArtifactSubscriptionAttempts:ledgers.artifactSubscriptionAttempts.filter(row=>row.status==='failed').length,
+    supersededArtifactSubscriptionAttempts:ledgers.artifactSubscriptionAttempts.filter(row=>row.status==='superseded').length,
+    artifactEvents:ledgers.artifactEvents.length,pendingArtifactEvents:ledgers.artifactEvents.filter(row=>row.status==='pending').length,
+    completedArtifactEvents:ledgers.artifactEvents.filter(row=>row.status==='complete').length,failedArtifactEvents:ledgers.artifactEvents.filter(row=>row.status==='failed').length,
+    artifactEventAttempts:ledgers.artifactEventAttempts.length,
+    pendingArtifactEventAttempts:ledgers.artifactEventAttempts.filter(row=>row.status==='pending').length,
+    completedArtifactEventAttempts:ledgers.artifactEventAttempts.filter(row=>row.status==='complete').length,
+    failedArtifactEventAttempts:ledgers.artifactEventAttempts.filter(row=>row.status==='failed').length,
+    supersededArtifactEventAttempts:ledgers.artifactEventAttempts.filter(row=>row.status==='superseded').length,
+    artifactDeliveries:ledgers.artifactDeliveries.length};
+}
 function counts(payload){
   const prior=payload.priorImports.map(item=>counts(item.archive.payload)),sum=key=>prior.reduce((n,value)=>n+value[key],0);
   const history=payload.projects.flatMap(project=>project.history),runs=items=>items.reduce((n,item)=>n+item.payload.runs.length,0);
@@ -96,7 +183,12 @@ function counts(payload){
   const currentEvents=payload.events.length,historicalEvents=history.reduce((n,item)=>n+item.payload.events.length,0)+sum('events');
   const currentPolicies=payload.checkPolicies.length,historicalPolicies=payload.projects.reduce((n,project)=>n+project.historicalCheckPolicies.length,0)+sum('policies');
   const currentProjects=payload.projects.length,historicalProjects=sum('projects'),currentOperations=payload.operations.length,historicalOperations=sum('operations');
-  return {projects:currentProjects+historicalProjects,currentProjects,historicalProjects,resources:payload.resources.length,currentTasks,historicalTasks,tasks:currentTasks+historicalTasks,
+  const ledgerCounts=ledgerRecordCounts(payload.ledgers);
+  for(const key of Object.keys(ledgerCounts))ledgerCounts[key]+=sum(key);
+  for(const name of ['artifactSubscriptions','artifactSubscriptionAttempts','artifactEvents','artifactEventAttempts','artifactDeliveries']){
+    const suffix=name[0].toUpperCase()+name.slice(1);ledgerCounts['current'+suffix]=payload.ledgers[name].length;ledgerCounts['historical'+suffix]=sum(name);
+  }
+  return {...ledgerCounts,projects:currentProjects+historicalProjects,currentProjects,historicalProjects,resources:payload.resources.length,currentTasks,historicalTasks,tasks:currentTasks+historicalTasks,
     currentRuns,historicalRuns,runs:currentRuns+historicalRuns,currentEvents,historicalEvents,events:currentEvents+historicalEvents,
     currentPolicies,historicalPolicies,policies:currentPolicies+historicalPolicies,repositoryMappings:payload.repositories.length+sum('repositoryMappings'),forkMappings:payload.forks.length+sum('forkMappings'),
     gitMappings:payload.repositories.length+payload.forks.length+sum('gitMappings'),currentOperations,historicalOperations,operations:currentOperations+historicalOperations,
@@ -142,10 +234,10 @@ function operationReferences(payload,importIds){
 }
 
 /** Capture a complete revision. Raw coordinator state and provider responses are never selected. */
-export async function buildWorkspaceBackup(snapshot,exportedAt=new Date().toISOString()){
+export async function buildWorkspaceBackup(snapshot,exportedAt=new Date().toISOString(),backupLedgers){
   if(!snapshot?.workspace||Object.hasOwn(snapshot,'page')||Object.hasOwn(snapshot.workspace,'page')||!Number.isSafeInteger(snapshot.revision)||snapshot.revision<0)
     refuse('A complete retained workspace revision is required. A page is not a backup.');
-  const source=structuredClone(snapshot),state=source.workspace;
+  const source=structuredClone(snapshot),state=source.workspace,ledgers=validateBackupLedgers(backupLedgers);
   if(!record(state.projects)||!Array.isArray(state.tasks)||!Array.isArray(state.runs)||!Array.isArray(state.events)||!record(source.operations))refuse('Complete retained collections are required.');
   const totals={projects:Object.keys(state.projects).length,tasks:state.tasks.length,runs:state.runs.length,operations:Object.keys(source.operations).length,events:state.events.length};
   for(const [name,limit] of Object.entries(BACKUP_LIMITS))if(totals[name]>limit)refuse('Workspace backup exceeds its '+name+' limit; no records were truncated.');
@@ -172,7 +264,7 @@ export async function buildWorkspaceBackup(snapshot,exportedAt=new Date().toISOS
     jobs,
     repositories:Object.entries(source.repositories??{}).map(([taskId,name])=>({taskId,name})),
     forks:Object.entries(source.forks??{}).map(([runId,fork])=>({runId,name:fork.name})),
-    checkPolicies:Object.entries(source.checkPolicies??{}).map(([runId,policy])=>({runId,...select(policy,['definition','definitionSha256','image'])})),boundary};
+    checkPolicies:Object.entries(source.checkPolicies??{}).map(([runId,policy])=>({runId,...select(policy,['definition','definitionSha256','image'])})),ledgers,boundary};
   const observed=counts(payload);for(const [name,limit] of Object.entries(BACKUP_LIMITS))if(observed[name]>limit)refuse('Workspace backup exceeds its '+name+' limit; no records were truncated.');
   const archive={format:WORKSPACE_BACKUP_FORMAT,sha256:await checksum(payload),payload};
   return readWorkspaceBackup(JSON.stringify(archive),archive.sha256);
@@ -185,7 +277,7 @@ export async function readWorkspaceBackup(text,expectedSha256){
   if(!fields(archive,['format','sha256','payload'])||archive.format!==WORKSPACE_BACKUP_FORMAT||!hash(expectedSha256)
     ||archive.sha256!==expectedSha256||await checksum(archive.payload)!==expectedSha256)refuse('Workspace backup checksum differs from the expected digest.');
   const p=archive.payload;
-  if(!fields(p,['exportedAt','sourceRevision','workspace','projects','resources','handoffs','operations','events','jobs','repositories','forks','checkPolicies','priorImports','boundary'])
+  if(!fields(p,['exportedAt','sourceRevision','workspace','projects','resources','handoffs','operations','events','jobs','repositories','forks','checkPolicies','priorImports','ledgers','boundary'])
     ||timestamp(p.exportedAt)===null||!Number.isSafeInteger(p.sourceRevision)||p.sourceRevision<0
     ||!fields(p.workspace,['id','name','version','createdAt','provider'])||!identifier(p.workspace.id)||typeof p.workspace.name!=='string'||p.workspace.name.length>200
     ||!Number.isSafeInteger(p.workspace.version)||p.workspace.version<0||timestamp(p.workspace.createdAt)===null||p.workspace.provider!=='cloudflare-artifacts'
@@ -253,6 +345,7 @@ export async function readWorkspaceBackup(text,expectedSha256){
     ||!identifier(event.id)||timestamp(event.at)===null||typeof event.type!=='string'||event.type.length>100||typeof event.message!=='string'||event.message.length>10000
     ||event.projectId!=null&&!projects.has(event.projectId)||event.taskId!=null&&!tasks.has(event.taskId)||event.runId!=null&&!runs.has(event.runId)
     ||event.repositoryEvent!==undefined&&(!validBackupRepositoryEvent(event.repositoryEvent)||event.repositoryEvent.projectIds.some(id=>!projects.has(id))||event.repositoryEvent.runIds.some(id=>!runs.has(id))))refuse('Invalid retained workspace event.');
+  p.ledgers=validateBackupLedgers(p.ledgers);
   operationReferences(p,imports);
   const expectedResources=recoveryResources(p.projects,p.handoffs,p.operations,p.jobs,p.events,p.priorImports);
   if(canonical(p.resources)!==canonical(expectedResources))refuse('Recovery resource inventory differs from all retained Git roots.');
@@ -263,6 +356,7 @@ export async function readWorkspaceBackup(text,expectedSha256){
 export function workspaceBackupPreview(archive){
   const p=archive.payload;
   return {format:WORKSPACE_BACKUP_FORMAT,archiveSha256:archive.sha256,sourceWorkspaceId:p.workspace.id,sourceRevision:p.sourceRevision,exportedAt:p.exportedAt,
+    ledgerCapture:p.ledgers.capture,
     counts:counts(p),projects:p.projects.map(project=>({id:project.id,name:project.name,mainCommit:project.mainCommit,commits:p.resources.find(resource=>resource.kind==='project'&&resource.projectId===project.id).commits.length})),
     priorImports:p.priorImports.map(prior=>({id:prior.id,importedAt:prior.importedAt,importedBy:prior.importedBy,workspaceId:prior.archive.payload.workspace.id,counts:counts(prior.archive.payload)})),
     resources:p.resources.map(resource=>({...resource,commits:resource.commits.length})),

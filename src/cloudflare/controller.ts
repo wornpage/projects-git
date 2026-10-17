@@ -27,9 +27,10 @@ import type {RepositoryPermission} from '../core/repository-access.mjs';
 import {discoveryParameter, listRepositories, inspectRepository} from './repository-discovery.ts';
 import {projectOperationalMetrics} from '../core/operational-metrics.mjs';
 import {buildWorkspaceBackup,readWorkspaceBackup,workspaceBackupPreview} from '../core/workspace-backup.mjs';
-import {readWorkspaceRecovery,retainWorkspaceRecovery,workspaceRecoverySummary,requireFreshRecoveryResource,quarantinedRecoveryNames} from '../core/workspace-recovery.mjs';
+import {readWorkspaceRecovery,retainWorkspaceRecovery,workspaceRecoverySummary,requireFreshRecoveryResource,quarantinedRecoveryNames,recoveryDestinationEmpty,recoveryLiveLedgerRows} from '../core/workspace-recovery.mjs';
 import {beginOperationTiming,finishOperationTiming,operationTimings} from '../core/operation-timing.mjs';
 import type {OperationTiming} from '../core/operation-timing.mjs';
+import type {BackupCapture} from './workspace-store.ts';
 
 const sampleTask = { title: 'Make checkout totals trustworthy', owner: 'Cloudflare coordinator', purpose: 'Calculate exact integer-cent totals and reject invalid inputs and unsafe totals.',
   criteria: ['Use safe integer cents.', 'Reject invalid quantities and prices.', 'Preserve valid inputs and reject unsafe totals.'] };
@@ -119,6 +120,7 @@ export interface SnapshotPage {
 export interface SnapshotStore {
   lockProjectAccess(projectId:string):()=>void;
   read(): HostedSnapshot;
+  captureBackup(): BackupCapture;
   operation(key: string): Operation | undefined;
   project(id: string): Project | undefined;
   readPage(request: NonNullable<ReturnType<typeof parseWorkspacePage>>): SnapshotPage;
@@ -569,7 +571,7 @@ export class HostedController {
 
   async workspaceBackup() {
     this.requireOwner();
-    const snapshot=this.store.read(),backup=await coreAsync(()=>buildWorkspaceBackup(snapshot));
+    const {snapshot,backupLedgers}=this.store.captureBackup(),backup=await coreAsync(()=>buildWorkspaceBackup(snapshot,new Date().toISOString(),backupLedgers));
     this.checkBinding();
     if(this.store.identity().revision!==snapshot.revision)throw new ApiError(409,'STALE_WORKSPACE_BACKUP','Workspace history changed during export. Read the current revision; no partial backup was returned.');
     return backup;
@@ -591,7 +593,10 @@ export class HostedController {
       if(!/^[a-f0-9]{64}$/.test(id)||!Object.hasOwn(entries,id))throw new ApiError(404,'RECOVERY_IMPORT_NOT_FOUND','Recovery import not found.');
       const entry=entries[id];return archiveOnly?structuredClone(entry.archive):{...workspaceRecoverySummary(id,entry),preview:workspaceBackupPreview(entry.archive)};
     }
-    return {workspaceId:snapshot.workspace.id,revision:snapshot.revision,current:{projects:Object.keys(snapshot.workspace.projects??{}).length,tasks:snapshot.workspace.tasks.length,runs:snapshot.workspace.runs.length},
+    const capture=this.store.captureBackup();
+    if(capture.snapshot.revision!==snapshot.revision)throw new ApiError(409,'STATE_CONFLICT','Recovery destination changed during readback.');
+    const liveLedgerRows=core(()=>recoveryLiveLedgerRows(capture.backupLedgers));
+    return {workspaceId:snapshot.workspace.id,revision:snapshot.revision,restoreAllowed:recoveryDestinationEmpty(snapshot)&&liveLedgerRows===0,current:{projects:Object.keys(snapshot.workspace.projects??{}).length,tasks:snapshot.workspace.tasks.length,runs:snapshot.workspace.runs.length,liveLedgerRows},
       imports:Object.entries(entries).map(([key,entry])=>workspaceRecoverySummary(key,entry)),quarantinedNames:quarantinedRecoveryNames(snapshot)};
   }
 
@@ -604,9 +609,19 @@ export class HostedController {
     if(snapshot.workspace.id!==request.expectedWorkspaceId)throw new ApiError(403,'WORKSPACE_RESTORE_DESTINATION','The confirmed destination differs from this workspace.');
     const prior=this.checkOperation(snapshot.operations[key],fingerprint,'workspace-restore');
     if(prior?.state==='complete')return {workspaceId:snapshot.workspace.id,recoveryImportId:prior.recoveryImportId!,replayed:true,historical:true,restoresAuthority:false,resumesWork:false,codeAvailable:false};
+    const capture=this.store.captureBackup();
+    if(capture.snapshot.revision!==snapshot.revision)throw new ApiError(409,'STATE_CONFLICT','The recovery destination changed.');
+    if(core(()=>recoveryLiveLedgerRows(capture.backupLedgers))!==0)throw new ApiError(409,'WORKSPACE_RESTORE_NOT_EMPTY','The destination retains live provider-effect ledgers. Preserve them and use an empty destination.');
     const id=core(()=>retainWorkspaceRecovery(snapshot,request,{ownerSubject:this.authority.principal.id,importedAt:new Date().toISOString()}));
     snapshot.operations[key]={kind:'workspace-restore',state:'complete',fingerprint,recoveryImportId:id};
-    snapshot.workspace.version++;this.save(snapshot);
+    snapshot.workspace.version++;
+    // Validate the complete post-save archive before committing an immutable import.
+    await coreAsync(()=>buildWorkspaceBackup({...snapshot,revision:snapshot.revision+1},new Date().toISOString(),capture.backupLedgers));
+    this.requireOwner();const latest=this.store.captureBackup();
+    const raced=this.checkOperation(latest.snapshot.operations[key],fingerprint,'workspace-restore');
+    if(raced?.state==='complete')return {workspaceId:latest.snapshot.workspace.id,recoveryImportId:raced.recoveryImportId!,replayed:true,historical:true,restoresAuthority:false,resumesWork:false,codeAvailable:false};
+    if(latest.snapshot.revision!==snapshot.revision||core(()=>recoveryLiveLedgerRows(latest.backupLedgers))!==0)throw new ApiError(409,'STATE_CONFLICT','Recovery destination or live ledgers changed before commit.');
+    this.save(snapshot);
     return {workspaceId:snapshot.workspace.id,recoveryImportId:id,replayed:false,historical:true,restoresAuthority:false,resumesWork:false,codeAvailable:false};
   }
 
