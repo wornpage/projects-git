@@ -27,12 +27,13 @@ function fixture() {
     showModal(){this.open=true;}
     close(){if(!this.open)return;this.open=false;queuedCloses.push(()=>this.dispatch('close'));}
   }
-  const ids=['open-workspace-navigation','workspace-home','project-views','task-count','project-navigation','new-project','inspector-dialog','inspector-title','inspector-content','close-inspector','task-launcher','new-task-summary'];
+  const ids=['open-workspace-navigation','workspace-home','project-views','task-count','project-navigation','new-project','open-installation','workspace-topbar','workspace-utilities','inspector-dialog','inspector-title','inspector-content','close-inspector','task-launcher','new-task-summary'];
   const nodes=Object.fromEntries(ids.map(id=>[id,new Node(id)]));
   const root=new Node(),sidebar=new Node(),panel=nodes['inspector-content'];
   root.append(sidebar,nodes['inspector-dialog']);
+  root.append(nodes['workspace-topbar']);nodes['workspace-topbar'].append(nodes['workspace-utilities']);
   root.append(nodes['task-launcher']);nodes['task-launcher'].append(nodes['new-task-summary']);
-  sidebar.append(nodes['workspace-home'],nodes['project-navigation'],nodes['new-project'],nodes['open-workspace-navigation']);
+  sidebar.append(nodes['workspace-home'],nodes['project-navigation'],nodes['new-project'],nodes['open-installation'],nodes['open-workspace-navigation']);
   nodes['project-navigation'].append(nodes['project-views']);nodes['project-views'].append(nodes['task-count']);
   nodes['inspector-dialog'].append(nodes['inspector-title'],nodes['close-inspector'],panel);
   const find=(parent,id)=>parent.id===id?parent:parent.children.map(child=>find(child,id)).find(Boolean)??null;
@@ -61,11 +62,15 @@ test('phone navigation reuses live counters and handlers and restores the same n
   f.nodes['open-workspace-navigation'].dispatch('click');assert.equal(f.controller.isOpen(),true);
   assert.equal(f.panel.children[0].children[0],home);assert.equal(f.panel.children[0].children[1],views);
   assert.equal(f.panel.children[0].children[2],f.nodes['new-project']);
+  assert.equal(f.panel.children[0].children[3],f.nodes['open-installation']);
+  assert.equal(f.panel.children[0].children[4],f.nodes['workspace-utilities']);
   views.fullCandidates=321;views.dispatch('click');assert.equal(clicks,1);
   f.nodes['inspector-dialog'].close();assert.equal(f.controller.isOpen(),true,'native close dispatches asynchronously');
   await f.flushClose();assert.equal(f.controller.isOpen(),false);assert.equal(f.state.restores,1);
   assert.equal(f.sidebar.children[0],home);assert.equal(f.nodes['project-navigation'].children[0],views);
   assert.equal(f.nodes['new-project'].parent,f.sidebar);
+  assert.equal(f.nodes['open-installation'].parent,f.sidebar);
+  assert.equal(f.nodes['workspace-utilities'].parent,f.nodes['workspace-topbar']);
   assert.equal(views.fullTasks,120);assert.equal(views.fullCandidates,321);views.dispatch('click');assert.equal(clicks,2);
 });
 

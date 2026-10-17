@@ -25,7 +25,7 @@ function fixture() {
   Object.defineProperty(globalThis,'navigator',{configurable:true,value:{clipboard:{writeText:text=>new Promise((resolve,reject)=>copies.push({text,resolve,reject}))}}});
   const dialogs=createDialogManager(document);dialogs.register('project-connection-dialog');
   const captureSession=()=>{const session=context.session,identity=JSON.stringify(context.workspace.authentication?.principal??null);return()=>session===context.session&&identity===JSON.stringify(context.workspace.authentication?.principal??null);};
-  const ports={...context,getContext:()=>context,dialogs,captureSession,projectDiscovery:{find:async query=>projectCatalog(context.workspace,parseProjectCatalog(new URLSearchParams({q:query})))}};
+  const ports={...context,getContext:()=>context,dialogs,captureSession,prepareOpen:()=>document.activeElement,projectDiscovery:{find:async query=>projectCatalog(context.workspace,parseProjectCatalog(new URLSearchParams({q:query})))}};
   Object.assign(context,createNavigation(ports),createContinuationDialog(ports),createRequirementsForm(ports));
   context.showWorkbenchDialog=dialogs.show;
   return {context,$,calls,copies,opened,notices,downloads,document,ids};

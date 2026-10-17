@@ -34,6 +34,9 @@ export function createProjectsView({getContext, disclosure, collections, selectP
   return () => {
     const {workspace,busy,demo}=getContext(),projects=Object.values(workspace.projects??{}),page=workspace.page;
     const rows=projects.map(project=>({project,brief:projectAttentionBrief(workspace,project.id)}));
+    const nextRow=rows.filter(row=>row.brief.needsAttention&&row.brief.next).sort((a,b)=>a.brief.priority-b.brief.priority)[0];
+    const next=nextRow?.brief.next;
+    const secondaryCreate=Boolean(next||workspace.personalWorkspace?.starterAvailable&&!projects.length);
     const matches=(row,filter)=>filter==='all' || filter==='attention'&&row.brief.needsAttention
       || filter==='review'&&row.brief.review>0 || filter==='blocked'&&(row.brief.blocked>0||row.project.codeConnected===false)
       || filter==='active'&&row.brief.active>0;
@@ -54,33 +57,37 @@ export function createProjectsView({getContext, disclosure, collections, selectP
         el('button',{id:'projects-refresh','data-focus-fallback':'projects-page-status',class:'button button-small',disabled:busy,onclick:()=>changeProjectPage(0,true)},'Refresh projects'))) : null;
     return el('div',{class:'projects-home'},
       workspace.personalWorkspace && !projects.length ? panel('Your isolated workspace', el('div',{class:'panel-body'},
-        el('p',{},'Your projects, tasks and repositories are separate from other visitors and the working workspace. Start with a fresh checkout project, then edit its task queue, requirements and project policy.'),
-        el('p',{class:'small muted'},'This trial has no connected agents or model key. It does not run agents or manufacture completed work.'),
+        el('p',{},'Create a starter project in your isolated workspace.'),
+        el('p',{class:'small muted'},'No agents or model key are connected. This trial cannot run work.'),
         !projects.length && (!page || page.totalProjects === 0) && workspace.personalWorkspace.starterAvailable
           ? el('button',{type:'button',class:'button button-primary',disabled:busy,onclick:createStarter},busy?'Preparing starter…':'Create my starter project') : null)) : null,
-      workspace.authentication && !workspace.authentication.permissions.manage ? null : el('div',{class:'directory-actions'},
+      next?el('section',{class:'next-action-bar','aria-label':'Next workspace action'},el('div',{},el('span',{class:'section-kicker'},nextRow.project.name),el('strong',{},next.title)),
+        el('button',{type:'button',class:'button button-primary',onclick:()=>switchView(next.view,next.taskId,next.runId??null)},next.action+' →')):null,
+      workspace.authentication && !workspace.authentication.permissions.manage ? null : secondaryCreate ? disclosure('directory-create-options','Create a project',el('div',{class:'directory-actions'},
+        el('button',{type:'button',class:'button button-small',disabled:busy,onclick:()=>openTaskComposer('repository')},'+ New project'),
+        workspace.capabilities?.demo ? el('button',{type:'button',class:'button button-small',onclick:()=>openTaskComposer('sample')},'Try a sample project') : null)) : el('div',{class:'directory-actions'},
         el('button',{type:'button',class:'button button-primary button-small',disabled:busy,onclick:()=>openTaskComposer('repository')},'+ New project'),
         workspace.capabilities?.demo ? el('button',{type:'button',class:'button button-small',onclick:()=>openTaskComposer('sample')},'Try a sample project') : null),
       projects.length ? el('section',{class:'repository-catalog','aria-label':'Connected repositories'},
         el('div',{class:'repository-catalog-heading'},el('div',{},el('h2',{},'Connected repositories'),
           el('p',{class:'small muted'},(demo?'Example data':workspace.provider==='cloudflare-artifacts'?'Cloudflare Artifacts':'Local Git workspace')+' · '+rows.filter(row=>row.brief.needsAttention).length+' / '+rows.length+' need attention on this page')),
           el('button',{class:'button button-small',type:'button',onclick:openProjectSearch},'Find across workspace')),
-        el('p',{class:'repository-scope'},rows.length+' loaded / '+(page?.totalProjects??rows.length)+' connected projects. Attention order and filters apply to this page. Find across workspace searches all project names.'),
+        el('p',{class:'repository-scope'},rows.length+' loaded / '+(page?.totalProjects??rows.length)+' connected projects. Filters apply to this page; Find across workspace searches all projects.'),
         catalog.controls,
         group('Needs attention',catalog.items.filter(row=>row.brief.needsAttention),true),
         group('Other repositories',catalog.items.filter(row=>!row.brief.needsAttention)),
         !catalog.items.length ? el('p',{class:'no-command-results'},'No loaded repositories match these filters. Clear the filters or find a project across the workspace.') : null,
         catalog.navigation)
         : workspace.personalWorkspace ? null : panel('Your first project',el('div',{class:'panel-body'},
-          el('p',{},workspace.authentication && !workspace.authentication.permissions.manage ? 'The workspace owner connects projects and queues tasks. Your assigned work will appear here.' : workspace.capabilities?.repositoryCreate ? 'Start with New project. Create a private repository or connect existing code, then describe one useful task.' : 'Start with New project. Connect committed code, then describe one useful task.'),
-          el('ol',{class:'journey-steps'},
+          el('p',{},workspace.authentication && !workspace.authentication.permissions.manage ? 'Your assigned work appears after the owner adds a project.' : workspace.capabilities?.repositoryCreate ? 'Create a private repository or connect existing code, then add a task.' : 'Connect committed code, then add your first task.'),
+          disclosure('first-project-guide','How work moves through a project',el('ol',{class:'journey-steps'},
             el('li',{},workspace.capabilities?.repositoryCreate ? 'Choose Create repository to start with a README, or connect an existing Artifacts repository and confirm its current commit.' : workspace.provider==='cloudflare-artifacts' ? 'Choose an Artifacts repository in New project, then confirm the loaded default branch and base commit.' : 'Enter your local repository path, read its current commit, and confirm the code to use.'),
             el('li',{},'Write the task purpose and acceptance requirements.'),
             el('li',{},'Open Project settings → Connect agent for the assignment instructions. Your coding chat runs the agent.'),
             el('li',{},'Configure independent checks for submitted changes. In the hosted app, assign an independent reviewer.'),
             el('li',{},workspace.provider==='cloudflare-artifacts'
               ? 'Choose integration policy in Project settings. Optional automatic integration handles eligible candidates after current checks and independent review; alternatives and exceptions need an owner decision. Manual acceptance and merge remain available. Merging does not deploy.'
-              : 'Accept a suitable candidate, then request its guarded merge. The hosted app also supports optional automatic integration. Merging does not deploy.')))),
+              : 'Accept a suitable candidate, then request its guarded merge. The hosted app also supports optional automatic integration. Merging does not deploy.'))))),
       pagination(),
       projects.length ? el('div',{},
         disclosure('project-count-help','About catalog counts',

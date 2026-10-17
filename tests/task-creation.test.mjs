@@ -182,6 +182,7 @@ for(const chosen of [null,2,4])test(`model allowance submits ${chosen ?? 'the on
   if(chosen!==null)f.$('#model-candidates').value=String(chosen);
   f.context.workspace.capabilities.model=true;f.context.workspace.execution={model:'test transport'};
   f.$('#task-launcher').showModal();f.controller.activate('sample');f.controller.update();
+  assert.ok(!f.$('#task-source-note').textContent.includes('scripted agents'),'The sample source does not relabel model execution as scripted');
   await f.$('#model-form').dispatch('input');
   const count=chosen??1;
   assert.match(f.$('#model-budget').textContent,new RegExp(count*2+' requests and '+count*8192+' output tokens'));

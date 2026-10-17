@@ -106,7 +106,7 @@ export function createPublicationView({getContext, captureSession, api, mutate, 
         el('li',{},'Locally merged'),el('li',{},record?.pr?'PR created':'PR not created'),el('li',{},record?.status==='merged'?'Merged on GitHub':'GitHub merge not recorded')),
       record?recordBody(run,record,disabled,'panel'):configured?el('div',{},
         el('p',{},'Your local merge is saved. Preview publication to the configured private repository: '+workspace.githubPublication.repository+'.'),
-        el('button',{id:'publication-action-'+run.id,type:'button',class:'button button-primary',disabled,onclick:()=>preview(run)},'Preview GitHub PR')):
+        el('button',{id:'publication-action-'+run.id,type:'button',class:'button button-small',disabled,onclick:()=>preview(run)},'Preview GitHub PR')):
         el('p',{},'Your local merge is saved. GitHub publication is not configured on this local server.')));
   };
 }

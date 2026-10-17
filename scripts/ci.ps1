@@ -45,7 +45,10 @@ if ($installed) {
     }
     Invoke-CiCheck "types" { npm run typecheck } | Out-Null
     Invoke-CiCheck "qualification-types" { node node_modules/typescript/bin/tsc -p tests/qualification/tsconfig.json --noEmit } | Out-Null
-    Invoke-CiCheck "build" { npm run build } | Out-Null
+    Invoke-CiCheck "build" {
+        npm run check:design
+        if ($LASTEXITCODE -eq 0) { npm run build }
+    } | Out-Null
 }
 node scripts/ci-receipt.mjs finish
 exit $LASTEXITCODE

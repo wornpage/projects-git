@@ -60,11 +60,11 @@ function ownerReviewFixture(){
   return f;
 }
 
-test('candidate continuation is reachable without expanding context and targets the selected run',async()=>{
+test('candidate continuation stays direct on cards and remains in labeled review tools',async()=>{
   const f=fixture();f.ports.openContinuation=runId=>f.calls.push(['continue',runId]);
   const view=createReviewView(f.ports),page=view(),button=page.querySelector('#continue-agent-'+f.run.id);
   assert.ok(button);assert.equal(button.disabled,false);
-  for(let parent=button.parentElement;parent;parent=parent.parentElement)assert.notEqual(parent.tagName,'DETAILS');
+  assert.equal(page.querySelector('#candidate-tools-'+f.run.id).querySelector('#continue-agent-'+f.run.id),button);
   const details=page.querySelector('#review-context-'+f.task.id+'-'+f.run.id);
   assert.equal(details.open,false);assert.equal(details.querySelector('#continue-agent-'+f.run.id),null);
   const before=structuredClone(f.workspace);await button.dispatch('click');
@@ -194,7 +194,7 @@ test('demo review explains its illustrative records while a working hosted works
  assert.match(hosted,/No independent reviewer is configured/);assert.ok(!hosted.includes('Illustrative review'));
  f.workspace.provider='local-git';
  const local=createReviewView(f.ports)().textContent;
- assert.match(local,/Local loopback decisions are attribution/);assert.ok(!local.includes('No independent reviewer is configured'));
+ assert.match(local,/Local attribution only/);assert.ok(!local.includes('No independent reviewer is configured'));
  assert.equal(f.calls.length,0);
 });
 
@@ -242,8 +242,10 @@ test('all four page modules render selected project work without leaking another
   const f=fixture();
   for(const [name,create] of Object.entries({overview:ports=>createTaskViews(ports).task,work:createWorkView,review:createReviewView,evidence:createEvidenceView})){
     f.context.view=name;
-    const text=create(f.ports)().textContent;
-    assert.match(text,name==='overview'?/Task brief/:/Selected candidate/);assert.ok(!text.includes('Foreign work'),name);assert.ok(!text.includes('Foreign candidate'),name);
+    const page=create(f.ports)(),text=page.textContent;
+    if(name==='evidence')assert.equal(page.querySelector('#candidate-navigation').attrs['aria-label'],'Selected candidate · '+f.run.label);
+    else assert.match(text,name==='overview'?/Task brief/:/Selected candidate/);
+    assert.ok(!text.includes('Foreign work'),name);assert.ok(!text.includes('Foreign candidate'),name);
   }
 });
 
@@ -402,17 +404,17 @@ test('rechecking a retained commit reveals its refreshed report rather than the 
 
 test('shared candidate navigation uses the current view and selection when activated',async()=>{
   const f=fixture();f.workspace.runs.push({...f.run,id:crypto.randomUUID(),label:'Another result'});
-  const nav=f.ports.parts.candidateNav(f.task),button=nav.children[2];
+  const nav=f.ports.parts.candidateNav(f.task),button=nav.querySelector('button');
   f.context.view='evidence';f.context.selectedRun='different';await button.dispatch('click');
   assert.deepEqual(f.calls,[['work',f.task.id,null]]);
 });
 
-test('one task change preserves its identity and return to the candidate collection',async()=>{
+test('candidate navigation preserves position and return without repeating the page title',async()=>{
   const f=fixture();
   const nav=f.ports.parts.candidateNav(f.task);
-  assert.equal(nav.attrs['aria-label'],'Selected candidate');
+  assert.equal(nav.attrs['aria-label'],'Selected candidate · '+f.run.label);
   assert.match(nav.textContent,/CANDIDATE 1 OF 1/);
-  assert.match(nav.textContent,/Selected candidate/);
+  assert.ok(!nav.textContent.includes(f.run.label));
   const back=nav.querySelector('button');assert.match(back.textContent,/Back to all 1 candidates/);
   await back.dispatch('click');assert.deepEqual(f.calls,[['work',f.task.id,null]]);
 });
@@ -453,6 +455,11 @@ test('review section links select content, update the fragment and focus the cho
     assert.equal(document.activeElement.id,'review-decision');
     assert.deepEqual(locations,['#review-decision']);assert.equal(f.calls.length,0);
     assert.deepEqual(sections,[{id:'review-decision',fragment:'#review-decision'}]);
+    const next=page.querySelector('#review-next-action');assert.equal(next.hidden,false);
+    await next.dispatch('click');
+    assert.equal(grid.attrs['data-active-section'],'verification');
+    assert.equal(document.activeElement.id,'verification');
+    assert.equal(f.calls.length,0,'The primary next-step action navigates; it does not run checks or record a decision');
   } finally {
     if(previousHistory===undefined)delete globalThis.history;else globalThis.history=previousHistory;
   }

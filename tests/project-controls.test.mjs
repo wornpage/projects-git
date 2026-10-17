@@ -12,18 +12,26 @@ test('project switching uses the full workspace count, including unloaded projec
   const pickerSource=source.slice(source.indexOf('function projectPicker('),source.indexOf('\nfunction updateProjectNavigation('));
   const project={id:'one',name:'First'},workspace={projects:{one:project},page:{totalProjects:1}};
   const calls=[];
-  const picker=runInNewContext(pickerSource+'\nprojectPicker',{workspace,el,currentProject:()=>project,
-    tasksInProject:()=>[],selectProject:id=>calls.push(id),switchView:view=>calls.push(view)});
-  assert.equal(picker(),null);
+  let selected=project;
+  const picker=runInNewContext(pickerSource+'\nprojectPicker',{workspace,el,currentProject:()=>selected,
+    projectDiscovery:{items:()=>Object.values(workspace.projects)},taskCreation:{starting:false},openTaskComposer:source=>calls.push(source),
+    selectProject:id=>calls.push(id),switchView:view=>calls.push(view)});
+  const options=node=>[...node.children].flatMap(child=>child.tagName==='OPTGROUP'?child.children:[child]);
+  assert.match(options(picker().querySelector('select'))[0].textContent,/All projects \(1\)/);
   workspace.page.totalProjects=3;
   const select=picker().querySelector('select');
-  assert.deepEqual(select.options.map(option=>option.value),['one','all']);
-  assert.match(select.options[1].textContent,/Browse all 3 projects/);
+  assert.deepEqual(options(select).map(option=>option.value),['all','one','new']);
+  assert.match(options(select)[0].textContent,/All projects \(3\)/);
   select.value='all';await select.dispatch('change');assert.deepEqual(calls,['projects']);
   delete workspace.page;workspace.projects.two={id:'two',name:'Second'};
   const allProjects=picker().querySelector('select');
-  assert.deepEqual(allProjects.options.map(option=>option.value),['one','two']);
+  assert.deepEqual(options(allProjects).map(option=>option.value),['all','one','two','new']);
   allProjects.value='two';await allProjects.dispatch('change');assert.deepEqual(calls,['projects','two']);
+  selected=null;
+  const home=picker().querySelector('select');home.value='new';await home.dispatch('change');
+  assert.equal(home.value,'all');assert.equal(calls.at(-1),'repository');
+  workspace.authentication={permissions:{manage:false}};
+  assert.ok(!options(picker().querySelector('select')).some(option=>option.value==='new'));
 });
 
 test('project settings retain the header trigger and send labeled content to the native drawer',async()=>{

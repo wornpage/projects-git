@@ -85,40 +85,40 @@ export function projectMergeBlocker(workspace, run) {
 export function candidateOutcome(workspace, run) {
   const task = workspace.tasks.find(task => task.id === run.taskId);
   const merging = mergeState(workspace, run);
-  if (merging === 'running') return { label: 'Merge running', tone: 'running', next: 'Fresh checks and integration are in progress. Refresh reads status; wait for the recorded outcome.' };
-  if (merging === 'recovery-required') return { label: 'Merge recovery required', tone: 'fail', next: 'Inspect the retained checks, then choose Reconcile or retry merge in Review. The server reads the target first; fresh checks and another guarded merge may run. Refresh only reads status.' };
-  if (run.verificationPending) return { label: 'Verification running', tone: 'running', next: 'Wait for independent checks. The previous report remains visible; acceptance is blocked.' };
-  if (run.status === 'merged') return { label: 'Merged', tone: 'merged', next: 'View the retained result.' };
-  if (run.repositoryObservation?.requiresSubmission) return {label:'New push observed',tone:'awaiting_review',next:run.headCommit ? 'The Artifacts branch changed after submission. Prepare and submit a fresh assigned candidate; earlier reports and decisions remain history.' : 'Artifacts has received changed code. The assigned agent must submit its current commit through the authenticated workflow.'};
+  if (merging === 'running') return { label: 'Merge running', action: 'Follow merge', section: 'review-decision', tone: 'running', next: 'Fresh checks and integration are in progress. Refresh reads status; wait for the recorded outcome.' };
+  if (merging === 'recovery-required') return { label: 'Merge recovery required', action: 'Inspect merge recovery', section: 'review-decision', tone: 'fail', next: 'Inspect the retained checks, then choose Reconcile or retry merge in Review. The server reads the target first; fresh checks and another guarded merge may run. Refresh only reads status.' };
+  if (run.verificationPending) return { label: 'Verification running', action: 'Follow checks', section: 'verification', tone: 'running', next: 'Wait for independent checks. The previous report remains visible; acceptance is blocked.' };
+  if (run.status === 'merged') return { label: 'Merged', action: 'View merged record', section: 'evidence', tone: 'merged', next: 'View the retained result.' };
+  if (run.repositoryObservation?.requiresSubmission) return {label:'New push observed', action: 'Inspect new push', section: 'candidate-changes',tone:'awaiting_review',next:run.headCommit ? 'The Artifacts branch changed after submission. Prepare and submit a fresh assigned candidate; earlier reports and decisions remain history.' : 'Artifacts has received changed code. The assigned agent must submit its current commit through the authenticated workflow.'};
   const project=workspace.projects?.[task?.projectId];
-  if(run.headCommit&&!['rejected','failed','superseded'].includes(run.status)&&project?.repositoryObservation&&project.repositoryObservation.headCommit!==task?.baseCommit)
-    return {label:'Update base needed',tone:'awaiting_review',next:'Project main changed. Update this candidate’s base, then renew its checks and review.'};
-  if (run.status === 'superseded') return { label: 'Previous base · retained', tone: 'retained', next: 'This candidate was preserved when the task moved to a new base. Review its replacement.' };
-  if (task?.acceptedRunId && task.acceptedRunId !== run.id) return { label: 'Retained alternative', tone: 'retained', next: 'Another candidate was chosen. This result remains available for comparison.' };
+  if(run.headCommit&&!['rejected','failed','superseded'].includes(run.status)&&project&&(project.mainCommit!==task?.baseCommit||project.repositoryObservation&&project.repositoryObservation.headCommit!==task?.baseCommit))
+    return {label:'Update base needed', action: 'Inspect base update', section: 'candidate-changes',tone:'awaiting_review',next:'Project main changed. Update this candidate’s base, then renew its checks and review.'};
+  if (run.status === 'superseded') return { label: 'Previous base · retained', action: 'Inspect retained changes', section: 'candidate-changes', tone: 'retained', next: 'This candidate was preserved when the task moved to a new base. Review its replacement.' };
+  if (task?.acceptedRunId && task.acceptedRunId !== run.id) return { label: 'Retained alternative', action: 'Compare retained changes', section: 'candidate-changes', tone: 'retained', next: 'Another candidate was chosen. This result remains available for comparison.' };
   const projectBlocker = run.status === 'accepted' ? projectMergeBlocker(workspace, run) : null;
-  if (projectBlocker) return {label:'Waiting for project merge',tone:'awaiting_review',next:'Another merge owns this project. Wait for its outcome or reconcile its retained intent before this merge can start.'};
+  if (projectBlocker) return {label:'Waiting for project merge', action: 'View merge status', section: 'review-decision',tone:'awaiting_review',next:'Another merge owns this project. Wait for its outcome or reconcile its retained intent before this merge can start.'};
   if (run.status === 'accepted' && run.review?.policy) {
     const active = project?.automaticMergePolicy?.enabled && project.automaticMergePolicy.version === run.review.policy.version;
     const stop = run.automaticMergeStop?.decisionId === run.review.policy.decisionId ? run.automaticMergeStop : null;
     const stopped = !active || Boolean(stop);
-    return {label:stopped ? 'Automatic merge stopped' : 'Policy approved · merge queued', tone:stopped ? 'fail' : 'accepted',
+    return {action:'Inspect integration status',section:'review-decision',label:stopped ? 'Automatic merge stopped' : 'Policy approved · merge queued', tone:stopped ? 'fail' : 'accepted',
       next:stop?.phase === 'before-write' ? 'Stopped before Git write. Inspect the retained checks and decision before a new owner decision or explicit retry.'
         : stopped ? 'The policy decision no longer authorizes automatic merge. Inspect the retained record before a new owner decision.'
           : 'The owner-enabled policy approved this change. Fresh merge checks run before Git is updated.'};
   }
   if (run.status === 'accepted') return workspace.provider === 'cloudflare-artifacts' && (!independentReviewStatus(workspace, run).passed || run.review?.codeReviewId !== run.codeReview?.id)
-    ? { label: 'Independent review required', tone: 'awaiting_review', next: 'Obtain independent code review, then renew owner acceptance. The earlier decision remains history.' }
-    : { label: 'Accepted · merge next', tone: 'accepted', next: 'Merge separately to update the task repository.' };
-  if (run.status === 'rejected') return { label: 'Rejected', tone: 'rejected', next: 'Inspect another candidate. The rejection and its evidence are retained.' };
-  if (run.status === 'failed') return { label: 'Execution failed', tone: 'failed', next: 'Inspect the retained error. This run produced no reviewable result.' };
-  if (['assigned', 'running'].includes(run.status)) return { label: run.origin === 'external-agent' ? run.status === 'running' ? 'Agent reported start' : run.checkoutState === 'preparing' ? 'Preparing code access' : workspace.provider === 'cloudflare-artifacts' ? 'Fork ready' : 'Checkout ready' : run.status === 'running' ? 'Running' : 'Waiting', tone: run.status, next: run.origin === 'external-agent' ? run.status === 'running' ? 'Continue directing this agent in its chat. Its submitted commit will appear here.' : 'Give the checkout and handoff instructions to your agent. Its submitted commit will appear here.' : 'The result will appear when execution finishes.' };
-  if (!run.evidence) return { label: 'Checks needed', tone: 'awaiting_review', next: run.checksConfigured ? 'Run the preserved check definition for this new commit, then inspect the result.' : 'Configure and run independent checks for this submitted commit before accepting it.' };
-  if (!independentlyVerified(workspace, run)) return { label: 'Recheck needed', tone: 'fail', next: 'Check this commit against the current requirements before accepting.' };
-  if (run.evidence.passed !== run.evidence.total || run.evidence.total === 0 || run.evidence.exitCode !== 0) return { label: 'Checks failed', tone: 'fail', next: 'Inspect the failures or record a rejection. Acceptance is unavailable.' };
+    ? { label: 'Independent review required', action: 'Open independent review', section: 'code-review', tone: 'awaiting_review', next: 'Obtain independent code review, then renew owner acceptance. The earlier decision remains history.' }
+    : { label: 'Accepted · merge next', action: 'Review merge', section: 'review-decision', tone: 'accepted', next: 'Merge separately to update the task repository.' };
+  if (run.status === 'rejected') return { label: 'Rejected', action: 'Read rejection', section: 'review-decision', tone: 'rejected', next: 'Inspect another candidate. The rejection and its evidence are retained.' };
+  if (run.status === 'failed') return { label: 'Execution failed', action: 'Inspect error', section: 'candidate-changes', tone: 'failed', next: 'Inspect the retained error. This run produced no reviewable result.' };
+  if (['assigned', 'running'].includes(run.status)) return { action:'Follow agent work',section:'candidate-changes',label: run.origin === 'external-agent' ? run.status === 'running' ? 'Agent reported start' : run.checkoutState === 'preparing' ? 'Preparing code access' : workspace.provider === 'cloudflare-artifacts' ? 'Fork ready' : 'Checkout ready' : run.status === 'running' ? 'Running' : 'Waiting', tone: run.status, next: run.origin === 'external-agent' ? run.status === 'running' ? 'Continue directing this agent in its chat. Its submitted commit will appear here.' : 'Give the checkout and handoff instructions to your agent. Its submitted commit will appear here.' : 'The result will appear when execution finishes.' };
+  if (!run.evidence) return { label: 'Checks needed', action: 'Configure checks', section: 'verification', tone: 'awaiting_review', next: run.checksConfigured ? 'Run the preserved check definition for this new commit, then inspect the result.' : 'Configure and run independent checks for this submitted commit before accepting it.' };
+  if (!independentlyVerified(workspace, run)) return { label: 'Recheck needed', action: 'Review current checks', section: 'verification', tone: 'fail', next: 'Check this commit against the current requirements before accepting.' };
+  if (run.evidence.passed !== run.evidence.total || run.evidence.total === 0 || run.evidence.exitCode !== 0) return { label: 'Checks failed', action: 'Inspect failed checks', section: 'verification', tone: 'fail', next: 'Inspect the failures or record a rejection. Acceptance is unavailable.' };
   const codeReview = independentReviewStatus(workspace, run);
-  if (workspace.provider === 'cloudflare-artifacts' && !codeReview.passed) return { label: codeReview.label, tone: 'awaiting_review', next: 'A separate read-only reviewer must assess this exact candidate and its evidence before owner acceptance.' };
+  if (workspace.provider === 'cloudflare-artifacts' && !codeReview.passed) return { action:'Open independent review',section:'code-review',label: codeReview.label, tone: 'awaiting_review', next: 'A separate read-only reviewer must assess this exact candidate and its evidence before owner acceptance.' };
   const alternatives = workspace.runs.some(other => other.taskId === run.taskId && other.id !== run.id && other.headCommit && other.status !== 'superseded');
-  return { label: 'Checks pass · review next', tone: 'awaiting_review', next: alternatives ? 'Compare the candidates and record your decision.' : 'Inspect the changes and record your decision.' };
+  return { label: 'Checks pass · review next', action: 'Review decision', section: 'review-decision', tone: 'awaiting_review', next: alternatives ? 'Compare the candidates and record your decision.' : 'Inspect the changes and record your decision.' };
 }
 
 export function taskOutcome(workspace, task) {

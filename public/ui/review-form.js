@@ -56,7 +56,7 @@ export function createReviewForm({getContext, drafts, api, mutate, refresh, save
       rejectButton.title = !draft.reviewer.trim() ? 'Enter your reviewer name.' : !draft.note.trim() ? 'Add feedback explaining the rejection.' : busy ? 'Wait for the current action.' : 'Reject this candidate and retain its evidence.';
       checklist.replaceChildren(el('p', { class: 'prerequisite-heading', role: 'status' }, missing.length ? missing.length + ' acceptance prerequisites remaining' : 'Ready to record your choice'),
         missing.length ? el('ul', {}, missing.map(rule => el('li', {}, rule.label))) : el('p', { class: 'small' }, 'All prerequisites are satisfied. Acceptance does not merge.'),
-        el('p', { class: 'head-hint' }, (rules.length - missing.length) + ' / ' + rules.length + ' prerequisites satisfied. The server checks current state again when you submit.'));
+        el('p', { class: 'head-hint' }, (rules.length - missing.length) + ' / ' + rules.length + ' prerequisites satisfied · rechecked on submission.'));
       explainDisabledButtons();
     };
     const noteId = 'review-note-' + run.id, nameId = 'reviewer-' + run.id;
@@ -79,8 +79,9 @@ export function createReviewForm({getContext, drafts, api, mutate, refresh, save
     const form = canReview ? el('form', { class: 'review-form', onsubmit: event => { event.preventDefault(); if (!acceptButton.disabled) submitReview(run, 'accept'); } },
       comparison, el('div', {}, el('label', { for: nameId }, hosted ? 'Owner' : 'Decision attribution'), reviewer),
       el('div', {}, el('label', { for: noteId }, 'Review note'), note,
-        el('p', { id: noteHelpId, class: 'small' }, 'Optional for acceptance; required for rejection. A blank acceptance note records only this commit and requirements r' + (task.revision ?? 1) + '.')), saveNote,
+        el('p', { id: noteHelpId, class: 'small' }, 'Optional when accepting; explain rejections. A blank note records this commit and requirements r' + (task.revision ?? 1) + '.')), saveNote,
       el('div', { class: 'review-buttons' }, acceptButton, rejectButton)) : null;
+    if(run.status==='accepted')acceptButton.classList.remove('button-primary');
     updateButtons();
     const record = run.review ? el('div', { class: 'review-record ' + (run.review.decision === 'reject' ? 'rejected' : '') },
       el('h3', {}, run.review.policy ? 'Approved by automatic policy' : run.review.decision === 'accept' ? 'Candidate accepted' : 'Candidate rejected'), el('p', {}, run.review.note),

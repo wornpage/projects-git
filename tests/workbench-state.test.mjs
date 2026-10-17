@@ -20,6 +20,19 @@ function fixture() {
 const review = (state, run, task) => ({ decision: 'accept', reviewer: 'QA', note: 'Inspected the changes', headCommit: run.headCommit,
   taskRevision: task.revision, ownerVersion: task.ownerVersion, comparisons: coordination(state, run.id).overlaps.map(({ runId, headCommit }) => ({ runId, headCommit })) });
 
+test('candidate guidance points to the current guarded stage without mutating work',()=>{
+  const {state,task,runs:[run]}=fixture();
+  const check=(section,action)=>{const before=structuredClone(state),result=candidateOutcome(state,run);assert.equal(result.section,section);assert.equal(result.action,action);assert.deepEqual(state,before);};
+  check('review-decision','Review decision');
+  const evidence=run.evidence;run.evidence=null;check('verification','Configure checks');
+  run.evidence=evidence;run.verificationPending=true;check('verification','Follow checks');delete run.verificationPending;
+  run.evidence={...evidence,passed:0,exitCode:1};check('verification','Inspect failed checks');
+  run.evidence=evidence;run.status='failed';check('candidate-changes','Inspect error');
+  run.status='rejected';check('review-decision','Read rejection');
+  run.status='awaiting_review';reviewRun(state,run.id,review(state,run,task));check('review-decision','Review merge');
+  mergeRun(state,run.id,{headCommit:run.headCommit,baseCommit:task.baseCommit,mergedCommit:run.headCommit});check('evidence','View merged record');
+});
+
 for (const status of ['assigned', 'running', 'failed']) test(`one committed result does not request comparison with an uncommitted ${status} attempt`, () => {
   const {state, task, runs: [delta]} = fixture();
   state.runs = [delta];

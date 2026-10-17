@@ -34,13 +34,13 @@ export function createWorkView({
       : run.startedAt ? 'Started ' + timeOnly(run.startedAt) : 'Awaiting execution';
     const footer = el('div', {class: 'agent-bottom'}, el('span', {}, activity),
       el('button', {class: 'button button-small', onclick: () => switchView('review', run.taskId, run.id)}, 'Inspect candidate ↗'),
-      demo ? null : el('button', {id: 'continue-agent-card-' + run.id, class: 'button button-small', onclick: () => openContinuation(run.id)}, 'Continue in your agent ↗'));
+      demo ? null : el('button', {id: 'continue-agent-card-' + run.id, class: 'text-link candidate-continue', onclick: () => openContinuation(run.id)}, 'Continue in your agent ↗'));
     const summary = run.summary || (run.status === 'running'
       ? 'Working in an isolated branch. The result will appear after the agent commits its changes.'
       : 'An isolated candidate with its own branch, commit, and evidence record.');
     return el('article', {class: 'agent-card ' + (run.id === selectedRun ? 'selected' : '')},
       heading, el('div',{class:'agent-code-line'},commitValue(run.headCommit),el('span',{class:'small'},run.changedFiles.length+' changed file'+(run.changedFiles.length===1?'':'s'))),
-      checks, el('p', {class: 'agent-summary'}, summary),
+      checks,
       result.earlierReport ? el('p',{class:'direction-note'},'Commit retained; its report covers r'+(run.evidence.taskRevision??1)+'. Current requirements are r'+brief.revision+'.') : null,
       result.earlierAssignment ? el('p',{class:'direction-note'},'Assigned under r'+run.assignedRevision+'. '+(run.status==='running'
         ? 'Send the updated requirements through your agent conversation.'
@@ -50,8 +50,10 @@ export function createWorkView({
       result.blockers.length ? disclosure('candidate-blockers-'+run.id,'Before acceptance · '+result.blockers.length+' unmet',
         el('ul',{class:'candidate-blockers'},result.blockers.map(text=>el('li',{},text)))) : null,
       executionSummary(run),
-      demo ? null : el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Checkout · '+run.label,details,externalHandoff(run))},'Checkout and handoff'),
-      run.error ? el('p', {class: 'inline-error'}, run.error) : null, footer);
+      run.error ? el('p', {class: 'inline-error'}, run.error) : null, footer,
+      disclosure('candidate-agent-report-'+run.id,demo?'Agent summary':'Agent summary and checkout',
+        el('p', {class: 'agent-summary'}, summary),
+        demo ? null : el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Checkout · '+run.label,details,externalHandoff(run))},'Checkout and handoff')));
   }
 
   function executionSummary(run) {
@@ -95,14 +97,19 @@ export function createWorkView({
       : 'No agent has been assigned. Start with one checkout for this task.';
     let assignment = repositoryAgents(task);
     const pendingAssignment = Boolean(assignment && hasPendingAssignment(task.id));
+    const showInstructions = !runs.length && !pendingAssignment && !demo && !agentsUnavailable && taskQueued(workspace,task) && (!workspace.authentication || workspace.authentication.permissions.manage);
     // An unresolved request must remain recoverable, even after a task closes.
     // Otherwise completed/accepted work cannot create another assignment.
     if (!pendingAssignment && (task.mergedCommit || task.acceptedRunId)) assignment = null;
     const assignmentAction = pendingAssignment ? 'Resolve pending assignment' : 'Prepare another candidate';
-    return el('div', {}, taskHeader(task),
-      !demo && !agentsUnavailable && taskQueued(workspace,task) && (!workspace.authentication || workspace.authentication.permissions.manage)
+    const next=taskOutcome(workspace,task);
+    return el('div', {class:'candidates-workflow'}, taskHeader(task),
+      runs.length?el('section',{class:'next-action-bar','data-compact-summary':String(next.label==='Checks pass · review next'),'aria-label':'Next task action'},el('div',{},el('span',{class:'section-kicker'},'Next step'),el('p',{},next.detail)),
+        el('button',{id:'candidate-next-action',type:'button',class:'button button-primary',onclick:()=>pendingAssignment?openInspector(assignmentAction,assignment):next.view==='work'
+          ? openInspector('Task progress',taskProgress(task,taskRuns(task.id))) : switchView(next.view,task.id,next.runId??null)},pendingAssignment?assignmentAction:next.view==='work'?'View task progress':next.action+' →')):null,
+      showInstructions
         ? el('button',{type:'button',id:'agent-instructions-'+task.id,class:'button button-primary button-small work-agent-instructions',onclick:event=>openAgentConnection(task.projectId,event.currentTarget)},'Get agent instructions') : null,
-      runs.length || agentsUnavailable ? null : assignment,
+      runs.length || agentsUnavailable ? null : showInstructions && assignment ? disclosure('manual-checkout-'+task.id,'Prepare a checkout manually',assignment) : assignment,
       runs.length ? rows.controls : null,
       runs.length ? rows.items.length?el('ul', { class: 'run-grid collection-list', 'aria-label':'Candidates for this task' }, rows.items.map(run=>el('li',{},agentCard(run,runs.indexOf(run),brief,results.get(run.id))))) : el('p',{},'No matching candidates. Clear filters to browse every retained result.') : panel(emptyTitle,
         el('p', { class: 'no-candidate' }, emptyText)),

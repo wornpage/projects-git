@@ -65,9 +65,9 @@ export function createTaskViews({
       sorts:[['newest','Newest first'],['oldest','Oldest first']],sortKey:item=>item.revision,pageSize:10});
     const body = el('div', { class: 'panel-body focused-task-body' },
       el('p', { class: 'task-intent' }, task.purpose),
-      demo ? null : el('button', { class:'button button-small', disabled:busy || !workspace.capabilities?.handoff,
+      demo ? null : disclosure('task-tools-'+task.id,'Task tools',el('button', { class:'button button-small', disabled:busy || !workspace.capabilities?.handoff,
         title:busy ? 'Wait for the current action.' : !workspace.capabilities?.handoff ? 'Task handoff export needs the updated server.' : 'Export this task, its requirements and all retained candidates.',
-        onclick:()=>downloadHandoff(task) }, 'Download task handoff'),
+        onclick:()=>downloadHandoff(task) }, 'Download task handoff')),
       prerequisitesPanel(task),
       el('div', { class: 'task-next-step' }, el('strong', {}, next.label), el('p', {}, next.detail),
         el('div', { class: 'task-next-step-actions' },
@@ -102,23 +102,25 @@ export function createTaskViews({
     const events = project ? projectContext(workspace, project.id).events : workspace.events;
     const pendingProject = pendingTaskStart?.source === 'project' && pendingTaskStart.projectId !== project?.id
       ? workspace.projects[pendingTaskStart.projectId] : null;
+    const next=project?projectBrief(workspace,project.id).next:null;
     return el('div', { class: 'project-overview' },
       !project ? el('p', { class: 'capability-note' }, 'Open Projects to connect code and create the work you want to do.') : null,
       pendingProject ? el('div', { class: 'capability-note' },
         el('p', {}, 'A task request for ' + pendingProject.name + ' is awaiting confirmation. Its destination and request ID are preserved.'),
         el('button', { class: 'button button-small', onclick: () => { selectProject(pendingProject.id); openTaskComposer('project:' + pendingProject.id); } }, 'Return to saved request')) : null,
+      next?el('section',{class:'next-action-bar','aria-label':'Next project action'},el('div',{},el('span',{class:'section-kicker'},'Next task'),el('strong',{},next.title)),
+        el('button',{id:'shell-next-action',type:'button',class:'button button-primary',onclick:()=>{
+          const current=projectBrief(getContext().workspace,project.id).next;if(current)switchView(current.view,current.taskId,current.runId??null);
+        }},next.action+' →')):null,
       project ? projectCoordinationView({workspace,projectId:project.id,collections,disclosure,
         onOpenTask:id=>switchView('overview',id,null),
         onOpenCandidates:id=>switchView('work',id,null)}) : null,
 
-      el('div',{class:'secondary-actions'},
-        project && projectBrief(workspace,project.id).next ? el('button',{id:'shell-next-action',type:'button',class:'text-link',onclick:()=>{
-          const next=projectBrief(getContext().workspace,project.id).next;if(next)switchView(next.view,next.taskId,next.runId??null);
-        }},'Open next work') : null,
+      disclosure('project-tools-'+(project?.id??'workspace'),'Project tools',el('div',{class:'secondary-actions'},
         project ? el('button',{type:'button',class:'text-link',onclick:()=>openInspector('Project activity and totals',projectHome(project),
           projectActivityDetails({workspace,projectId:project.id}),el('p',{class:'small'},'Latest '+Math.min(5,events.length)+' / '+events.length+' events'),timeline(events,5))},'Project activity') : null,
         el('button',{type:'button',class:'text-link',onclick:()=>openInspector(workspace.page?'Loaded project summary':'Workspace summary',workflow(),metrics(),
-          el('p',{class:'definition-note'},(workspace.page?'These totals cover the loaded projects. The workspace has '+workspace.page.totalProjects+' projects; execution capacity remains workspace-wide. ':'Workspace totals include every project and retained candidate. ')+'Latest reported checks sums each candidate’s latest report; earlier history is separate.'))},workspace.page?'Loaded project summary':'Workspace summary')));
+          el('p',{class:'definition-note'},(workspace.page?'These totals cover the loaded projects. The workspace has '+workspace.page.totalProjects+' projects; execution capacity remains workspace-wide. ':'Workspace totals include every project and retained candidate. ')+'Latest reported checks sums each candidate’s latest report; earlier history is separate.'))},workspace.page?'Loaded project summary':'Workspace summary'))));
   }
   return {queue:overview,task:()=>{const task=currentTask();return task ? focusedTask(task) : panel('Task',el('p',{},'Select a task from its project queue.'));}};
 }
