@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {createRequire} from 'node:module';
 import {transformSync} from 'esbuild';
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
-import {AccessVerifier} from '../src/cloudflare/access.ts';
+import {AccessVerifier,ownerBinding} from '../src/cloudflare/access.ts';
 import {HostedController} from '../src/cloudflare/controller.ts';
 import {WorkspaceStore} from '../src/cloudflare/workspace-store.ts';
 import {sqliteStorage} from './helpers/sqlite-store.mjs';
@@ -114,6 +114,30 @@ test('authenticated access save, replay and readback traverse the real Coordinat
   const response=await handler(await request(path,owner),f.env);assert.equal(response.status,200);
   const result=await response.json();assert.equal(result.access.version,1);assert.equal(result.access.grants[0].id,'member-person');
   assert.equal(result.recovery,null);assert.equal(Object.values(store.read().operations).filter(op=>op.kind==='project-access').length,1);
+});
+
+test('repository metrics traverse signed HTTP and SQLite without writes or provider work, and grants scope every read',async t=>{
+  const f=fixture(),{db,storage}=sqliteStorage();t.after(()=>db.close());
+  const store=new WorkspaceStore(storage,policy.workspaceId),snapshot=store.read(),projectId=crypto.randomUUID(),foreignId=crypto.randomUUID();
+  snapshot.workspace.authentication=ownerBinding(policy);
+  for(const id of [projectId,foreignId])snapshot.workspace.projects[id]={id,name:id===projectId?'Shared fixture':'Hidden fixture',repositoryName:'fixture',kind:'artifacts',
+    mainCommit:'a'.repeat(40),acceptingWork:true,policyVersion:1,access:{version:1,updatedAt:new Date().toISOString(),updatedBy:policy.ownerSubject,
+      grants:id===projectId?[{issuer:policy.issuer,kind:'member',id:'member-person',role:'read'}]:[]}};
+  snapshot.revision++;store.write(snapshot,0);const before=store.read();
+  const coordinator=Object.create(module.exports.WorkspaceCoordinator.prototype);
+  Object.assign(coordinator,{env:{WORKSPACE_ID:policy.workspaceId},store,schedule:async()=>{},controller:authority=>new HostedController(store,
+    {get:()=>assert.fail('A metrics read cannot use a provider')},authority)});
+  f.env.WORKSPACES={getByName:()=>coordinator};f.env.ACCESS_MEMBER_SUBJECTS='["member-person"]';f.env.ACCESS_REVIEWER_CLIENT_IDS=JSON.stringify([REVIEWER_CLIENT]);
+  const member=await jwt('owner',{sub:'member-person',email:'member@example.test'}),path='/api/projects/'+projectId+'/metrics';
+  for(const token of [await jwt(),member]){
+    const response=await handler(await request(path,token),f.env),result=await response.json();assert.equal(response.status,200,JSON.stringify(result));
+    assert.equal(result.projectId,projectId);assert.equal(result.scope,'complete-repository-history');
+    assert.equal(result.cost.actual,null);assert.equal(result.counts.tasks,0);assert.ok(!JSON.stringify(result).includes('Hidden fixture'));
+  }
+  assert.equal((await handler(await request('/api/projects/'+foreignId+'/metrics',member),f.env)).status,403);
+  for(const token of [undefined,await jwt('agent'),await jwt('agent',{common_name:REVIEWER_CLIENT})])
+    assert.ok([401,403].includes((await handler(await request(path,token),f.env)).status));
+  assert.deepEqual(store.read(),before);
 });
 
 test('Worker binds the verified principal, excludes body impersonation, and protects static assets',async()=>{

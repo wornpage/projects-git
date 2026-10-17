@@ -1283,7 +1283,11 @@ test('ordinary hosted projects require explicit checks and replay does not execu
   assert.equal(c.checks(), 0);
   const first = await c.controller.configureChecks(id, c.plan(), 'ordinary-checks');
   assert.equal(first.runs[0].evidence.passed, 1); assert.equal(first.runs[0].evidence.verified, true);
+  const recorded=Object.values(c.store.read().operations).find(op=>op.kind==='checks').timings;
+  assert.equal(recorded.length,1);assert.equal(recorded[0].phase,'verification');assert.equal(recorded[0].outcome,'completed');
+  assert.ok(recorded[0].finishedAt>=recorded[0].startedAt);
   await c.controller.configureChecks(id, c.plan(), 'ordinary-checks'); assert.equal(c.checks(), 1);
+  assert.deepEqual(Object.values(c.store.read().operations).find(op=>op.kind==='checks').timings,recorded);
   await acceptAfterIndependentReview(c, id, c.review());
   await c.controller.merge(id, { headCommit: HEAD });
   assert.equal(c.checks(), 2); assert.equal(c.pushes(), 1);
@@ -1397,6 +1401,11 @@ test('expired hosted verification is closed without starting another container',
   op.leaseUntil = 0; c.store.write({ ...snapshot, revision: snapshot.revision + 1 }, snapshot.revision);
   await c.controller.configureChecks(id, c.plan(), 'expired-checks');
   assert.equal(c.controller.workspace().runs[0].evidence.verified, false);
+  const history=Object.values(c.store.read().operations).find(op=>op.kind==='checks').timings;
+  assert.equal(history.length,2);assert.equal(history[0].phase,'verification');assert.equal(history[0].finishedAt,null);
+  assert.equal(history[1].phase,'recovery');assert.equal(history[1].outcome,'reconciled');assert.ok(history[1].finishedAt);
+  const metrics=c.controller.operationalMetrics(c.store.read().workspace.tasks[0].projectId);
+  assert.equal(metrics.phases.verification.missing,1);assert.equal(metrics.phases.recovery.observed,1);
   await stale;
 });
 

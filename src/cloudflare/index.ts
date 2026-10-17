@@ -288,6 +288,8 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
           capabilities: { ...snapshot.capabilities, retainedSearch: Boolean(this.env.SEARCH_DB && this.env.SEARCH_JOBS), semanticSearch: String(this.env.SEARCH_EMBEDDINGS_ENABLED) === 'true' } });
       }
       const search = /^\/api\/projects\/([a-f0-9-]{36})\/(search|search-index)$/.exec(call.path);
+      const metrics = /^\/api\/projects\/([a-f0-9-]{36})\/metrics$/.exec(call.path);
+      if(metrics&&call.method==='GET')return reply(controller.operationalMetrics(metrics[1]));
       if (search) {
         controller.requireProjectAccess(search[1]);
         const snapshot = this.store.read();

@@ -37,6 +37,7 @@ export const DEMO_ASSETS = Object.freeze([
   "ui/project-controls.js",
   "ui/project-coordination.js",
   "ui/project-discovery.js",
+  "ui/project-metrics.js",
   "ui/publication.js",
   "ui/report-list.js",
   "ui/requirements-form.js",

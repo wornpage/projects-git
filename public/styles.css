@@ -3590,4 +3590,7 @@ dialog.task-composer-dialog { width:min(940px,calc(100% - 32px)); max-height:90d
 /* Repository access stays readable with long verified subject IDs. */
 .project-access-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(10rem,14rem);gap:1rem;align-items:center;margin-block:1rem}
 .project-access-row label{overflow-wrap:anywhere}.project-access-row label .small{display:block}
+.project-metrics-table{overflow-x:auto;margin-block:1rem}.project-metrics-table table{width:100%;border-collapse:collapse}
+.project-metrics-table th,.project-metrics-table td{padding:.7rem .5rem;text-align:left;vertical-align:top;border-bottom:1px solid var(--worn-border);overflow-wrap:anywhere}
+.project-metrics-table caption{text-align:left;font-weight:600;margin-bottom:.5rem}
 @media(max-width:640px){.project-access-row{grid-template-columns:1fr;gap:.4rem}}

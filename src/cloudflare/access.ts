@@ -144,7 +144,7 @@ export function authorizeRoute(principal: AccessPrincipal, method: string, path:
       || method === 'POST' && /^\/api\/runs\/[a-f0-9-]{36}\/(code-review|review-inference)$/.test(path)) return;
     throw new ApiError(403, 'REVIEWER_READ_ONLY', 'Reviewers may only read candidate review context and record their own assessment.');
   }
-  if (method === 'GET' && (path === '/api/workspace' || path === '/api/projects/catalog' || /^\/api\/projects\/[a-f0-9-]{36}\/(search|search-index)$/.test(path) || /^\/api\/tasks\/[a-f0-9-]{36}\/handoff$/.test(path))) return;
+  if (method === 'GET' && (path === '/api/workspace' || path === '/api/projects/catalog' || /^\/api\/projects\/[a-f0-9-]{36}\/(search|search-index|metrics)$/.test(path) || /^\/api\/tasks\/[a-f0-9-]{36}\/handoff$/.test(path))) return;
   if (principal.kind === 'member') throw new ApiError(403, 'MEMBER_READ_ONLY', 'Members may read only repositories explicitly shared with them.');
   if (method === 'POST' && (/^\/api\/projects\/[a-f0-9-]{36}\/claim$/.test(path) || /^\/api\/runs\/[a-f0-9-]{36}\/(start|submit|fail)$/.test(path))) return;
   throw new ApiError(403, 'OWNER_REQUIRED', 'Only the authenticated owner can perform this operation.');

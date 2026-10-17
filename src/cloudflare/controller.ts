@@ -25,6 +25,9 @@ import {projectCatalog as accessibleCatalog} from '../../public/project-catalog.
 import {repositoryAccess, setRepositoryAccess, repositoryWorkspace, hasRepositoryPermission, requireRepositoryPermission} from '../core/repository-access.mjs';
 import type {RepositoryPermission} from '../core/repository-access.mjs';
 import {discoveryParameter, listRepositories, inspectRepository} from './repository-discovery.ts';
+import {projectOperationalMetrics} from '../core/operational-metrics.mjs';
+import {beginOperationTiming,finishOperationTiming,operationTimings} from '../core/operation-timing.mjs';
+import type {OperationTiming} from '../core/operation-timing.mjs';
 
 const sampleTask = { title: 'Make checkout totals trustworthy', owner: 'Cloudflare coordinator', purpose: 'Calculate exact integer-cent totals and reject invalid inputs and unsafe totals.',
   criteria: ['Use safe integer cents.', 'Reject invalid quantities and prices.', 'Preserve valid inputs and reject unsafe totals.'] };
@@ -45,6 +48,7 @@ function validateFindingLocations(findings: CodeReviewFinding[], head: ArtifactS
 }
 
 interface Operation {
+  timings?:OperationTiming[];
   report?: Evidence;
   idleResult?: { idle: boolean; reason: string; waitingTaskIds: string[] };
   fingerprint: string;
@@ -552,6 +556,12 @@ export class HostedController {
         pendingRuns:pending[1].revokeRunIds?.filter(id=>!pending[1].revokedRunIds?.includes(id))??[],state:'credential-cleanup-pending'}:null};
   }
 
+  operationalMetrics(projectId:string) {
+    this.requireProjectAccess(projectId);
+    const result=core(()=>projectOperationalMetrics(this.store.read(),projectId));
+    this.checkBinding();return result;
+  }
+
   async changeProjectAccess(projectId:string,input:Record<string,unknown>,requestKey:string) {
     this.requireOwner();
     const release=this.store.lockProjectAccess(projectId);
@@ -1009,6 +1019,7 @@ export class HostedController {
     });
     run.checkoutState = 'preparing'; if (!queued) { run.origin = 'external-agent'; run.agentIdentity = agentIdentity; }
     snapshot.operations[key] = { ...prior, fingerprint, kind, state: 'pending', itemId: run.id, taskId, projectId: task.projectId, resourceName, marker, attemptId, leaseUntil: Date.now() + 60_000 };
+    if(prior)core(()=>beginOperationTiming(snapshot.operations[key],'recovery',attemptId));
     this.save(snapshot);
     try {
       using source = await this.artifacts.get(snapshot.repositories[taskId]);
@@ -1076,6 +1087,7 @@ export class HostedController {
         run.repository = remote; run.checkoutState = 'ready';
         snapshot.forks[run.id] = { name: resourceName, remote };
         snapshot.operations[key] = { ...snapshot.operations[key], state: 'complete', leaseUntil: 0 };
+        if(prior)core(()=>finishOperationTiming(snapshot.operations[key],'recovery',attemptId,'reconciled'));
         snapshot.workspace.version++;
         this.save(snapshot);
         return { ...this.assignmentResult(snapshot.operations[key], false), credentials: { token: credential.plaintext, expiresAt: credential.expiresAt, remote, branch: run.branch, baseCommit: run.baseCommit }, credentialStatus: 'issued-once' };
@@ -1088,6 +1100,7 @@ export class HostedController {
       const operation = latest.operations[key];
       if (operation?.state === "pending" && operation.attemptId === attemptId) {
         operation.leaseUntil = 0;
+        if(prior)core(()=>finishOperationTiming(operation,'recovery',attemptId,'unconfirmed'));
         this.save(latest);
       }
       throw error;
@@ -1288,17 +1301,20 @@ export class HostedController {
       catch { throw new ApiError(422, 'STALE_CHECK_DEFINITION', 'Configure checks for the current commit and requirements.'); }
       before.checkPolicies![runId] = selected; run.checksConfigured = true;
     }
-    const attemptId = crypto.randomUUID();
+    const attemptId = crypto.randomUUID(),timingPhase=prior?'recovery':'verification';
     if (prior?.state === 'pending') {
       if (!prior.attemptId || !this.runtime.cancelVerification) throw new ApiError(409, 'VERIFICATION_RECOVERY_REQUIRED', 'The previous verifier must be stopped before its slot can be released.');
       const previousAttempt = prior.executorAttemptId ?? prior.attemptId;
       before.operations[key] = {...prior, attemptId, executorAttemptId: previousAttempt, leaseUntil: Date.now() + 120000};
+      core(()=>beginOperationTiming(before.operations[key],timingPhase,attemptId));
       this.save(before);
       const count = selected ? JSON.parse(selected.definition).checks.length : checkoutCases.length;
       await this.runtime.cancelVerification(previousAttempt, task.verificationProfile === 'checkout' ? 'checkout' : 'commands', count);
       before = this.assertLease(key, attemptId);
     }
-    before.operations[key] = { fingerprint, kind: 'checks', state: 'pending', itemId: runId, taskId: task.id, attemptId, leaseUntil: Date.now() + 120000 };
+    before.operations[key] = { fingerprint, kind: 'checks', state: 'pending', itemId: runId, taskId: task.id, attemptId,
+      timings:before.operations[key]?.timings,leaseUntil: Date.now() + 120000 };
+    if(!prior)core(()=>beginOperationTiming(before.operations[key],timingPhase,attemptId));
     run.verificationPending = true; before.workspace.version++; this.save(before);
     let evidence: Evidence | undefined;
     try {
@@ -1321,6 +1337,7 @@ export class HostedController {
     core(() => verifyRun(snapshot.workspace, runId, evidence));
     if (evidence.verification && snapshot.checkPolicies?.[runId]) snapshot.checkPolicies[runId].image = evidence.verification.image;
     snapshot.operations[key].state = evidence.verified ? 'complete' : 'failed'; snapshot.operations[key].leaseUntil = 0;
+    core(()=>finishOperationTiming(snapshot.operations[key],timingPhase,attemptId,prior?'reconciled':evidence.verified?'completed':'unconfirmed'));
     this.save(snapshot);
     return this.workspace();
   }
@@ -1353,6 +1370,7 @@ export class HostedController {
     const branch = 'updates/' + key.slice(0, 32);
     snapshot.operations[key] = { ...prior, fingerprint, kind: 'base-update', state: 'pending', taskId: task.id, projectId: task.projectId, sourceRunId: runId,
       resourceName, marker, attemptId, reservesExecution: mode === 'resolve', timestamp: prior?.timestamp ?? Math.floor(Date.now() / 1000), leaseUntil: Date.now() + 60000 };
+    core(()=>beginOperationTiming(snapshot.operations[key],'recovery',attemptId));
     this.save(snapshot);
     try {
       using source = await this.artifacts.get(snapshot.repositories[task.id]);
@@ -1440,6 +1458,7 @@ export class HostedController {
           replacement.checksConfigured = mode === 'reapply';
         }
         snapshot.operations[key] = { ...snapshot.operations[key], itemId: replacement.id, state: 'complete', leaseUntil: 0 };
+        core(()=>finishOperationTiming(snapshot.operations[key],'recovery',attemptId,'completed'));
         this.save(snapshot);
         return { ...this.assignmentResult(snapshot.operations[key], false), mode,
           ...(credential ? { credentials: { token: credential.plaintext, expiresAt: credential.expiresAt, remote, branch, baseCommit: currentBase }, credentialStatus: 'issued-once' } : {}) };
@@ -1451,6 +1470,7 @@ export class HostedController {
       if (operation?.attemptId === attemptId && operation.state === 'pending') {
         operation.leaseUntil = 0;
         if (error instanceof ApiError || error instanceof WorkflowError || ['REBASE_CONFLICT', 'EMPTY_REAPPLICATION'].includes(code ?? '')) { operation.state = 'failed'; operation.errorCode = code; }
+        core(()=>finishOperationTiming(operation,'recovery',attemptId,operation.state==='failed'?'failed':'unconfirmed'));
         this.save(snapshot);
       }
       if (code === 'REBASE_CONFLICT') throw new ApiError(409, code, 'These changes conflict with current project code. Prepare resolution work; the original candidate and task base are retained.');
@@ -1529,11 +1549,13 @@ export class HostedController {
       if (!operation.attemptId || !this.runtime?.cancelVerification) throw new ApiError(409, 'VERIFICATION_RECOVERY_REQUIRED', 'Stop the interrupted model verifier before releasing its slot.');
       const executorAttemptId = operation.executorAttemptId ?? operation.attemptId, recoveryId = crypto.randomUUID();
       const pending = this.store.read();
-      pending.operations[key] = { ...operation, attemptId: recoveryId, executorAttemptId }; this.save(pending);
+      pending.operations[key] = { ...operation, attemptId: recoveryId, executorAttemptId };
+      core(()=>beginOperationTiming(pending.operations[key],'recovery',recoveryId));this.save(pending);
       await this.runtime.cancelVerification(executorAttemptId, 'checkout', checkoutCases.length);
       const recovered = this.store.read();
       if (recovered.operations[key]?.attemptId === recoveryId && recovered.operations[key].state === 'pending') {
-        recovered.operations[key].state = 'failed'; recovered.operations[key].errorCode = 'MODEL_INTERRUPTED'; recovered.operations[key].leaseUntil = 0; this.save(recovered);
+        recovered.operations[key].state = 'failed'; recovered.operations[key].errorCode = 'MODEL_INTERRUPTED'; recovered.operations[key].leaseUntil = 0;
+        core(()=>finishOperationTiming(recovered.operations[key],'recovery',recoveryId,'reconciled'));this.save(recovered);
       }
     }
     // Only the DO alarm calls this method. A persisted running job here belongs
@@ -1562,6 +1584,7 @@ export class HostedController {
       if (verificationOccupancy(snapshot) < 2) {
         this.checkOperation(snapshot.operations[key], attemptId, 'model-check');
         snapshot.operations[key] = { fingerprint: attemptId, kind: 'model-check', state: 'pending', itemId: runId, taskId: job.task.id, attemptId, leaseUntil: Date.now() + 120000 };
+        core(()=>beginOperationTiming(snapshot.operations[key],'verification',attemptId));
         job.phase = 'checking'; this.save(snapshot); break;
       }
       if (!this.store.waitForChange) throw new ApiError(503, 'VERIFICATION_QUEUE_UNAVAILABLE', 'The workspace store must support verification admission notifications.');
@@ -1572,12 +1595,14 @@ export class HostedController {
       const evidence = await this.runtime!.checks.verify(source, commit, signal, attemptId);
       const snapshot = this.assertLease(key, attemptId);
       snapshot.operations[key].state = 'complete'; snapshot.operations[key].leaseUntil = 0;
-      snapshot.operations[key].report = evidence; this.save(snapshot);
+      snapshot.operations[key].report = evidence;
+      core(()=>finishOperationTiming(snapshot.operations[key],'verification',attemptId,evidence.verified?'completed':'unconfirmed'));this.save(snapshot);
       return evidence;
     } catch (error) {
       const snapshot = this.store.read(), operation = snapshot.operations[key];
       if (operation?.state === 'pending' && operation.attemptId === attemptId) {
-        operation.state = 'failed'; operation.errorCode = 'MODEL_CHECK_INTERRUPTED'; operation.leaseUntil = 0; this.save(snapshot);
+        operation.state = 'failed'; operation.errorCode = 'MODEL_CHECK_INTERRUPTED'; operation.leaseUntil = 0;
+        core(()=>finishOperationTiming(operation,'verification',attemptId,'unconfirmed'));this.save(snapshot);
       }
       throw error;
     }
@@ -1700,6 +1725,7 @@ export class HostedController {
     this.requireProjectMergeIdle(snapshot, task.projectId!, key);
     core(() => mergeRun(structuredClone(snapshot.workspace), runId, { headCommit: head, baseCommit: task.baseCommit, mergedCommit: head }));
     if (prior?.leaseUntil && prior.leaseUntil > Date.now()) throw new ApiError(409, 'OPERATION_IN_PROGRESS', 'Merge is in progress.');
+    const recoveryStartedAt=prior?.state==='pending'?new Date().toISOString():undefined;
     if (prior?.state === 'pending') {
       const observed = { fingerprint: prior.fingerprint, attemptId: prior.attemptId, leaseUntil: prior.leaseUntil, itemId: prior.itemId, taskId: prior.taskId };
       using target = await this.artifacts.get(snapshot.repositories[run.taskId]);
@@ -1715,7 +1741,10 @@ export class HostedController {
         core(() => mergeRun(snapshot.workspace, runId, { headCommit: head, baseCommit: task.baseCommit, mergedCommit: head }));
         snapshot.workspace.projects![task.projectId!].mainCommit = head;
         snapshot.workspace.projects![task.projectId!].defaultBranch = targetInfo.defaultBranch;
-        snapshot.operations[key] = { fingerprint, kind: 'merge', state: 'complete', itemId: runId };
+        const recoveryId=crypto.randomUUID();retained.attemptId=recoveryId;
+        core(()=>beginOperationTiming(retained,'recovery',recoveryId,recoveryStartedAt));
+        core(()=>finishOperationTiming(retained,'recovery',recoveryId,'reconciled'));
+        snapshot.operations[key] = { ...snapshot.operations[key], fingerprint, kind: 'merge', state: 'complete', itemId: runId };
         this.save(snapshot);
         return this.workspace();
       }
@@ -1726,17 +1755,21 @@ export class HostedController {
     if (prior?.state === 'pending') {
       if (!prior.attemptId || !runtime.cancelVerification) throw new ApiError(409, 'VERIFICATION_RECOVERY_REQUIRED', 'Stop the previous merge verifier before retrying.');
       const recoveryId = crypto.randomUUID(), previousAttempt = prior.executorAttemptId ?? prior.attemptId;
-      snapshot.operations[key] = {...prior, attemptId:recoveryId, executorAttemptId:previousAttempt, leaseUntil:Date.now()+120000}; this.save(snapshot);
+      snapshot.operations[key] = {...prior, attemptId:recoveryId, executorAttemptId:previousAttempt, leaseUntil:Date.now()+120000};
+      core(()=>beginOperationTiming(snapshot.operations[key],'recovery',recoveryId,recoveryStartedAt));this.save(snapshot);
       const policy = snapshot.checkPolicies?.[runId];
       await runtime.cancelVerification(previousAttempt, task.verificationProfile === 'checkout' ? 'checkout' : 'commands', policy ? JSON.parse(policy.definition).checks.length : checkoutCases.length);
       snapshot = this.assertLease(key,recoveryId);
       await requirePolicy();
       snapshot = this.assertLease(key,recoveryId);
+      core(()=>finishOperationTiming(snapshot.operations[key],'recovery',recoveryId,'reconciled'));this.save(snapshot);
     }
     this.requireProjectMergeIdle(snapshot, task.projectId!, key);
     if (verificationOccupancy(snapshot, key) >= 2) throw new ApiError(409, 'VERIFICATION_CAPACITY', 'Two verification attempts are active. Retry when a slot is free.');
     const attemptId = crypto.randomUUID();
-    snapshot.operations[key] = { fingerprint, kind: 'merge', state: 'pending', itemId: runId, taskId: task.id, attemptId, leaseUntil: Date.now() + 120000 };
+    snapshot.operations[key] = { fingerprint, kind: 'merge', state: 'pending', itemId: runId, taskId: task.id, attemptId,
+      timings:snapshot.operations[key]?.timings,leaseUntil: Date.now() + 120000 };
+    core(()=>beginOperationTiming(snapshot.operations[key],'verification',attemptId));
     this.save(snapshot);
     let pushMayHaveStarted = false;
     try {
@@ -1754,6 +1787,7 @@ export class HostedController {
       const failed = !evidence.verified || evidence.passed !== evidence.total || evidence.exitCode !== 0;
       const changed = mergeEvidenceChanged(run.evidence, evidence, task.verificationProfile);
       snapshot = this.assertLease(key, attemptId);
+      core(()=>finishOperationTiming(snapshot.operations[key],'verification',attemptId,evidence.verified?'completed':'unconfirmed'));
       core(() => retainMergeEvidence(snapshot.workspace, runId, evidence, { requiresReview: failed || changed }));
       this.save(snapshot);
       if (failed) throw new ApiError(409, 'CHECKS_FAILED', 'Fresh independent merge checks failed. The report is retained; inspect it before a new decision.');
@@ -1788,13 +1822,15 @@ export class HostedController {
       core(() => mergeRun(snapshot.workspace, runId, { headCommit: head, baseCommit: task.baseCommit, mergedCommit: head }));
       snapshot.workspace.projects![task.projectId!].mainCommit = head;
       snapshot.workspace.projects![task.projectId!].defaultBranch = targetInfo.defaultBranch;
-      snapshot.operations[key] = { fingerprint, kind: 'merge', state: 'complete', itemId: runId };
+      snapshot.operations[key] = { ...snapshot.operations[key], fingerprint, kind: 'merge', state: 'complete', itemId: runId };
       this.save(snapshot);
       return this.workspace();
     } catch (error) {
       snapshot = this.store.read();
       const operation = snapshot.operations[key];
       if (operation?.attemptId === attemptId) {
+        if(core(()=>operationTimings(operation)).some(row=>row.phase==='verification'&&row.attemptId===attemptId&&row.finishedAt===null))
+          core(()=>finishOperationTiming(operation,'verification',attemptId,'unconfirmed'));
         operation.leaseUntil = 0;
         operation.state = pushMayHaveStarted ? 'pending' : 'failed';
         operation.errorCode = error instanceof ApiError ? error.code : 'MERGE_FAILED';
