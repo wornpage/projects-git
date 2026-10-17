@@ -58,6 +58,7 @@ export const DEMO_ASSETS = Object.freeze([
   "vendor/prism-1.30.0/syntax-worker.js",
   "vendor/wornpage-button-0.2.3/worn-button.css",
   "vendor/wornpage-button-0.2.3/worn-button.js",
+  "webmcp.js",
   "workbench-actions.js",
   "workbench-state.js",
   "workspace-connection.js",

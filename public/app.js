@@ -29,6 +29,7 @@ import {canInspectInstallation, createInstallationPanel} from './ui/installation
 import {canInspectWorkspaceBackup,createWorkspaceBackupPanel} from './ui/workspace-backup.js';
 import {canManageProjectAccess, createProjectAccessPanel} from './ui/project-access.js';
 import {canInspectProjectMetrics,createProjectMetricsPanel} from './ui/project-metrics.js';
+import {createProjectsGitWebMcp} from './webmcp.js';
 import "./vendor/wornpage-button-0.2.3/worn-button.js";
 import { independentlyVerified as verifiedAtCurrentHead, connectionLabel, mergeState, workspacePresentationKey, taskOutcome, projectContext, dependencyState, readLocation, locationSearch } from './workbench-state.js';
 import { localAgentInstructions, hostedAgentInstructions } from './agent-instructions.js';
@@ -59,6 +60,7 @@ let selectedProject = initialLocation.projectId;
 let selectedRun = initialLocation.runId;
 let projectOffset = Math.max(0, Number(new URLSearchParams(location.search).get('offset')) || 0);
 let pageRevision = null;
+let browserTools = null;
 function workspacePath() {
   if (['queue','history'].includes(view) && selectedProject) return '/api/workspace?limit=1&project='+encodeURIComponent(selectedProject);
   if (view !== 'projects' && selectedTask) return '/api/workspace?limit=1&task='+encodeURIComponent(selectedTask);
@@ -70,6 +72,7 @@ let lastError = "";
 // Compose UI owners here; they receive current state and explicit operations.
 function getContext() { return {workspace, view, selectedProject, selectedTask, selectedRun, demo:Boolean(demo), busy: actions.busy, sessionWarning: browserSession.warning}; }
 const api = demo ? demo.createDemoApi() : createApiClient({captureSession: () => connection.captureSession(), onAuthRequired: () => {
+  browserTools?.disable('Browser tools stopped because this session needs sign-in.');
   for(const dialog of document.querySelectorAll('dialog[open]')) { dialogs.skipFocusRestore(dialog.id); dialog.close(); }
   $('#auth-panel').hidden = false;
   $('#auth-panel').querySelector('a').focus();
@@ -85,6 +88,8 @@ const actions = createWorkbenchActions({getContext, captureSession: connection.c
   api, actionFeedback, operationRequests, saveSession, render, clearError, showError, announce,
   captureActionFocus:()=>captureFocus(document.body), restoreActionFocus:restoreFocus});
 const {mutate, runOperation, actionKey} = actions;
+browserTools=createProjectsGitWebMcp({document,getContext,captureSession:connection.captureSession,api,
+  isConnected:()=>Boolean(workspace&&!connection.state.error),onStatus:status=>{$('#browser-tools-status').textContent=status.message;}});
 const dialogs = createDialogManager(document);
 dialogs.register('project-connection-dialog');
 dialogs.register('inspector-dialog',()=>!actions.busy);
@@ -663,6 +668,7 @@ function workspaceReceived(data, previous, {force, recoveredError}) {
   identity.title = identity.textContent;
   $('#workspace-access-controls').hidden = !workspace.authentication?.permissions.manage;
   $('#adopt-owner').hidden = !workspace.authentication?.adoptionRequired;
+  void browserTools.sync();
   for (const run of data.runs) {
     const prior = previous?.runs.find(entry => entry.id === run.id);
     if (prior && prior.status !== run.status && ['awaiting_review','failed'].includes(run.status))
@@ -673,6 +679,7 @@ function workspaceReceived(data, previous, {force, recoveredError}) {
   if ($('#revision-dialog').open) renderRevisionPreview();
 }
 function connectionFailed(error) {
+  browserTools.disable('Browser tools stopped while this workspace connection is unavailable.');
   showError(error.message); updateConnectionStatus();
   $('#provider-dot').classList.remove('connected');
   content.setAttribute('aria-busy', 'false');
