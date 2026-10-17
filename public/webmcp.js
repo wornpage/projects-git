@@ -9,6 +9,7 @@ const exact=(value,keys)=>record(value)&&Object.keys(value).sort().join(',')===[
 const text=(value,max)=>typeof value==='string'&&value.length<=max;
 const date=value=>text(value,40)&&Number.isFinite(Date.parse(value));
 const OUTPUT_BYTES=256*1024;
+const CATALOG_SCOPES=Object.freeze(['project-names-across-workspace','accessible-project-names']);
 export const PROJECTS_GIT_WEBMCP_TOOLS=Object.freeze(['projects_git_list_repositories','projects_git_list_project_tasks','projects_git_get_task_status','projects_git_get_operational_metrics']);
 
 function invalid(message='Invalid tool input.'){throw Error(message);}
@@ -23,12 +24,12 @@ function input(value,allowed,required=[]){if(value===undefined)value={};if(!reco
 function status(value,max=100){if(!text(value,max)||!value.length)throw Error('The server returned invalid status metadata.');return value;}
 
 function catalogDto(value,workspaceId){
-  if(!record(value)||value.workspaceId!==workspaceId||value.scope!=='accessible-project-names'||!text(value.query,200)||!count(value.revision)
+  if(!record(value)||value.workspaceId!==workspaceId||!CATALOG_SCOPES.includes(value.scope)||!text(value.query,200)||!count(value.revision)
     ||!count(value.total)||!count(value.matched)||value.matched>value.total||!count(value.offset)||!count(value.limit)||value.limit<1||value.limit>50
     ||value.previousOffset!==null&&!count(value.previousOffset)||value.nextOffset!==null&&!count(value.nextOffset)||!Array.isArray(value.items)||value.items.length>value.limit)throw Error('The repository catalog response is incomplete.');
   const repositories=value.items.map(item=>{if(!record(item)||!uuid(item.id)||!text(item.name,120)||!count(item.taskCount)||!count(item.candidateCount))throw Error('The repository catalog contains invalid metadata.');
     return {id:item.id,name:item.name,taskCount:item.taskCount,candidateCount:item.candidateCount};});
-  return {workspaceId,sourceRevision:value.revision,scope:'accessible-repository-catalog',query:value.query,
+  return {workspaceId,sourceRevision:value.revision,scope:'accessible-repository-catalog',sourceScope:value.scope,query:value.query,
     page:{totalRepositories:value.total,matchedRepositories:value.matched,offset:value.offset,limit:value.limit,previousOffset:value.previousOffset,nextOffset:value.nextOffset},repositories};
 }
 function pageDto(value,workspaceId,selection){
@@ -119,7 +120,7 @@ function eligibility(context,connected){const workspace=context?.workspace,princ
 }
 function toolDefinitions(run){const integerSchema=(maximum,minimum=0)=>({type:'integer',minimum,maximum});
   return [
-    {name:PROJECTS_GIT_WEBMCP_TOOLS[0],description:'List repositories visible to the current signed-in Projects Git workspace, with explicit paging and complete workspace denominators.',
+    {name:PROJECTS_GIT_WEBMCP_TOOLS[0],description:'List repositories visible to the current signed-in Projects Git identity, with explicit paging and complete authorization-scoped denominators.',
       inputSchema:{type:'object',additionalProperties:false,properties:{q:{type:'string',maxLength:200},offset:integerSchema(100000),limit:integerSchema(50,1),at:integerSchema(Number.MAX_SAFE_INTEGER)}},
       execute:(args,options)=>run(PROJECTS_GIT_WEBMCP_TOOLS[0],args,options,async(value,workspaceId)=>{value=input(value,['q','offset','limit','at']);const q=value.q===undefined?'':text(value.q,200)?value.q.trim():invalid();
         const offset=integer(value.offset,0,100000),limit=integer(value.limit,20,50),at=integer(value.at,null,Number.MAX_SAFE_INTEGER);if(limit<1)invalid();const params=new URLSearchParams({q,offset:String(offset),limit:String(limit)});if(at!==null)params.set('at',String(at));
