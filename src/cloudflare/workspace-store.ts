@@ -56,6 +56,15 @@ function split(snapshot: HostedSnapshot): { header: string; records: RecordRow[]
 export class WorkspaceStore implements SnapshotStore {
   private storage: Storage;
   private changeWaiters = new Set<() => void>();
+  private accessWriters = new Set<string>();
+
+  // This store lives with one coordinator instance. A restart loses the live
+  // owner, while its SQL receipt still requires an explicit guarded recovery.
+  lockProjectAccess(projectId:string):()=>void {
+    if(this.accessWriters.has(projectId))throw new ApiError(409,'PROJECT_ACCESS_IN_PROGRESS','This repository access change is still running. Inspect the saved outcome before explicitly retrying.');
+    this.accessWriters.add(projectId);let held=true;
+    return()=>{if(held){held=false;this.accessWriters.delete(projectId);}};
+  }
 
   waitForChange(revision: number, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();

@@ -612,7 +612,12 @@ function setup(runtime, workspaceId = 'mock-workspace') {
   let snapshot = initialSnapshot(workspaceId);
   const receipts = [];
   const waiters = new Set();
+  const accessWriters = new Set();
   const store = {
+    lockProjectAccess:projectId=>{
+      if(accessWriters.has(projectId))throw new ApiError(409,'PROJECT_ACCESS_IN_PROGRESS','Fixture access writer is still active.');
+      accessWriters.add(projectId);return()=>accessWriters.delete(projectId);
+    },
     identity: () => ({...snapshot.workspace,revision:snapshot.revision,empty:!snapshot.workspace.tasks.length&&!snapshot.workspace.runs.length&&!Object.keys(snapshot.operations).length}),
     read: () => structuredClone(snapshot),
     operation: key => structuredClone(snapshot.operations[key]),

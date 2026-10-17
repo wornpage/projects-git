@@ -18,6 +18,13 @@ never create or link grants. Members cannot create projects, change requirements
 run checks, accept or merge. Local loopback development remains a trusted
 single-operator environment, not a simulation of Cloudflare identity enforcement.
 
+## Deployment boundary
+
+This is a hard authorization cutover. A future deployment must use one active
+source version, with no gradual traffic split, version override or old zero-percent
+policy target that can serve pre-grant reads. Hosted qualification must prove the
+exact deployed version before repository grants are treated as enforced.
+
 ## Configure access
 
 Open a private project, then **Project settings → People and access**. Select
@@ -32,6 +39,9 @@ repositories. Workspace-wide capacity remains a separately labeled shared resour
 Reviewers read only assigned, sealed candidate context. Owner-only subscription and
 event administration summaries are not returned to members.
 
+One live access writer per repository prevents overlapping cleanup effects. A
+coordinator restart retains the SQL receipt for explicit recovery.
+
 Access changes use an explicit UUID, principal-bound durable receipt, exact inputs
 and expected version. The browser retains an uncertain request in its open
 inspector for explicit recovery with the same UUID and inputs. It never retries
@@ -44,6 +54,10 @@ old assessments remain historical evidence.
 Repository permissions and their version are rechecked at persistence and provider
 effect boundaries, including a revoke/regrant cycle. Owner-delegated builder and
 reviewer work checks the target identity's grant too.
+
+The first configured policy also checks retained legacy assignments: a trustworthy
+same-identity builder explicitly granted build may resume; other external fork
+credentials require cleanup, including assignments without trustworthy identity.
 
 Removing build access records the new policy first, then revokes retained fork
 credentials for affected settled assignments. Pending provider assignments remain

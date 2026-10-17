@@ -103,7 +103,7 @@ There are **four occupied execution slots per workspace** and a separate
 promise. An idealized four-slot workload taking five minutes per job gives 0.8
 job completions/minute before verification, review and integration bottlenecks.
 
-The current app has one pinned owner and separate builder/reviewer permissions.
-It has no team membership, approval quorum or delegated merge roles. A future
-team policy must explicitly define who may change it, applicable repositories,
-branch rules and required approvers.
+The current app has one pinned owner and [repository grants](repository-access.md)
+for members, builders and independent reviewers. Grants do not delegate owner
+acceptance, merge or automation-policy administration. Approval quorums, delegated
+merge and branch-specific administration require a separate authorization design.

@@ -10,6 +10,7 @@ import {projectStatus} from '../src/local/repository-cli-view.mjs';
 import {scaleSnapshot} from './helpers/workspace-scale.mjs';
 import {sqliteStorage} from './helpers/sqlite-store.mjs';
 import {testAuthority} from './helpers/hosted-authority.mjs';
+import {setRepositoryAccess} from '../src/core/repository-access.mjs';
 
 test('100 projects retain mixed histories while pages bound SQL reads and keep global capacity',t=>{
   const {db,storage,queries}=sqliteStorage();t.after(()=>db.close());
@@ -67,13 +68,16 @@ test('page revisions, foreign IDs and invalid cursors refuse without changing du
 });
 
 test('mutation responses and hosted client navigation remain bounded at 100 projects',async t=>{
-  const {db,storage}=sqliteStorage();t.after(()=>db.close());const store=new WorkspaceStore(storage,'workspace-scale');store.write(scaleSnapshot(),0);
+  const {db,storage}=sqliteStorage();t.after(()=>db.close());const store=new WorkspaceStore(storage,'workspace-scale'),source=scaleSnapshot(),owner=testAuthority('workspace-scale');
+  for(const project of Object.values(source.workspace.projects))setRepositoryAccess(project,{expectedVersion:0,grants:[{kind:'agent',id:owner.policy.agentClientIds[0],role:'read'}]},owner.principal,owner.policy);
+  store.write(source,0);
   const authority=testAuthority('workspace-scale','11111111111111111111111111111111.access'),controller=new HostedController(store,{},authority),requests=[];
   const client=new HostedAgentClient({origin:'https://fixture.example',workspaceId:'workspace-scale',clientId:authority.principal.id,clientSecret:'synthetic-test-only'}, {fetchImpl:async(url,options)=>{
     requests.push(url.search);assert.equal(options.method,'GET');const page=store.readPage(parseWorkspacePage(url.search));
     return Response.json({...controller.workspace(page.snapshot,page.capacity),page:page.page});
   }});
   const first=await client.execute('projects');assert.equal(first.projects.length,10);assert.equal(first.page.totalProjects,100);
+  assert.throws(()=>client.locks,/absolute private connection state directory/,'Read-only projections do not guess a private ledger path.');
   const next=await client.execute('projects',{offset:first.page.nextOffset,revision:first.page.revision});assert.equal(next.projects.length,10);assert.equal(next.page.offset,10);
   await assert.rejects(client.execute('projects',{offset:20}),/revision/);
   const state=store.read().workspace,task=state.tasks.at(-1),run=state.runs.at(-1);

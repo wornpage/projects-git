@@ -268,9 +268,10 @@ Cloudflare Queues delivers only workspace/project identity and a source revision
 The consumer reads the authoritative records again and projects task requirements,
 candidate summaries, changed filenames, exact commit/revision identities and
 review notes into D1. It excludes diffs, command outputs, checkout locations,
-credentials and provider receipts. Search requests require an authenticated owner
-or allowlisted agent in the configured workspace and a project belonging to it.
-This milestone has one human owner, not general multi-user membership.
+credentials and provider receipts. Search requires an authenticated owner or an
+identity with read/build access to the repository. [Repository grants](repository-access.md)
+support human readers, builders and independent reviewers; workspace administration
+and acceptance remain with the pinned owner.
 
 The D1 schema is in `migrations/search/0001_retained_work.sql`. Index generations
 are immutable and become visible only after all expected documents are staged.
@@ -388,9 +389,11 @@ remain a separate explicitly reviewed provider-recovery boundary.
 
 The code and local fixtures are verified separately from actual hosted Vectorize
 consistency, Workers AI responses, embedding quality and production permissions.
-Hosted identity and permissions are enforced through the configured Cloudflare
-Access issuer, audience and owner/builder/reviewer policy. Team administration
-and per-project membership are outside the current single-owner scope.
+Hosted identity is verified against the configured Cloudflare Access issuer,
+audience and stable subject/client allowlists. [Repository grants](repository-access.md)
+then restrict member reads, builder work and independent review. Team administration,
+approval quorums and delegated merge remain outside the one-owner model. Local
+fixtures do not establish a live multi-user installation.
 
 KV is intentionally omitted: current search is authenticated and changes with
 task intent, while static assets already have a delivery path. No measured

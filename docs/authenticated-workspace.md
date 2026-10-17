@@ -65,6 +65,10 @@ identities. `ACCESS_MEMBER_SUBJECTS` optionally lists human member subjects. The
 are no delegated team administrators, approval quorums or delegated merge powers.
 A task's owner label grants no account access. Existing repositories require
 explicit owner grants before non-owner access resumes after this upgrade.
+Repository grants also require a single-version rollout: an older Worker serving
+pre-grant reads cannot coexist through traffic splits, version overrides or an old
+zero-percent policy target. Qualify the exact deployed source before claiming the
+new boundary is enforced; local source checks do not prove that rollout.
 
 Projects can opt in to [automatic approval and merge](automatic-merge.md), off
 by default. That policy requires current independent checks and code review;

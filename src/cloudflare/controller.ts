@@ -109,6 +109,7 @@ export interface SnapshotPage {
     taskNumbers:Record<string,number>;workspaceTotals:{projects:number;tasks:number;runs:number};scope:string};
 }
 export interface SnapshotStore {
+  lockProjectAccess(projectId:string):()=>void;
   read(): HostedSnapshot;
   operation(key: string): Operation | undefined;
   project(id: string): Project | undefined;
@@ -376,9 +377,6 @@ export class HostedController {
       // Do not attach code until all credentials from creation, including any
       // uncertain token issuance, have been confirmed inactive.
       await this.revokeRunTokens(repo, ownsAttempt);
-      const remaining = await repo.listTokens();
-      if (remaining.total !== remaining.tokens.length || remaining.tokens.some(token => token.state === 'active'))
-        throw new ApiError(502, 'REPOSITORY_CREDENTIAL_CLEANUP', 'Repository creation needs credential cleanup. Retry the same request.');
       snapshot = current();
       if (Object.values(snapshot.workspace.projects ?? {}).some(project => project.repositoryName === name))
         throw new ApiError(409, 'REPOSITORY_CONNECTION_CHANGED', 'Another operation connected this repository. Creation is retained for operator review.');
@@ -480,7 +478,9 @@ export class HostedController {
     const reviewRequests = Object.fromEntries(state.runs.map(run => [run.id, this.reviewRequestState(state, run)]));
     const presentation = {...state, reviewRequests};
     const canManage = this.authority.principal.kind === 'owner';
-    const mergeStateByRun = hostedMergeStateByRun(snapshot.operations);
+    const visibleRuns=new Set(state.runs.map(run=>run.id));
+    const mergeOperations=canManage?snapshot.operations:Object.fromEntries(Object.entries(snapshot.operations).filter(([,op])=>op.itemId&&visibleRuns.has(op.itemId)));
+    const mergeStateByRun = hostedMergeStateByRun(mergeOperations);
     const activeMergeIntents = Object.values(mergeStateByRun).filter(value => value === 'running').length;
     const recoveryRequiredMergeIntents = Object.values(mergeStateByRun).filter(value => value === 'recovery-required').length;
     return { ...state, reviewerNames: canManage ? state.reviewerNames : undefined,
@@ -492,10 +492,11 @@ export class HostedController {
         reviewerClientIds: this.authority.principal.kind === 'owner' ? this.authority.policy.reviewerClientIds ?? [] : [],
         reviewerSubjects: this.authority.principal.kind === 'owner' ? this.authority.policy.reviewerSubjects ?? [] : [],
         memberSubjects: canManage ? this.authority.policy.memberSubjects ?? [] : [] },
-      capacity: globalCapacity ?? { limit: MAX_ACTIVE_RUNS, running: state.runs.filter(run => run.status === 'running').length,
+      capacityScope: 'workspace-wide',
+      capacity: globalCapacity ?? { limit: MAX_ACTIVE_RUNS, running: snapshot.workspace.runs.filter(run => run.status === 'running').length,
         reserved: executionReservations(snapshot),
         occupied: executionOccupancy(snapshot),
-        queued: state.runs.filter(run => run.status === 'assigned' && run.agent === 'model').length,
+        queued: snapshot.workspace.runs.filter(run => run.status === 'assigned' && run.agent === 'model').length,
         verification: { limit: 2, occupied: verificationOccupancy(snapshot), waiting: Object.values(snapshot.jobs ?? {}).filter(job => job.status === 'running' && job.phase === 'waiting-check').length } },
       capabilities: { repository: canManage, repositoryCatalog: canManage, repositoryCreate: canManage && Boolean(this.runtime?.git), demo: false, model: canManage && Boolean(this.runtime?.provider && this.runtime.repository), merge: canManage && Boolean(this.runtime), verify: canManage && Boolean(this.runtime), repositoryChecks: canManage && Boolean(this.runtime?.repositoryChecks), baseUpdate: canManage && Boolean(this.runtime), revise: canManage, handoff: true, coordination: true, dependencies: true, providerVerified: false },
       mergeStateByRun,
@@ -553,6 +554,13 @@ export class HostedController {
 
   async changeProjectAccess(projectId:string,input:Record<string,unknown>,requestKey:string) {
     this.requireOwner();
+    const release=this.store.lockProjectAccess(projectId);
+    try{return await this.performProjectAccessChange(projectId,input,requestKey);}
+    finally{release();}
+  }
+
+  private async performProjectAccessChange(projectId:string,input:Record<string,unknown>,requestKey:string) {
+    this.requireOwner();
     validateIdempotencyKey(requestKey);
     const key=await this.operationKey(requestKey),fingerprint=await digest(JSON.stringify([projectId,input]));
     this.requireOwner();let snapshot=this.store.read();
@@ -566,8 +574,17 @@ export class HostedController {
       const revoked=new Set(previous.grants.filter(grant=>grant.kind==='agent'&&grant.role==='build'
         && !next.grants.some(after=>after.issuer===grant.issuer&&after.kind===grant.kind&&after.id===grant.id&&after.role==='build')).map(grant=>grant.issuer+'|'+grant.id));
       const tasks=new Set(snapshot.workspace.tasks.filter(task=>task.projectId===projectId).map(task=>task.id));
-      const revokeRunIds=snapshot.workspace.runs.filter(run=>tasks.has(run.taskId)&&run.agentIdentity
-        && revoked.has(run.agentIdentity.issuer+'|'+run.agentIdentity.id)).map(run=>run.id);
+      const revokeRunIds=snapshot.workspace.runs.filter(run=>{
+        if(!tasks.has(run.taskId))return false;
+        const identity=run.agentIdentity;
+        if(previous.configured)return Boolean(identity&&revoked.has(identity.issuer+'|'+identity.id));
+        if(run.origin!=='external-agent'&&!identity)return false;
+        const trusted=identity?.provider==='cloudflare-access'&&identity.kind==='agent'
+          && identity.issuer===this.authority.policy.issuer&&identity.workspaceId===snapshot.workspace.id
+          && this.authority.policy.agentClientIds.includes(identity.id);
+        return !trusted||!next.grants.some(grant=>grant.kind==='agent'&&grant.role==='build'
+          &&grant.issuer===identity!.issuer&&grant.id===identity!.id);
+      }).map(run=>run.id);
       operation={kind:'project-access',state:'pending',fingerprint,projectId,accessVersion:next.version,revokeRunIds,revokedRunIds:[],accessRequest:{id:requestKey,input:structuredClone(input)}};
       snapshot.operations[key]=operation;snapshot.workspace.version++;
       snapshot.workspace.events.push({id:crypto.randomUUID(),at:next.updatedAt,type:'project.access_changed',projectId,taskId:null,runId:null,

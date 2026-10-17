@@ -5,6 +5,9 @@ import {createRequire} from 'node:module';
 import {transformSync} from 'esbuild';
 import {generateKeyPair,exportJWK,SignJWT} from 'jose';
 import {AccessVerifier} from '../src/cloudflare/access.ts';
+import {HostedController} from '../src/cloudflare/controller.ts';
+import {WorkspaceStore} from '../src/cloudflare/workspace-store.ts';
+import {sqliteStorage} from './helpers/sqlite-store.mjs';
 import {testAuthority,AGENT_CLIENT,REVIEWER_CLIENT} from './helpers/hosted-authority.mjs';
 
 const file=new URL('../src/cloudflare/index.ts',import.meta.url),require=createRequire(file),module={exports:{}};
@@ -63,6 +66,54 @@ test('repository creation requires an owner and preserves distinct creation keys
     ['/api/repositories','first-private-repo','create-first-private','owner'],
     ['/api/repositories','second-private-repo','create-second-private','owner'],
   ]);
+});
+
+test('repository access requires owner authority and an explicit mutation key before durable dispatch',async()=>{
+  const f=fixture(),owner=await jwt(),id=crypto.randomUUID(),path='/api/projects/'+id+'/access';
+  f.env.ACCESS_MEMBER_SUBJECTS='["member-person"]';
+  for(const token of [await jwt('agent'),await jwt('owner',{sub:'member-person',email:'member@example.test'})])
+    assert.equal((await handler(await request(path,token,{expectedVersion:0,grants:[]}),f.env)).status,403);
+  for(const key of [null,'','short','bad key','x'.repeat(129)]){
+    const req=await request(path,owner,{expectedVersion:0,grants:[]});if(key===null)req.headers.delete('Idempotency-Key');else req.headers.set('Idempotency-Key',key);
+    assert.equal((await handler(req,f.env)).status,400);
+  }
+  assert.deepEqual(f.calls,[]);const key=crypto.randomUUID();
+  assert.equal((await handler(await request(path,owner,{expectedVersion:0,grants:[]},{'Idempotency-Key':key}),f.env)).status,200);
+  assert.equal(f.calls[1].call.key,key);assert.equal(f.calls[1].call.path,path);
+});
+
+test('access HTTP admission accepts the largest configured grant set and rejects bodies above 128 KiB',async()=>{
+  const f=fixture(),owner=await jwt(),path='/api/projects/'+crypto.randomUUID()+'/access';
+  const members=Array.from({length:100},(_,i)=>('member-'+i+'-').padEnd(200,'m'));
+  const reviewers=Array.from({length:100},(_,i)=>('reviewer-'+i+'-').padEnd(200,'r'));
+  const agents=Array.from({length:100},(_,i)=>(i+1).toString(16).padStart(32,'0')+'.access');
+  Object.assign(f.env,{ACCESS_MEMBER_SUBJECTS:JSON.stringify(members),ACCESS_REVIEWER_SUBJECTS:JSON.stringify(reviewers),ACCESS_AGENT_CLIENT_IDS:JSON.stringify(agents)});
+  const grants=[...members.map(id=>({kind:'member',id,role:'read'})),...reviewers.map(id=>({kind:'reviewer',id,role:'review'})),...agents.map(id=>({kind:'agent',id,role:'build'}))];
+  assert.equal(grants.length,300);assert.ok(Buffer.byteLength(JSON.stringify({expectedVersion:0,grants}))>32768);
+  assert.equal((await handler(await request(path,owner,{expectedVersion:0,grants}),f.env)).status,200);
+  assert.equal(f.calls[1].call.body.grants.length,300);const before=f.calls.length;
+  const response=await handler(await request(path,owner,{padding:'x'.repeat(128*1024)}),f.env);
+  assert.equal(response.status,413);assert.equal(f.calls.length,before);
+});
+
+test('authenticated access save, replay and readback traverse the real Coordinator and SQLite store',async t=>{
+  const f=fixture(),{db,storage}=sqliteStorage();t.after(()=>db.close());
+  const store=new WorkspaceStore(storage,policy.workspaceId),snapshot=store.read(),projectId=crypto.randomUUID();
+  snapshot.workspace.projects[projectId]={id:projectId,name:'Owned fixture',repositoryName:'owned',kind:'artifacts',mainCommit:'a'.repeat(40),acceptingWork:true,policyVersion:1};
+  snapshot.revision++;store.write(snapshot,0);
+  const coordinator=Object.create(module.exports.WorkspaceCoordinator.prototype);
+  Object.assign(coordinator,{env:{WORKSPACE_ID:policy.workspaceId},store,schedule:async()=>{},
+    controller:authority=>new HostedController(store,{get:()=>assert.fail('No provider work for a new read grant')},authority)});
+  f.env.WORKSPACES={getByName:id=>{assert.equal(id,policy.workspaceId);return coordinator;}};
+  f.env.ACCESS_MEMBER_SUBJECTS='["member-person"]';const owner=await jwt(),key=crypto.randomUUID(),path='/api/projects/'+projectId+'/access';
+  const input={expectedVersion:0,grants:[{kind:'member',id:'member-person',role:'read'}]};
+  for(const replay of [false,true]){
+    const response=await handler(await request(path,owner,input,{'Idempotency-Key':key}),f.env);assert.equal(response.status,200);
+    const result=await response.json();assert.equal(result.accessVersion,1);assert.equal(result.credentialCleanup,'confirmed');assert.equal(result.replayed,replay);
+  }
+  const response=await handler(await request(path,owner),f.env);assert.equal(response.status,200);
+  const result=await response.json();assert.equal(result.access.version,1);assert.equal(result.access.grants[0].id,'member-person');
+  assert.equal(result.recovery,null);assert.equal(Object.values(store.read().operations).filter(op=>op.kind==='project-access').length,1);
 });
 
 test('Worker binds the verified principal, excludes body impersonation, and protects static assets',async()=>{

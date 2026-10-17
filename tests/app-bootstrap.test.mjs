@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import {canInspectInstallation} from '../public/ui/installation.js';
 
 const source=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
 const start=source.indexOf('function updateChrome()');
@@ -17,7 +18,8 @@ for(const view of ['review','evidence'])test(`cold ${view} deep link renders its
   };
   const title=view==='review'?'Changes & checks':'Candidate record';
   runInNewContext(update+'\nupdateChrome();',{
-    $,document:{querySelectorAll:()=>[]},workspace:null,view,demo:false,actions:{busy:false},taskCreation:{starting:false},
+    $,document:{querySelectorAll:()=>[],querySelector:()=>null},workspace:null,view,demo:false,actions:{busy:false},taskCreation:{starting:false},
+    canInspectInstallation,getContext:()=>({workspace:null,demo:false}),
     viewTitles:{[view]:[title,title,'Load the selected work.']},
     currentTask(){throw new Error('Task data is not loaded.');},
     currentRun(){throw new Error('Candidate data is not loaded.');},

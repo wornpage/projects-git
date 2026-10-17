@@ -430,10 +430,10 @@ export function createAuthenticatedFetch(verifier: AccessVerifier) {
       const mutation = request.method !== "GET" && request.method !== "HEAD";
       if (mutation) requireSameOrigin(request);
       const forbiddenSecrets = [request.headers.get('Cf-Access-Jwt-Assertion'), request.headers.get('CF-Access-Client-Secret'), env.MODEL_API_KEY].filter((value): value is string => Boolean(value));
-      const body = mutation ? await bodyJson(request, forbiddenSecrets, url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') ? 128 * 1024 : 32 * 1024) : {};
+      const body = mutation ? await bodyJson(request, forbiddenSecrets, url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
       const expectedWorkspace = request.headers.get('X-Workspace-Id') ?? body.expectedWorkspaceId;
       if (expectedWorkspace !== undefined && expectedWorkspace !== null && expectedWorkspace !== env.WORKSPACE_ID) throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The request targets a different workspace.');
-      const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/claim$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
+      const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
       const key = needsKey ? idempotencyKey(request) : "";
       const stub = env.WORKSPACES.getByName(env.WORKSPACE_ID);
       return await stub.api({ principal, policy, forbiddenSecrets, method: request.method, path: url.pathname, body, key, search: url.search });

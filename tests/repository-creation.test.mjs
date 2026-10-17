@@ -106,7 +106,7 @@ test('credential cleanup failure prevents success and is retried without another
 
 test('a false revocation result cannot masquerade as completed cleanup',async t=>{
   const f=fixture(t);f.artifacts.afterCreate=async repo=>{repo.revokeToken=async()=>false;};
-  await assert.rejects(f.controller.createRepository(input,'create-repo-06'),{code:'REPOSITORY_CREDENTIAL_CLEANUP'});
+  await assert.rejects(f.controller.createRepository(input,'create-repo-06'),{code:'TOKEN_REVOCATION_UNCONFIRMED'});
   assert.equal(Object.keys(f.store.read().workspace.projects).length,0);assert.equal(f.operation().state,'pending');
 });
 

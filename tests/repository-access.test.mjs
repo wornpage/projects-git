@@ -25,12 +25,15 @@ function fixture(t){
     task.projectId=id;task.origin='artifacts';
     const run=assignRun(snapshot.workspace,task.id,{agent:'external',label:'Builder',branch:'agents/'+id.replaceAll('-','')});
     run.origin='external-agent';run.agentIdentity=builder;run.checkoutState='ready';
+    snapshot.forks[run.id]={name:'fixture-'+id,remote:'https://git.example.test/'+id+'.git'};
   }
   snapshot.revision++;store.write(snapshot,0);
   let calls=0;
-  const artifacts={get:async()=>{calls++;throw Error('Unexpected provider work');}};
+  // These legacy read fixtures retain known forks with no active credentials.
+  const artifacts={get:async name=>{calls++;assert.ok(Object.values(snapshot.forks).some(fork=>fork.name===name));
+    return{[Symbol.dispose](){},listTokens:async()=>({total:0,tokens:[]}),revokeToken:async()=>assert.fail('No fixture credential to revoke')};}};
   const controller=principal=>new HostedController(store,artifacts,{policy,principal});
-  return {store,controller,calls:()=>calls};
+  return {store,controller,artifacts,calls:()=>calls};
 }
 async function allow(f,id,grants){
   return f.controller(owner.principal).changeProjectAccess(id,{expectedVersion:repositoryAccess(f.store.project(id)).version,grants},crypto.randomUUID());
@@ -69,6 +72,7 @@ test('corrupt persisted grants never become a successful empty policy',()=>{
 });
 test('non-owner reads filter repositories, event references and grants before numbering and denominators',async t=>{
   const f=fixture(t);await allow(f,a,[grant('member',member.id,'read'),grant('agent',builder.id,'build')]);
+  const calls=f.calls();
   const snapshot=f.store.read();snapshot.workspace.events.push({id:crypto.randomUUID(),type:'operator',at:new Date().toISOString(),taskId:null,runId:null,message:'Private workspace operator metadata'});
   snapshot.revision++;f.store.write(snapshot,snapshot.revision-1);
   const c=f.controller(member),state=c.workspacePage(parseWorkspacePage('?limit=1'));
@@ -78,7 +82,7 @@ test('non-owner reads filter repositories, event references and grants before nu
   assert.equal(state.projects[a].access,undefined);assert.equal(state.authentication.permissions.manage,false);
   assert.equal(c.projectCatalog(parseProjectCatalog('')).total,1);
   assert.throws(()=>c.workspacePage(parseWorkspacePage('?limit=1&project='+b)),/unavailable/);
-  assert.equal(f.calls(),0);
+  assert.equal(f.calls(),calls);
 });
 test('ungranted claims, direct assignment reads and handoffs are refused before provider I/O',async t=>{
   const f=fixture(t),c=f.controller(builder),snapshot=f.store.read(),run=snapshot.workspace.runs[0],task=snapshot.workspace.tasks[0];
@@ -88,27 +92,28 @@ test('ungranted claims, direct assignment reads and handoffs are refused before 
   await assert.rejects(c.handoff(task.id),{code:'PROJECT_FORBIDDEN'});assert.equal(f.calls(),0);
 });
 test('members cannot mutate or become reviewers even with a valid session and read grant',async t=>{
-  const f=fixture(t);await allow(f,a,[grant('member',member.id,'read')]);const c=f.controller(member);
+  const f=fixture(t);await allow(f,a,[grant('member',member.id,'read')]);const c=f.controller(member),calls=f.calls();
   assertAuthority({policy,principal:member},policy.workspaceId);
   assert.throws(()=>authorizeRoute(member,'POST','/api/projects/'+a+'/claim'),{code:'MEMBER_READ_ONLY'});
   await assert.rejects(c.claim(a,{label:'forged'},crypto.randomUUID()),{code:'OWNER_REQUIRED'});
   await assert.rejects(c.changeProjectAccess(a,{expectedVersion:1,grants:[]},crypto.randomUUID()),{code:'OWNER_REQUIRED'});
-  assert.throws(()=>c.reviewInbox(),{code:'REVIEWER_REQUIRED'});assert.equal(f.calls(),0);
+  assert.throws(()=>c.reviewInbox(),{code:'REVIEWER_REQUIRED'});assert.equal(f.calls(),calls);
 });
 test('repository access changes have immutable principal-bound receipts and CAS across restarts',async t=>{
   const f=fixture(t),input={expectedVersion:0,grants:[grant('member',member.id,'read')]},id=crypto.randomUUID();
   const first=await f.controller(owner.principal).changeProjectAccess(a,input,id);
+  const calls=f.calls();
   const replay=await f.controller(owner.principal).changeProjectAccess(a,input,id);
   assert.equal(first.accessVersion,1);assert.equal(replay.replayed,true);assert.equal(f.store.project(a).access.version,1);
   await assert.rejects(f.controller(owner.principal).changeProjectAccess(a,{...input,grants:[]},id),{code:'IDEMPOTENCY_CONFLICT'});
   await assert.rejects(f.controller(owner.principal).changeProjectAccess(a,{expectedVersion:0,grants:[]},crypto.randomUUID()),{code:'PROJECT_ACCESS_CHANGED'});
-  assert.equal(f.controller(owner.principal).projectAccess(a).recovery,null);assert.equal(f.calls(),0);
+  assert.equal(f.controller(owner.principal).projectAccess(a).recovery,null);assert.equal(f.calls(),calls);
 });
 test('revocation and regrant fence an already-admitted request by access version',async t=>{
-  const f=fixture(t);await allow(f,a,[grant('agent',builder.id,'read')]);const c=f.controller(builder);c.requireProjectAccess(a,'read');
+  const f=fixture(t);await allow(f,a,[grant('agent',builder.id,'read')]);const c=f.controller(builder),calls=f.calls();c.requireProjectAccess(a,'read');
   await allow(f,a,[]);await allow(f,a,[grant('agent',builder.id,'read')]);
   assert.throws(()=>c.requireProjectAccess(a,'read'),{code:'PROJECT_ACCESS_CHANGED'});
-  const fresh=f.controller(builder);fresh.requireProjectAccess(a,'read');assert.equal(f.calls(),0);
+  const fresh=f.controller(builder);fresh.requireProjectAccess(a,'read');assert.equal(f.calls(),calls);
 });
 test('pending provider assignments retain explicit credential-cleanup uncertainty after access is revoked',async t=>{
   const f=fixture(t);await allow(f,a,[grant('agent',builder.id,'build')]);
@@ -122,4 +127,61 @@ test('pending provider assignments retain explicit credential-cleanup uncertaint
   assert.equal(recovery.requestId,id);assert.deepEqual(recovery.input,input);
   await assert.rejects(f.controller(owner.principal).changeProjectAccess(a,{expectedVersion:2,grants:[]},crypto.randomUUID()),{code:'PROJECT_ACCESS_RECOVERY_REQUIRED'});
   assert.throws(()=>f.controller(builder).start(run.id),{code:'PROJECT_FORBIDDEN'});assert.equal(f.calls(),0);
+});
+
+test('denied repository merge IDs and recovery counters never enter an authorized read projection',async t=>{
+  const f=fixture(t);await allow(f,a,[grant('member',member.id,'read')]);
+  const snapshot=f.store.read(),secret=snapshot.workspace.runs.find(run=>snapshot.workspace.tasks.find(task=>task.id===run.taskId).projectId===b);
+  snapshot.operations['secret-merge']={kind:'merge',state:'pending',itemId:secret.id,fingerprint:'fixture',attemptId:crypto.randomUUID(),leaseUntil:Date.now()+60000};
+  snapshot.revision++;f.store.write(snapshot,snapshot.revision-1);
+  const visible=f.controller(member).workspace();assert.ok(!JSON.stringify(visible).includes(secret.id));
+  assert.deepEqual(visible.mergeStateByRun,{});assert.equal(visible.recovery.pendingMergeIntents,0);
+  assert.equal(f.controller(owner.principal).workspace().recovery.pendingMergeIntents,1);
+});
+
+test('one live cleanup owner prevents concurrent same-key provider effects while another repository stays available',async t=>{
+  const f=fixture(t);await allow(f,a,[grant('agent',builder.id,'build')]);
+  const snapshot=f.store.read(),run=snapshot.workspace.runs.find(run=>snapshot.workspace.tasks.find(task=>task.id===run.taskId).projectId===a);
+  snapshot.forks[run.id]={name:'owned-fork',remote:'https://git.example.test/owned.git'};snapshot.revision++;f.store.write(snapshot,snapshot.revision-1);
+  const entered=Promise.withResolvers(),release=Promise.withResolvers(),effects=[],token={id:'retained-token',state:'active'};
+  f.artifacts.get=async name=>{assert.equal(name,'owned-fork');return{[Symbol.dispose](){},
+    listTokens:async()=>{effects.push('list');if(effects.length===1){entered.resolve();await release.promise;}return{total:1,tokens:[{...token}]};},
+    revokeToken:async id=>{assert.equal(id,token.id);effects.push('revoke');token.state='revoked';return true;}};};
+  const id=crypto.randomUUID(),input={expectedVersion:1,grants:[]},settled=promise=>promise.then(value=>({value}),error=>({error}));
+  const first=settled(f.controller(owner.principal).changeProjectAccess(a,input,id));await entered.promise;
+  const competing=await settled(f.controller(owner.principal).changeProjectAccess(a,input,id));
+  const independent=await settled(allow(f,b,[grant('agent',builder.id,'build')]));
+  release.resolve();const completed=await first;
+  assert.equal(competing.error?.code,'PROJECT_ACCESS_IN_PROGRESS');assert.equal(independent.error,undefined);assert.equal(completed.value?.credentialCleanup,'confirmed');
+  const replay=await f.controller(owner.principal).changeProjectAccess(a,input,id);assert.equal(replay.replayed,true);
+  assert.deepEqual(effects,['list','revoke','list']);assert.equal(f.store.project(a).access.version,2);
+});
+
+test('first policy cutover cleans a legacy active credential and retains a pending assignment uncertainty',async t=>{
+  const f=fixture(t),snapshot=f.store.read(),settled=snapshot.workspace.runs.find(run=>snapshot.workspace.tasks.find(task=>task.id===run.taskId).projectId===a);
+  const pending={...structuredClone(settled),id:crypto.randomUUID(),agentIdentity:undefined,checkoutState:'preparing'};
+  snapshot.workspace.runs.push(pending);snapshot.operations['legacy-pending']={kind:'assign',state:'pending',fingerprint:'legacy',itemId:pending.id,projectId:a};
+  snapshot.revision++;f.store.write(snapshot,snapshot.revision-1);
+  const token={id:'legacy-token',state:'active'},effects=[];
+  f.artifacts.get=async name=>{assert.equal(name,snapshot.forks[settled.id].name);return{[Symbol.dispose](){},
+    listTokens:async()=>{effects.push('list');return{total:1,tokens:[{...token}]};},
+    revokeToken:async id=>{assert.equal(id,token.id);effects.push('revoke');token.state='revoked';return true;}};};
+  const id=crypto.randomUUID(),input={expectedVersion:0,grants:[]};
+  const result=await f.controller(owner.principal).changeProjectAccess(a,input,id);
+  assert.equal(token.state,'revoked');assert.deepEqual(effects,['list','revoke','list']);
+  assert.equal(result.credentialCleanup,'pending');assert.deepEqual(result.pendingRunIds,[pending.id]);
+  const recovery=f.controller(owner.principal).projectAccess(a).recovery;assert.equal(recovery.requestId,id);assert.deepEqual(recovery.pendingRuns,[pending.id]);
+  assert.throws(()=>f.controller(builder).start(settled.id),{code:'PROJECT_FORBIDDEN'});
+});
+
+test('every capacity component describes the same shared workspace after repository filtering',async t=>{
+  const f=fixture(t);await allow(f,a,[grant('member',member.id,'read')]);const snapshot=f.store.read();
+  const other=snapshot.workspace.runs.find(run=>snapshot.workspace.tasks.find(task=>task.id===run.taskId).projectId===b);
+  other.status='running';other.agent='model';snapshot.workspace.runs.push({...structuredClone(other),id:crypto.randomUUID(),status:'assigned'});
+  snapshot.operations['other-check']={kind:'checks',state:'pending',fingerprint:'fixture',itemId:other.id};
+  snapshot.jobs={[other.id]:{status:'running',phase:'waiting-check',task:snapshot.workspace.tasks.find(task=>task.id===other.taskId),limits:{}}};
+  snapshot.revision++;f.store.write(snapshot,snapshot.revision-1);
+  const state=f.controller(member).workspace();assert.equal(state.runs.length,1);assert.equal(state.capacityScope,'workspace-wide');
+  assert.deepEqual(state.capacity,{limit:4,running:1,reserved:1,occupied:2,queued:1,verification:{limit:2,occupied:1,waiting:1}});
+  assert.deepEqual(state.capacity,f.controller(owner.principal).workspace().capacity);
 });

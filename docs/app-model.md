@@ -140,8 +140,10 @@ backend takes a filesystem path. Ordinary hosted tasks use explicit command chec
 in fresh containers; base updates and resolution assignments retain prior evidence
 and require a new review. The bounded model starter keeps its explicit checkout
 profile. See [hosted checks and limits](hosted-repository-checks.md). Local Worker and
-provider-fixture proof does not establish live hosted access, 100/1,000-agent scale
-or multi-user authorization. See [Cloudflare workflow](cloudflare.md).
+provider-fixture proof does not establish live hosted access or 100/1,000-agent scale.
+[Repository grants](repository-access.md) provide source-level multi-user read,
+build and review boundaries; live installation qualification remains separate.
+See [Cloudflare workflow](cloudflare.md).
 
 Source owners: core/workflow owns transitions; core/project-work owns shared queue
 selection and policy; each runtime controller owns durable admission and requests; local/repository-runner owns

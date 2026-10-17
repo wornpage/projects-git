@@ -68,7 +68,15 @@ export class HostedAgentClient {
     this.connection = connection; this.fetchImpl = fetchImpl; this.now = now;
     this.secrets = new Set([connection.clientSecret]);
     this.scope = { origin: connection.origin, workspaceId: connection.workspaceId, clientId: connection.clientId };
-    this.locks = new HostedClientLocks(connection.stateDirectory, this.scope, {now});
+  }
+
+  get locks() {
+    if(!this.localLocks){
+      if(typeof this.connection.stateDirectory!=='string'||!path.isAbsolute(this.connection.stateDirectory))
+        throw new Error('Local recovery requires an absolute private connection state directory. Load a private hosted connection file first.');
+      this.localLocks=new HostedClientLocks(this.connection.stateDirectory,this.scope,{now:this.now});
+    }
+    return this.localLocks;
   }
 
   sanitize(value) {
