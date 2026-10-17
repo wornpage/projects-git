@@ -26,6 +26,7 @@ import {repositoryAccess, setRepositoryAccess, repositoryWorkspace, hasRepositor
 import type {RepositoryPermission} from '../core/repository-access.mjs';
 import {discoveryParameter, listRepositories, inspectRepository} from './repository-discovery.ts';
 import {projectOperationalMetrics} from '../core/operational-metrics.mjs';
+import {buildWorkspaceBackup,readWorkspaceBackup,workspaceBackupPreview} from '../core/workspace-backup.mjs';
 import {beginOperationTiming,finishOperationTiming,operationTimings} from '../core/operation-timing.mjs';
 import type {OperationTiming} from '../core/operation-timing.mjs';
 
@@ -560,6 +561,22 @@ export class HostedController {
     this.requireProjectAccess(projectId);
     const result=core(()=>projectOperationalMetrics(this.store.read(),projectId));
     this.checkBinding();return result;
+  }
+
+  async workspaceBackup() {
+    this.requireOwner();
+    const snapshot=this.store.read(),backup=await coreAsync(()=>buildWorkspaceBackup(snapshot));
+    this.checkBinding();
+    if(this.store.identity().revision!==snapshot.revision)throw new ApiError(409,'STALE_WORKSPACE_BACKUP','Workspace history changed during export. Read the current revision; no partial backup was returned.');
+    return backup;
+  }
+
+  async workspaceBackupPreview(input:Record<string,unknown>) {
+    this.requireOwner();
+    if(Object.keys(input).sort().join(',')!=='archive,expectedSha256'||typeof input.expectedSha256!=='string')
+      throw new ApiError(422,'WORKSPACE_BACKUP_INPUT_REQUIRED','Supply a complete backup and its expected digest.');
+    const archive=await coreAsync(()=>readWorkspaceBackup(JSON.stringify(input.archive),input.expectedSha256));
+    this.checkBinding();return workspaceBackupPreview(archive);
   }
 
   async changeProjectAccess(projectId:string,input:Record<string,unknown>,requestKey:string) {

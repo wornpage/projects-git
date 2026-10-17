@@ -6,10 +6,11 @@ export function canInspectInstallation({workspace, demo}) {
     && (!workspace.authentication || workspace.authentication.permissions?.manage === true));
 }
 
-// A local report viewer only: no API, storage, provider calls or workflow actions.
-export function createInstallationPanel({getContext, captureSession}) {
+// Setup reports stay local. The optional owner backup section owns its separate API boundary.
+export function createInstallationPanel({getContext, captureSession, backupPanel}) {
   if (!canInspectInstallation(getContext())) return el('p', {}, 'Installation settings are available to the workspace owner.');
   const root = el('div', {id: 'installation-settings', class: 'installation-settings'}), isCurrent = captureSession();
+  const backup=backupPanel?.();
   let readiness = installationReadiness(), error = '', reading = false, selection = 0;
   const current = () => root.isConnected && isCurrent() && canInspectInstallation(getContext());
 
@@ -74,7 +75,8 @@ export function createInstallationPanel({getContext, captureSession}) {
         el('pre', {}, el('code', {}, 'npm run --silent setup:check -- --config wrangler.operator.jsonc --json > setup-report.json')),
         el('p', {}, 'Only known check names and results are displayed. A supplied report is not independently authenticated or matched to this workspace, account or deployed source. It never enables setup, agent work, acceptance or merge.'),
         el('p', {}, 'Local prerequisites cover source metadata, Node.js, Git and installed dependency metadata. Docker is included only when requested. Hosted configuration checks inspect a literal config; they do not contact Cloudflare.'),
-        el('p', {}, 'Provisioning, spending, Access changes, deployment and hosted workflows need their own authorization and evidence. This panel does not perform or approve them.')));
+        el('p', {}, 'Provisioning, spending, Access changes, deployment and hosted workflows need their own authorization and evidence. This panel does not perform or approve them.')),
+      ...(backup?[backup]:[]));
   }
   render();
   return root;

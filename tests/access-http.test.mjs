@@ -140,6 +140,30 @@ test('repository metrics traverse signed HTTP and SQLite without writes or provi
   assert.deepEqual(store.read(),before);
 });
 
+test('owner-only backup export and preview preserve the SQLite revision and reject stale captures',async t=>{
+  const f=fixture(),{db,storage}=sqliteStorage();t.after(()=>db.close());
+  const store=new WorkspaceStore(storage,policy.workspaceId),snapshot=store.read();snapshot.workspace.authentication=ownerBinding(policy);
+  const projectId=crypto.randomUUID();snapshot.workspace.projects[projectId]={id:projectId,name:'Backup fixture',repositoryName:'fixture',mainCommit:'a'.repeat(40),
+    defaultBranch:'main',kind:'artifacts',acceptingWork:true,policyVersion:1};snapshot.revision++;store.write(snapshot,0);
+  const before=store.read(),artifacts={get:()=>assert.fail('Backup export and preview cannot use providers')};
+  const coordinator=Object.create(module.exports.WorkspaceCoordinator.prototype);
+  Object.assign(coordinator,{env:{WORKSPACE_ID:policy.workspaceId},store,schedule:async()=>{},controller:authority=>new HostedController(store,artifacts,authority)});
+  f.env.WORKSPACES={getByName:()=>coordinator};f.env.ACCESS_MEMBER_SUBJECTS='["member-person"]';f.env.ACCESS_REVIEWER_CLIENT_IDS=JSON.stringify([REVIEWER_CLIENT]);
+  const owner=await jwt();
+  for(const token of [undefined,await jwt('agent'),await jwt('owner',{sub:'member-person'}),await jwt('agent',{common_name:REVIEWER_CLIENT})]){
+    assert.ok([401,403].includes((await handler(await request('/api/workspace/backup',token),f.env)).status));
+    assert.ok([401,403].includes((await handler(await request('/api/workspace/backup-preview',token,{}),f.env)).status));
+  }
+  const response=await handler(await request('/api/workspace/backup',owner),f.env);assert.equal(response.status,200);
+  const archive=await response.json();assert.equal(archive.payload.projects.length,1);assert.equal(archive.payload.sourceRevision,before.revision);
+  assert.ok(!Object.hasOwn(archive.payload.workspace,'authentication'));
+  const preview=await handler(await request('/api/workspace/backup-preview',owner,{archive,expectedSha256:archive.sha256}),f.env);
+  assert.equal(preview.status,200);assert.equal((await preview.json()).resumesWork,false);assert.deepEqual(store.read(),before);
+  const bad=await handler(await request('/api/workspace/backup-preview',owner,{archive,expectedSha256:'0'.repeat(64)}),f.env);assert.equal(bad.status,422);
+  const capture=new HostedController(store,artifacts,testAuthority()).workspaceBackup(),changed=store.read();changed.workspace.version++;changed.revision++;
+  store.write(changed,before.revision);await assert.rejects(capture,{code:'STALE_WORKSPACE_BACKUP'});assert.deepEqual(store.read(),changed);
+});
+
 test('Worker binds the verified principal, excludes body impersonation, and protects static assets',async()=>{
   const f=fixture(),token=await jwt();
   assert.equal((await handler(await request('/api/workspace',token),f.env)).status,200);

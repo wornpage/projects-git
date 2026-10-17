@@ -52,6 +52,7 @@ export const DEMO_ASSETS = Object.freeze([
   "ui/views/review.js",
   "ui/views/work.js",
   "ui/workbench-parts.js",
+  "ui/workspace-backup.js",
   "vendor/prism-1.30.0/syntax-worker.js",
   "vendor/wornpage-button-0.2.3/worn-button.css",
   "vendor/wornpage-button-0.2.3/worn-button.js",

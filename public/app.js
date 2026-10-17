@@ -25,6 +25,7 @@ import {createPublicationView} from './ui/publication.js';
 import {createProjectControls, automaticMergeControls} from './ui/project-controls.js';
 import {createProjectsView} from './ui/views/projects.js';
 import {canInspectInstallation, createInstallationPanel} from './ui/installation.js';
+import {canInspectWorkspaceBackup,createWorkspaceBackupPanel} from './ui/workspace-backup.js';
 import {canManageProjectAccess, createProjectAccessPanel} from './ui/project-access.js';
 import {canInspectProjectMetrics,createProjectMetricsPanel} from './ui/project-metrics.js';
 import "./vendor/wornpage-button-0.2.3/worn-button.js";
@@ -91,7 +92,8 @@ $('#close-inspector').addEventListener('click',()=>{if(!actions.busy)$('#inspect
 $('#inspector-dialog').addEventListener('close',()=>document.querySelector('#installation-settings')?.remove());
 $('#open-installation').addEventListener('click',()=>{
   if (!actions.busy && canInspectInstallation(getContext())) openInspector('Installation readiness',
-    createInstallationPanel({getContext, captureSession:connection.captureSession}));
+    createInstallationPanel({getContext, captureSession:connection.captureSession,
+      backupPanel:()=>canInspectWorkspaceBackup(getContext())?createWorkspaceBackupPanel({getContext,captureSession:connection.captureSession,api,downloadJson}):null}));
 });
 $('#close-task-composer').addEventListener('click',()=>{if(!taskCreation.starting)$('#task-launcher').close();});
 const projectDiscovery=createProjectDiscovery({getContext,api,captureSession:()=>connection.captureSession(),onChange:()=>updateChrome()});
