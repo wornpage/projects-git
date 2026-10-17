@@ -9,15 +9,16 @@ async function fixture(t){
   const context={workspaceId:'trial-'+'a'.repeat(64),runId:'run',taskId:'task',revision:1,baseCommit:f.baseCommit,branch:'agents/one',repositoryName:'fork',marker:'owned trial-'+'a'.repeat(64)+':assignment'};
   const info={id:'repository-a',name:'fork',remote:f.candidate.remote,defaultBranch:'main',description:context.marker},tokens=new Map();
   let active=true,lost=false,writes=0,issues=0,closeOnIssue=false,loseRevocation=false;
-  const repo={async info(){return {...info};},async listTokens(){return{total:tokens.size,tokens:[...tokens.values()]};},
+  const hooks={};
+  const repo={async info(){await hooks.info?.();return {...info};},async listTokens(){await hooks.inventory?.();return{total:tokens.size,tokens:[...tokens.values()]};},
     async revokeToken(id){if(loseRevocation){loseRevocation=false;throw Error('Revocation unavailable');}tokens.get(id).state='revoked';return true;},async createToken(){issues++;const id=crypto.randomUUID();tokens.set(id,{id,state:'active'});if(closeOnIssue)active=false;return {id,plaintext:'never-return-this-token',expiresAt:new Date(Date.now()+60000).toISOString()};},
     async log({ref}){try{return[{hash:await f.git(path.join(f.root,'fork.git'),'rev-parse','--verify',ref)}];}catch{return[];}},[Symbol.dispose](){} };
   const artifacts={async get(name){assert.equal(name,'fork');return repo;}};
   const git={async commitCandidate(args){writes++;const result=await f.transport.commitCandidate(args);if(lost){lost=false;throw Error('Lost response after push');}return result;}};
   const validate=async()=>{if(!active)throw Object.assign(Error('Closed'),{code:'TRIAL_CLOSED'});return {...context};};
-  const publisher=new TrialSourcePublication(db.storage,artifacts,git,validate);
-  return {...f,...db,context,info,tokens,publisher,input:{headCommit:f.baseCommit,source:'export function checkoutTotal(items){ return 42; }'},
-    restart:()=>new TrialSourcePublication(db.storage,artifacts,git,validate),get writes(){return writes;},get issues(){return issues;},set active(v){active=v;},set lost(v){lost=v;},set closeOnIssue(v){closeOnIssue=v;},set loseRevocation(v){loseRevocation=v;}};
+  const publisher=new TrialSourcePublication(db.storage,artifacts,git,validate,async()=>{});
+  return {...f,...db,context,info,tokens,hooks,publisher,input:{headCommit:f.baseCommit,source:'export function checkoutTotal(items){ return 42; }'},
+    restart:()=>new TrialSourcePublication(db.storage,artifacts,git,validate,async()=>{}),get writes(){return writes;},get issues(){return issues;},set active(v){active=v;},set lost(v){lost=v;},set closeOnIssue(v){closeOnIssue=v;},set loseRevocation(v){loseRevocation=v;}};
 }
 test('bounded trial source becomes a real exact Git commit without returning repository credentials',async t=>{
   const f=await fixture(t),result=await f.publisher.publish('run',f.input,'source-request');
@@ -48,4 +49,16 @@ test('unconfirmed credential teardown cannot become complete, and a retry only r
   assert.equal((await f.publisher.status('run')).state,'publishing');assert.equal(f.writes,1);
   const result=await f.restart().publish('run',f.input,'source-request');assert.match(result.headCommit,/^[a-f0-9]{40}$/);assert.equal(f.writes,1);assert.equal(f.issues,1);
   assert.ok([...f.tokens.values()].every(t=>t.state==='revoked'));
+});
+
+test('a displaced publication cannot revoke successor credentials after delayed inventory',async t=>{
+  const f=await fixture(t);let entered,release;
+  const started=new Promise(done=>entered=done),held=new Promise(done=>release=done);
+  f.hooks.inventory=async()=>{delete f.hooks.inventory;entered();await held;};
+  const pending=f.publisher.publish('run',f.input,'old-request');await started;
+  f.storage.sql.exec('UPDATE trial_source_publications SET lease_id=?,lease_until=? WHERE run_id=?','successor',Date.now()+120000,'run');
+  f.tokens.set('successor-token',{id:'successor-token',state:'active'});release();
+  await assert.rejects(pending,{code:'TRIAL_SOURCE_CHANGED'});
+  assert.equal(f.tokens.get('successor-token').state,'active');assert.equal(f.writes,0);assert.equal(f.issues,0);
+  assert.equal(f.storage.sql.exec('SELECT lease_id FROM trial_source_publications').one().lease_id,'successor');
 });

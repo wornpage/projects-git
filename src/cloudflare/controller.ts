@@ -31,6 +31,8 @@ import {readWorkspaceRecovery,retainWorkspaceRecovery,workspaceRecoverySummary,r
 import {beginOperationTiming,finishOperationTiming,operationTimings} from '../core/operation-timing.mjs';
 import type {OperationTiming} from '../core/operation-timing.mjs';
 import type {BackupCapture} from './workspace-store.ts';
+import {assertTrialWorkflowSnapshot} from './trial-workflow.ts';
+import type {TrialPublicationContext} from './trial-source-publication.ts';
 import {TRIAL_SAMPLE,trialSampleName} from '../core/trial-sample.mjs';
 
 const sampleTask = { title: 'Make checkout totals trustworthy', owner: 'Cloudflare coordinator', purpose: 'Calculate exact integer-cent totals and reject invalid inputs and unsafe totals.',
@@ -92,8 +94,8 @@ interface Operation {
 interface HostedJob { status: 'queued' | 'running' | 'finished' | 'failed'; task: Task; limits: ExecutionLimits; phase: string; pendingCommit?: string; attemptId?: string }
 export interface HostedRuntime {
   guard?:()=>void;
-  trial?: {workspaceId:string;validate:()=>Promise<void>;
-    reserve:(kind:'setup'|'read'|'create'|'issue'|'push')=>Promise<void>;
+  trial?: {workspaceId:string;workflow:boolean;validate:()=>Promise<void>;
+    reserve:(kind:'setup'|'read'|'create'|'issue'|'push'|'fork'|'check')=>Promise<void>;
     allowance:()=>Promise<ReturnType<import('./trial-controls.ts').TrialResourceStore['status']>>};
   currentPolicy?: () => Promise<AccessPolicy>;
   ensureSubscription?: (repositoryName:string,validate:()=>void)=>Promise<void>;
@@ -316,12 +318,12 @@ export class HostedController {
     if(operation&&(operation.kind!=='repository-create'||operation.resourceName!==name||operation.seedTemplate!==TRIAL_SAMPLE.id||operation.seedDigest!==seedDigest))
       throw new ApiError(409,'TRIAL_SAMPLE_STATE_CHANGED','The retained sample setup needs operator review.');
     if(operation?.state==='complete'&&(!operation.repositoryId||!operation.pendingCommit||project?.repositoryName!==name
-      ||project.mainCommit!==operation.pendingCommit||project.kind!=='artifacts'||project.codeConnected!==true))
+      ||!this.runtime?.trial?.workflow&&project.mainCommit!==operation.pendingCommit||project.kind!=='artifacts'||project.codeConnected!==true))
       throw new ApiError(409,'TRIAL_SAMPLE_STATE_CHANGED','The confirmed sample repository no longer matches its project.');
     const retryable=!operation||operation.state==='pending'&&(!operation.errorCode||['REPOSITORY_CREATION_INTERRUPTED','TOKEN_REVOCATION_UNCONFIRMED','TOKEN_INVENTORY_INCOMPLETE','TRIAL_CREATE_OUTCOME_UNKNOWN'].includes(operation.errorCode));
     return {workspaceId,template:TRIAL_SAMPLE.id,phase:!operation?'not-started':operation.state==='complete'?'ready':operation.errorCode||operation.state==='failed'?'failed':'preparing',
       retryable,repository:operation?{name,repositoryId:operation.repositoryId??null,projectId:operation.projectId??null,baseCommit:operation.pendingCommit??null}:null,
-      errorCode:operation?.errorCode??null,workflowReady:false,allowance};
+      errorCode:operation?.errorCode??null,workflowReady:Boolean(this.runtime?.trial?.workflow&&operation?.state==='complete'),allowance};
   }
 
   async setupTrialSample(input:Record<string,unknown>,requestKey:string) {
@@ -331,7 +333,35 @@ export class HostedController {
       throw new ApiError(409,'TRIAL_SAMPLE_STATE_CHANGED','This trial contains unexpected projects. Sample setup needs operator review.');
     // Every client key resumes the one tenant-owned setup operation.
     const result=await this.createRepository({name,description:TRIAL_SAMPLE.description},'trial-sample-setup-v1',TRIAL_SAMPLE);
+    if(this.runtime?.trial?.workflow){
+      const key=await this.operationKey('trial-first-task-v1');this.requireOwner();
+      if(!this.store.operation(key)){
+        const snapshot=this.store.read(),project=snapshot.workspace.projects![result.projectId];
+        project.acceptingWork=true;project.policyVersion++;
+        core(()=>setRepositoryAccess(project,{expectedVersion:repositoryAccess(project).version,grants:[
+          {kind:'agent',id:'agent-'+snapshot.workspace.id,role:'build'},
+          {kind:'reviewer',id:'reviewer-'+snapshot.workspace.id,role:'review'},
+        ]},this.authority.principal,this.authority.policy));this.save(snapshot);
+      }
+      await this.createTasks({source:'project',projectId:result.projectId,tasks:[{title:'Make checkout totals trustworthy',purpose:'Complete the supplied checkout implementation using safe integer cents.',
+        criteria:['Return the exact integer-cent total.','Reject invalid prices and quantities.','Reject totals outside the safe integer range.'],owner:'Trial owner'}]},'trial-first-task-v1','checkout');
+    }
     return {...await this.trialSampleStatus(),replayed:result.replayed};
+  }
+
+  async trialAssignmentContext(runId:string,requireRunning=true):Promise<TrialPublicationContext> {
+    if(!this.runtime?.trial?.workflow||this.authority.principal.provider!=='trial-credential'||this.authority.principal.kind!=='agent')throw new ApiError(403,'TRIAL_CREDENTIAL_INVALID','Use the assigned trial coding-agent connection.');
+    await this.runtime.trial.validate();this.requireAssignment(runId);
+    const snapshot=this.store.read(),run=snapshot.workspace.runs.find(run=>run.id===runId),task=snapshot.workspace.tasks.find(task=>task.id===run?.taskId);
+    const fork=snapshot.forks[runId],operation=Object.values(snapshot.operations).find(op=>['assign','claim'].includes(op.kind)&&op.itemId===runId&&op.resourceName===fork?.name);
+    if(!run||!task||!fork||!operation?.marker||run.checkoutState!=='ready'||(requireRunning?run.status!=='running':!['assigned','running'].includes(run.status))||run.assignedRevision!==(task.revision??1))throw new ApiError(409,'STALE_RUN','Use a current active trial assignment.');
+    return {workspaceId:snapshot.workspace.id,runId,taskId:task.id,revision:task.revision??1,baseCommit:run.baseCommit,branch:run.branch,repositoryName:fork.name,marker:operation.marker};
+  }
+  async trialSource(runId:string) {
+    const context=await this.trialAssignmentContext(runId,false);using repo=await this.artifacts.get(context.repositoryName);
+    const source=await this.checkoutSource(repo,context.baseCommit);await this.trialAssignmentContext(runId,false);
+    const task=this.store.read().workspace.tasks.find(task=>task.id===context.taskId)!;
+    return {workspaceId:context.workspaceId,runId,headCommit:context.baseCommit,source,task:{title:task.title,purpose:task.purpose,criteria:task.criteria,revision:task.revision??1}};
   }
 
   async createRepository(input: Record<string, unknown>, requestKey: string,template?:typeof TRIAL_SAMPLE) {
@@ -492,7 +522,7 @@ export class HostedController {
     if (!['owner', 'agent'].includes(actor.kind)) throw new ApiError(403, 'OWNER_REQUIRED', 'Only the owner or assigned builder can modify assignments.');
     const task = this.store.read().workspace.tasks.find(task => task.id === run.taskId);
     this.requireProjectAccess(task?.projectId ?? '', 'build');
-    if (actor.kind === 'agent' && (!run.agentIdentity || run.agentIdentity.id !== actor.id || run.agentIdentity.issuer !== actor.issuer || run.agentIdentity.workspaceId !== actor.workspaceId)) {
+    if (actor.kind === 'agent' && (!run.agentIdentity || run.agentIdentity.provider!==actor.provider||run.agentIdentity.id !== actor.id || run.agentIdentity.issuer !== actor.issuer || run.agentIdentity.workspaceId !== actor.workspaceId)) {
       throw new ApiError(403, 'ASSIGNMENT_FORBIDDEN', 'This assignment belongs to another authenticated client.');
     }
     if (!this.store.read().workspace.authentication) throw new ApiError(409, 'OWNER_ADOPTION_REQUIRED', 'Adopt the retained workspace before changing it.');
@@ -750,6 +780,7 @@ export class HostedController {
 
   private save(snapshot: HostedSnapshot): void {
     this.checkBinding();
+    if(this.runtime?.trial?.workflow)assertTrialWorkflowSnapshot(snapshot);
     const current = this.store.identity();
     assertAuthority(this.authority, current.id);
     assertSession(this.authority.principal, current.sessionsValidAfter);
@@ -870,6 +901,7 @@ export class HostedController {
   }
 
   async createTasks(input: Record<string, unknown>, requestKey: string, profile: 'commands' | 'checkout' = 'commands') {
+    if(this.runtime?.trial?.workflow){if(input.source!=='project'||typeof input.projectId!=='string'||input.repo!==undefined)throw new ApiError(403,'TRIAL_REPOSITORY_FORBIDDEN','Add tasks only to the supplied trial project.');profile='checkout';}
     this.requireOwner();
     if (!['repository', 'project'].includes(String(input.source))) throw new ApiError(422, 'PROJECT_SOURCE_REQUIRED', 'Choose an existing project or connect committed Artifacts code.');
     const briefs = core(() => taskBriefs(input));
@@ -1098,7 +1130,7 @@ export class HostedController {
       const clientId = actor.kind === 'agent' ? actor.id : input.agentClientId;
       if (actor.kind === 'agent' && Object.hasOwn(input, 'agentClientId')) throw new ApiError(403, 'IDENTITY_FORGED', 'Self-claims derive the client identity from Access.');
       if (typeof clientId !== 'string' || !this.authority.policy.agentClientIds.includes(clientId)) throw new ApiError(400, 'AGENT_IDENTITY_REQUIRED', 'Choose a configured Access agent client.');
-      agentIdentity = { provider: 'cloudflare-access', kind: 'agent', issuer: actor.issuer, id: clientId, workspaceId: actor.workspaceId, displayName: clientId };
+      agentIdentity = { provider: this.authority.policy.credentialProvider??'cloudflare-access', kind: 'agent', issuer: actor.issuer, id: clientId, workspaceId: actor.workspaceId, displayName: clientId };
       this.guardDelegatedProject(projectId!,agentIdentity!,'build');
     }
     const agent = queued ? 'model' : 'external';
@@ -1201,7 +1233,7 @@ export class HostedController {
       await this.ensureProjectSubscription(task.projectId!);
       await this.runtime?.ensureSubscription?.(resourceName,()=>{this.assertLease(key,attemptId);});
       this.assertLease(key,attemptId);
-      const credential = await fork.createToken("write", 900);
+      const credential = this.runtime?.trial?.workflow?null:await fork.createToken("write", 900);
       try {
         snapshot = this.assertLease(key, attemptId);
         core(() => requireProjectAdmission(snapshot.workspace, task!.projectId!));
@@ -1209,13 +1241,15 @@ export class HostedController {
         if (run.status !== 'assigned') throw new ApiError(409, 'STALE_RUN', 'The reserved assignment changed.');
         run.repository = remote; run.checkoutState = 'ready';
         snapshot.forks[run.id] = { name: resourceName, remote };
+        if(this.runtime?.trial?.workflow)snapshot.operations[key].repositoryId=info.id;
         snapshot.operations[key] = { ...snapshot.operations[key], state: 'complete', leaseUntil: 0 };
         if(prior)core(()=>finishOperationTiming(snapshot.operations[key],'recovery',attemptId,'reconciled'));
         snapshot.workspace.version++;
         this.save(snapshot);
-        return { ...this.assignmentResult(snapshot.operations[key], false), credentials: { token: credential.plaintext, expiresAt: credential.expiresAt, remote, branch: run.branch, baseCommit: run.baseCommit }, credentialStatus: 'issued-once' };
+        return credential?{ ...this.assignmentResult(snapshot.operations[key], false), credentials: { token: credential.plaintext, expiresAt: credential.expiresAt, remote, branch: run.branch, baseCommit: run.baseCommit }, credentialStatus: 'issued-once' }
+          :{...this.assignmentResult(snapshot.operations[key],false),credentialStatus:'server-managed'};
       } catch (error) {
-        await fork.revokeToken(credential.id);
+        if(credential)await fork.revokeToken(credential.id);
         throw error;
       }
     } catch (error) {

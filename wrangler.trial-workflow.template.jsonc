@@ -1,0 +1,24 @@
+{
+  "$schema":"./node_modules/wrangler/config-schema.json",
+  "name":"projects-git-trial-workflow-template",
+  "main":"src/cloudflare/trial-worker.ts",
+  "compatibility_date":"2026-10-08",
+  "compatibility_flags":["nodejs_compat"],
+  "workers_dev":false,
+  "preview_urls":false,
+  "routes":[],
+  "assets":{"directory":"./public","binding":"ASSETS","run_worker_first":true},
+  "artifacts":[{"binding":"TRIAL_ARTIFACTS","namespace":"replace-with-dedicated-trial-namespace","remote":false}],
+  "worker_loaders":[{"binding":"TRIAL_LOADER"}],
+  "limits":{"cpu_ms":1000},
+  "vars":{
+    "WORKSPACE_ID":"",
+    "ACCESS_OWNER_SUB":"",
+    "TRIAL_POLICY":"{\"revision\":\"trial-workflow-v1\",\"issuer\":\"https://fixture.cloudflareaccess.com\",\"audience\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"durationMs\":604800000,\"dailyAdmissions\":2,\"activeTrials\":5,\"totalAdmissions\":10,\"resources\":{\"approval\":null,\"approvalExpiresAt\":null,\"dailySetups\":0,\"totalSetups\":0,\"setupAttempts\":0,\"providerCalls\":0,\"cleanupDelayMs\":86400000}}"
+  },
+  "durable_objects":{"bindings":[
+    {"name":"TRIAL_REGISTRY","class_name":"TrialAdmissions"},
+    {"name":"WORKSPACES","class_name":"WorkspaceCoordinator"}
+  ]},
+  "migrations":[{"tag":"trial-workflow-v1","new_sqlite_classes":["TrialAdmissions","WorkspaceCoordinator"]}]
+}

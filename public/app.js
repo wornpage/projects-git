@@ -17,6 +17,7 @@ import {createCompactNavigation} from './ui/compact-navigation.js';
 import {createProjectDiscovery} from './ui/project-discovery.js';
 import {createCollectionPager} from './ui/collection.js';
 import {createContinuationDialog} from './ui/continuation-dialog.js';
+import {createTrialConnections} from './ui/trial-connections.js';
 import {createRequirementsForm} from './ui/requirements-form.js';
 import {createBrowserSession} from './browser-session.js';
 import {createTaskCreation} from './ui/task-creation.js';
@@ -109,6 +110,7 @@ const navigation = createNavigation({getContext, dialogs, announce, selectProjec
   return $('#open-workspace-navigation');
 }});
 const {openContinuation} = createContinuationDialog({getContext, api, dialogs, showError, downloadJson, captureSession:connection.captureSession});
+let trialConnectionPanel=null;
 const requirementsForm = createRequirementsForm({getContext, api, dialogs, refresh, announce});
 const {openRevision, renderRevisionPreview} = requirementsForm;
 const browserSession = createBrowserSession({drafts, disclosures, assignmentRequests, operationRequests, projectSelections, onWarning: showError});
@@ -301,7 +303,7 @@ function updateChrome() {
   $("#review-count").setAttribute('aria-label', `${pendingTasks} project tasks needing review or merge`);
   taskCreation.update();
   artifactPicker.update();
-  $('#new-project').hidden = Boolean(workspace.authentication && !workspace.authentication.permissions.manage);
+  $('#new-project').hidden = Boolean(workspace.trial||workspace.authentication && !workspace.authentication.permissions.manage);
   $('#task-launcher').hidden = Boolean(workspace.authentication && !workspace.authentication.permissions.manage);
   updateConnectionStatus();
   explainDisabledButtons();
@@ -393,7 +395,7 @@ function projectPicker() {
   if(project&&!projects.some(item=>item.id===project.id))projects.unshift(project);
   projects.splice(8);
   const totalProjects = workspace.page?.totalProjects ?? Object.keys(workspace.projects ?? {}).length;
-  const canCreate = !workspace.authentication || workspace.authentication.permissions.manage;
+  const canCreate = !workspace.trial&&(!workspace.authentication || workspace.authentication.permissions.manage);
   return el('div', { class: 'project-selector shell-project-picker' }, el('label', { for: 'shell-project-selection' }, 'Project'),
     el('select', { id: 'shell-project-selection', onchange: event => {
       const selected = event.target.value;
@@ -428,12 +430,16 @@ function updateProjectHeader() {
   header.hidden = !project;
   if (!project) { projectHeaderKey = ''; header.replaceChildren(); return; }
   const hasNext=Boolean(projectBrief(workspace,project.id).next);
-  const key = JSON.stringify([workspace.id, workspace.provider, view, hasNext, workspace.page?.totalProjects, project.id, project.name, project.repositoryName, project.mainCommit, project.defaultBranch, project.acceptingWork, project.policyVersion, project.automaticMergePolicy, project.codeConnected, workspace.authentication?.permissions, actions.busy, projectDiscovery.pinned(project.id), Object.values(workspace.projects ?? {}).map(item => [item.id, item.name])]);
+  const key = JSON.stringify([workspace.id, workspace.provider, view, hasNext, workspace.trial?.usage, workspace.trial?.checks, workspace.page?.totalProjects, project.id, project.name, project.repositoryName, project.mainCommit, project.defaultBranch, project.acceptingWork, project.policyVersion, project.automaticMergePolicy, project.codeConnected, workspace.authentication?.permissions, actions.busy, projectDiscovery.pinned(project.id), Object.values(workspace.projects ?? {}).map(item => [item.id, item.name])]);
   if (key === projectHeaderKey) return;
   const focused = document.activeElement?.id;
   projectHeaderKey = key;
   const controlsId = 'project-controls-' + project.id;
   const controls = createProjectControls({id: controlsId, onOpen: (body,opener)=>openInspector('Project settings · '+project.name,body)},
+    workspace.trial?el('a',{class:'button button-small',href:'/trial/signup'},'Trial settings & export'):null,
+    workspace.trial?.usage?el('details',{},el('summary',{},'Trial limits'),el('p',{class:'small'},
+      workspace.trial.usage.tasks+' / '+workspace.trial.limits.tasks+' tasks · '+workspace.trial.usage.runs+' / '+workspace.trial.limits.runs+' retained candidates'),
+      el('p',{class:'small'},workspace.trial.checks.trial.used+' / '+workspace.trial.checks.trial.limit+' trial checks · '+workspace.trial.checks.daily.used+' / '+workspace.trial.checks.daily.limit+' shared checks today (UTC)')):null,
     el('p',{class:'project-code'},(project.defaultBranch??(workspace.provider==='local-git'?'main':'default branch'))+' · '+shortSha(project.mainCommit)),
     el('button',{id:'shell-pin-project',class:'button button-small',type:'button','aria-pressed':projectDiscovery.pinned(project.id),onclick:()=>projectDiscovery.togglePin(project.id)},projectDiscovery.pinned(project.id)?'Unpin project':'Pin project'),
     canInspectProjectMetrics(getContext(),project.id)?el('button',{class:'button button-small',onclick:()=>openInspector('Operational metrics · '+project.name,
@@ -441,7 +447,7 @@ function updateProjectHeader() {
     canManageProjectAccess(getContext())?el('button',{class:'button button-small',onclick:()=>openInspector('People and access · '+project.name,
       createProjectAccessPanel({projectId:project.id,getContext,captureSession:connection.captureSession,api,refresh}))},'People and access'):null,
     demo || workspace.personalWorkspace?.agentConnections === false ? null : el('button', { id: 'shell-connect-agent', class: 'button button-small', onclick: () => openAgentConnection(project.id, $('#shell-project-controls')) }, 'Connect agent'), admissionSwitch(project),
-    automaticMergeControls({project, hosted:!demo && workspace.authentication?.mode === 'cloudflare-access', canManage:workspace.authentication?.permissions.manage,
+    automaticMergeControls({project, hosted:!demo && !workspace.trial && workspace.authentication?.mode === 'cloudflare-access', canManage:workspace.authentication?.permissions.manage,
       busy:actions.busy, onChange:(enabled, expectedVersion) => mutate(() => api('/api/projects/' + project.id + '/automatic-merge', {enabled, expectedVersion}),
         enabled ? 'Automatic approval and merge enabled for eligible changes in this project.' : 'Automatic approval and merge disabled. Inspect any in-progress merge separately.')}),
     el('p', {class: 'small'}, 'Agents run in your coding chat. This project retains their work, checks and your decisions.'));
@@ -473,7 +479,9 @@ function openAgentConnection(projectId, opener = document.activeElement) {
   if (!project) throw new Error('The selected project is no longer available.');
   if ($('#inspector-dialog').open) { dialogs.skipFocusRestore('inspector-dialog'); $('#inspector-dialog').close(); }
   $('#project-connection-title').textContent = 'Connect agent · ' + project.name;
-  $('#project-connection-content').replaceChildren(projectConnection(project));
+  trialConnectionPanel?.dispose();trialConnectionPanel=null;
+  if(workspace.trial?.workflowReady)trialConnectionPanel=createTrialConnections({workspaceId:workspace.id,captureSession:connection.captureSession});
+  $('#project-connection-content').replaceChildren(trialConnectionPanel?.node??projectConnection(project));
   dialogs.show('project-connection-dialog', '#close-project-connection', opener);
 }
 function projectConnection(project) {
@@ -736,6 +744,7 @@ for(const selector of ['#brand-home','#workspace-return']) $(selector).addEventL
 });
 $('#new-project').addEventListener('click', () => openTaskComposer('repository'));
 $('#close-project-connection').addEventListener('click', () => $('#project-connection-dialog').close());
+$('#project-connection-dialog').addEventListener('close',()=>{trialConnectionPanel?.dispose();trialConnectionPanel=null;});
 function resolveLocation() {
   if(view==='projects'){selectedTask=null;selectedRun=null;selectedProject=null;return;}
   if(['queue','history'].includes(view)) {

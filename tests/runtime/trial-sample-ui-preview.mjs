@@ -6,10 +6,12 @@ import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {resolve,sep,extname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {trialSampleFixture} from '../helpers/trial-sample.mjs';
+import {trialWorkflowFixture} from '../helpers/trial-workflow.mjs';
 import {handler,token,req,admit} from '../helpers/trial-http.mjs';
 
 const evidence=process.argv[2];if(!evidence)throw Error('Pass a local QA evidence directory.');
-const cleanups=[],f=await trialSampleFixture({after:fn=>cleanups.push(fn)},{policyOverrides:{durationMs:604800000}});
+const cleanups=[],lifecycle={after:fn=>cleanups.push(fn)},workflow=process.argv.includes('--workflow');
+const f=workflow?await trialWorkflowFixture(lifecycle):await trialSampleFixture(lifecycle,{policyOverrides:{durationMs:604800000}});
 const publicRoot=fileURLToPath(new URL('../../public/',import.meta.url)),types={'.html':'text/html;charset=utf-8','.js':'text/javascript;charset=utf-8','.css':'text/css;charset=utf-8','.svg':'image/svg+xml'};
 f.env.ASSETS={fetch:async request=>{
   const path=resolve(publicRoot,'.'+decodeURIComponent(new URL(request.url).pathname));

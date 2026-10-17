@@ -31,7 +31,7 @@ test('unapproved or exhausted allowances cannot send preparation even through di
 });
 
 test('a claimed invoice cap or inconsistent allowance cannot enable resource work',async()=>{
-  for(const change of [{billingCapGuaranteed:true},{providerCalls:{used:0,limit:201}},{reason:'TRIAL_RESOURCE_LIMIT'},
+  for(const change of [{billingCapGuaranteed:true},{providerCalls:{used:0,limit:601}},{reason:'TRIAL_RESOURCE_LIMIT'},
     {spending:'TRIAL_SPENDING_UNAPPROVED'}]){
     const c=fixture(admission(sample({allowance:{...approvedTrialAllowance,...change}})));await c.client.refresh();
     assert.equal(c.client.getState().phase,'failed');assert.equal(c.client.getState().sample,null);c.client.suspend();

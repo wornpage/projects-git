@@ -15,7 +15,7 @@ const sampleTitles={checking:'Checking sample setup',saving:'Preparing your samp
   'not-started':'Prepare your sample repository',preparing:'Sample preparation is not yet confirmed',ready:'Your sample repository is prepared',
   failed:'Sample setup needs attention',blocked:'Sample setup needs operator attention',limited:'Sample preparation is paused',unavailable:'Sample setup is unavailable',unknown:'We couldn’t confirm sample setup'};
 
-function samplePanel(sample,actions) {
+function samplePanel(sample,actions,workflow=false) {
   const {phase,result}=sample,waiting=['checking','saving'].includes(phase);
   const heading=el('h3',{id:'sample-heading',tabindex:'-1'},sampleTitles[phase]);
   const action=(label,callback,id)=>el('button',{type:'button',class:'button primary',id,disabled:waiting||!result?.allowance?.setupAvailable,onclick:callback},label);
@@ -23,7 +23,7 @@ function samplePanel(sample,actions) {
   const body=[heading];
   if(phase==='checking')body.push(el('p',{class:'muted'},'Reading the saved preparation status…'));
   if(phase==='not-started')body.push(el('p',{},'Create one supplied checkout starter in your trial’s separate space.'),
-    action('Prepare sample repository',actions.prepareSample,'prepare-sample'),el('p',{class:'small muted'},'This creates starter code only. It does not start an agent or run checks.'));
+    action('Prepare sample repository',actions.prepareSample,'prepare-sample'),el('p',{class:'small muted'},workflow?'This creates starter code and a task. It does not start an agent or run checks.':'This creates starter code only. It does not start an agent or run checks.'));
   if(phase==='saving')body.push(el('p',{},'Preparing the supplied starter. If this takes a while, check its saved status before trying again.'),
     action('Preparing sample…',()=>{},'prepare-sample'),check());
   if(phase==='preparing')body.push(el('p',{},'Preparation may still be running, or its last attempt was interrupted. Check the status before resuming.'),check());
@@ -39,7 +39,7 @@ function samplePanel(sample,actions) {
       ? 'Resource spending has not been approved. No sample will be created.' : 'Sample preparation is paused or its allowance is used. Status checks remain available.'):null);
   if(phase==='blocked')body.push(el('p',{class:'notice',role:'alert'},'The saved setup no longer matches its repository or project. Operator attention is needed; no replacement will be created.'),check());
   if(phase==='unavailable')body.push(el('p',{},'Your reservation is saved. Sample preparation is unavailable; you can still open the read-only workspace preview.'),check());
-  if(phase==='ready')body.push(el('p',{},'Your supplied checkout starter is prepared. It is starter code, not completed agent work.'),
+  if(phase==='ready')body.push(el('p',{},result.workflowReady?'Your sample and first task are ready. Open the project, then connect your coding agent from Project settings.':'Your supplied checkout starter is prepared. It is starter code, not completed agent work.'),
     el('a',{class:'button primary',id:'open-sample',href:'/workspace/?view=queue&project='+encodeURIComponent(result.repository.projectId)},'Open sample project →'),
     el('details',{class:'sample-details'},el('summary',{},'Sample details'),details([
       ['Template','Checkout starter'],['Repository',el('code',{},result.repository.name)],['Initial commit',el('code',{},result.repository.baseCommit)],
@@ -51,29 +51,32 @@ export function renderTrial(root,announcement,state,actions) {
   const previousPhase=root.dataset.trialPhase,previousSample=root.dataset.samplePhase;
   root.dataset.trialPhase=state.phase;root.dataset.samplePhase=state.sample?.phase??'';
   const {phase,identity,trial,sample}=state,busy=['checking','reserving','closing'].includes(phase)||['checking','saving'].includes(sample?.phase);
-  const heading=el('h2',{id:'signup-heading',tabindex:'-1'},titles[phase]);
+  const heading=el('h2',{id:'signup-heading',tabindex:'-1'},phase==='admitted'&&trial?.workflowReady?'Your private trial':titles[phase]);
   const button=(text,callback,attrs={})=>el('button',{type:'button',class:'button primary',onclick:callback,disabled:busy,...attrs},text);
   const sampleLink=()=>el('a',{class:'button',href:sampleDemoUrl},'Explore the read-only example →');
   const signIn=()=>el('a',{class:'button primary',href:'/trial/signup'},'Continue with email →');
   const nodes=[];
   const badges={eligible:'Email verified',reserving:'Saving reservation',admitted:'Reserved · workspace preview',
     'confirm-close':'Reserved · workspace preview',closing:'Closing',closed:'Closed',expired:'Expired',capacity:'Capacity reached',checking:'Checking status'};
-  if(badges[phase])nodes.push(el('p',{class:'badge'+(['capacity','closed','expired'].includes(phase)?' warning':'')},badges[phase]));
+  if(badges[phase])nodes.push(el('p',{class:'badge'+(['capacity','closed','expired'].includes(phase)?' warning':'')},phase==='admitted'&&trial?.workflowReady?'Private trial':badges[phase]));
   nodes.push(heading);
   if(identity)nodes.push(el('p',{class:'identity'},'Signed in as',el('strong',{},identity.email)));
   if(phase==='checking')nodes.push(el('p',{class:'muted'},'Checking your verified identity and saved reservation…'));
   if(phase==='eligible'||phase==='reserving')nodes.push(
     el('p',{},'Reserve a separate private space. The trial clock starts when the reservation is saved.'),
-    details([['Duration',duration(identity.policy.durationMs)+' from reservation'],['Available','Workspace preview'],['Model credits','Not included']]),
+    details([['Duration',duration(identity.policy.durationMs)+' from reservation'],['Next','Check sample availability'],['Model credits','Not included']]),
     button(phase==='reserving'?'Reserving…':'Reserve trial',actions.reserve),
     el('p',{class:'small muted'},'A reservation does not start an agent, create a repository or run checks.'));
   if(['admitted','confirm-close','closing'].includes(phase))nodes.push(
     el('p',{class:'expiry'},'Expires ',expiry(trial.expiresAt)),
-    ...(phase==='admitted'&&sample?[samplePanel(sample,actions)]:[]),
-    phase==='closing'?button('Closing…',()=>{}):el('a',{class:'button',href:'/workspace/?view=projects'},'View private workspace preview →'),
+    ...(phase==='admitted'&&sample?[samplePanel(sample,actions,trial?.workflowReady)]:[]),
+    phase==='closing'?button('Closing…',()=>{}):el('a',{class:'button',href:'/workspace/?view=projects'},trial?.workflowReady?'Open private workspace →':'View private workspace preview →'),
     el('p',{class:'small muted'},'Signing up alone creates no code or tasks.'),
     el('div',{class:'secondary-actions'},el('button',{type:'button',class:'text-button',disabled:busy,onclick:actions.refresh},'Check status'),
       el('button',{type:'button',class:'text-button',id:'close-trial',disabled:busy,onclick:actions.confirmClose},'Close trial')));
+  if(trial?.workflowReady&&phase!=='closed'&&trial.exportUntil&&Date.now()<Date.parse(trial.exportUntil))nodes.push(
+    el('a',{class:'button',href:'/api/trial/export'},'Export source & history'),
+    el('p',{class:'small muted'},'Up to 3 export attempts, including failures. Export ends '+expiry(trial.exportUntil)+'. Closing the trial ends access immediately.'));
   if(phase==='closed'||phase==='expired')nodes.push(
     el('p',{},phase==='closed'?'Trial access is closed. This reservation won’t reopen or restart automatically.':'The trial period has ended. Signing in again won’t restart its clock.'),
     el('p',{class:'notice'},trial?.cleanup==='complete'?'Trial repository and workspace cleanup is confirmed. A minimal admission record remains to prevent another trial.'
@@ -86,7 +89,7 @@ export function renderTrial(root,announcement,state,actions) {
   if(phase==='blocked')nodes.push(el('p',{class:'notice'},'Trial signup requires a verified human email login. No reservation has been created.'),sampleLink());
   if(phase==='failed')nodes.push(el('p',{class:'notice',role:'alert'},errors[state.error]??'Trial signup is unavailable. Check your reservation status before trying again.'),button('Check reservation status',actions.refresh),sampleLink());
   if(['eligible','admitted'].includes(phase))nodes.push(el('details',{class:'reservation-help'},el('summary',{},'About this early preview'),
-    el('p',{},'Your identity owns one reservation. Repeating signup keeps the original expiry. Closing stops access and schedules cleanup after retention. Cleanup status can be pending, blocked or confirmed. Setup allowances bound application work; they do not guarantee a Cloudflare billing cap. No model credits, coding runs or exports are included.')));
+    el('p',{},trial?.workflowReady?'Your identity owns one trial. Retained tasks and candidates count toward its limits. Use separate coding-agent and reviewer connections. No model credits are included; your owner decision and merge remain separate.':'Your identity owns one reservation. Repeating signup keeps the original expiry. Closing stops access and schedules cleanup after retention. Cleanup status can be pending, blocked or confirmed. Setup allowances bound application work; they do not guarantee a Cloudflare billing cap. No model credits, coding runs or exports are included.')));
   let dialog;
   if(phase==='confirm-close') {
     dialog=el('dialog',{class:'confirmation','aria-labelledby':'close-heading','aria-describedby':'close-description',oncancel:event=>{event.preventDefault();actions.cancelClose();}},

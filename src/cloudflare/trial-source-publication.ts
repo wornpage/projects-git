@@ -18,8 +18,9 @@ export class TrialSourcePublication {
   private artifacts:Artifacts;
   private git:ArtifactGit;
   private validate:(runId:string)=>Promise<TrialPublicationContext>;
-  constructor(storage:Storage,artifacts:Artifacts,git:ArtifactGit,validate:(runId:string)=>Promise<TrialPublicationContext>) {
-    this.storage=storage;this.artifacts=artifacts;this.git=git;this.validate=validate;
+  private reservePush:()=>Promise<void>;
+  constructor(storage:Storage,artifacts:Artifacts,git:ArtifactGit,validate:(runId:string)=>Promise<TrialPublicationContext>,reservePush:()=>Promise<void>) {
+    this.storage=storage;this.artifacts=artifacts;this.git=git;this.validate=validate;this.reservePush=reservePush;
     storage.sql.exec(`CREATE TABLE IF NOT EXISTS trial_source_publications(
       run_id TEXT PRIMARY KEY,context TEXT NOT NULL,source_hash TEXT NOT NULL,timestamp INTEGER NOT NULL,
       repository_id TEXT,head_commit TEXT,state TEXT NOT NULL,lease_id TEXT NOT NULL,lease_until INTEGER NOT NULL)`);
@@ -51,14 +52,14 @@ export class TrialSourcePublication {
       await current();using repo=await this.artifacts.get(context.repositoryName);const info=await repo.info();let row=owns();
       if(info.name!==context.repositoryName||info.description!==context.marker||row.repository_id&&info.id!==row.repository_id)throw changed();
       this.storage.sql.exec('UPDATE trial_source_publications SET repository_id=? WHERE run_id=?',info.id,runId);
-      const validate=async()=>{await current();owns();const latest=await repo.info();if(latest.id!==info.id||latest.name!==info.name||latest.description!==info.description)throw changed();};
+      const validate=async()=>{await current();owns();const latest=await repo.info();owns();if(latest.id!==info.id||latest.name!==info.name||latest.description!==info.description)throw changed();};
       const revoke=async()=>{
-        const inventory=await repo.listTokens();
+        owns();const inventory=await repo.listTokens();owns();
         if(!Array.isArray(inventory.tokens)||inventory.total!==inventory.tokens.length||inventory.total>32
           ||inventory.tokens.some(t=>!t||typeof t.id!=='string'||!t.id||!['active','expired','revoked'].includes(t.state))
           ||new Set(inventory.tokens.map(t=>t.id)).size!==inventory.tokens.length)throw new ApiError(409,'TOKEN_INVENTORY_INCOMPLETE','Owned candidate credentials need inspection.');
-        for(const token of inventory.tokens)if(token.state==='active')await repo.revokeToken(token.id);
-        const remaining=await repo.listTokens();
+        for(const token of inventory.tokens)if(token.state==='active'){owns();await repo.revokeToken(token.id);owns();}
+        const remaining=await repo.listTokens();owns();
         if(remaining.total!==remaining.tokens.length||remaining.tokens.some(t=>t.state==='active'))throw new ApiError(409,'TOKEN_REVOCATION_UNCONFIRMED','Candidate credential revocation is unconfirmed.');
       };
       await validate();await revoke();
@@ -72,7 +73,7 @@ export class TrialSourcePublication {
           await validate();
           const head=await this.git.commitCandidate({remote:info.remote,token:token.plaintext,defaultBranch:info.defaultBranch,branch:context.branch,baseCommit,
             files:[{path:'checkout.mjs',content:source}],context:{runId,taskId:context.taskId,revision:context.revision},timestamp:row.timestamp,
-            beforePush:async head=>{await validate();const retained=owns();if(retained.head_commit&&retained.head_commit!==head)throw changed();
+            beforePush:async head=>{await validate();await this.reservePush();await validate();const retained=owns();if(retained.head_commit&&retained.head_commit!==head)throw changed();
               this.storage.sql.exec("UPDATE trial_source_publications SET head_commit=?,state='publishing' WHERE run_id=?",head,runId);}});
           if(head!==owns().head_commit)throw changed();
         }finally {await repo.revokeToken(token.id);}

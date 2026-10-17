@@ -10,17 +10,20 @@ function sessionValue(value) {
   return value;
 }
 function statusValue(value,identity) {
-  const keys=['workspaceId','status','createdAt','expiresAt','remainingMs','policyRevision','workflowReady','capabilities','cleanup','identityKey'];
+  const keys=['workspaceId','status','createdAt','expiresAt','remainingMs','policyRevision','workflowReady','capabilities','cleanup','identityKey',...(value?.workflowReady===true?['exportUntil']:[])];
   const caps=['workspaceReads','repositoryCreation','agents','checks','modelCredits'];
   if(!exact(value,keys))throw new TrialClientError('INVALID_RESPONSE');
   if(value.identityKey!==identity.identityKey)throw new TrialClientError('TRIAL_IDENTITY_CHANGED');
   if(typeof value.workspaceId!=='string'||!/^trial-[a-f0-9]{64}$/.test(value.workspaceId)||!['admitted','expired','closed'].includes(value.status)
     ||!Number.isFinite(Date.parse(value.createdAt))||!Number.isFinite(Date.parse(value.expiresAt))||Date.parse(value.expiresAt)<=Date.parse(value.createdAt)
     ||!Number.isSafeInteger(value.remainingMs)||value.remainingMs<0||value.remainingMs>identity.policy.durationMs
-    ||value.policyRevision!==identity.policy.revision||value.workflowReady!==false||!['pending','blocked','complete','not-due'].includes(value.cleanup)
+    ||value.policyRevision!==identity.policy.revision||typeof value.workflowReady!=='boolean'||!['pending','blocked','complete','not-due'].includes(value.cleanup)
     ||!exact(value.capabilities,caps)||caps.some(key=>typeof value.capabilities[key]!=='boolean')
-    ||caps.filter(key=>key!=='workspaceReads').some(key=>value.capabilities[key]!==false)
-    ||value.capabilities.workspaceReads!==(value.status==='admitted'))throw new TrialClientError('INVALID_RESPONSE');
+    ||value.capabilities.repositoryCreation!==false||value.capabilities.modelCredits!==false
+    ||['agents','checks'].some(key=>value.capabilities[key]!==Boolean(value.workflowReady&&value.status==='admitted'))
+    ||value.capabilities.workspaceReads!==(value.status==='admitted')
+    ||value.workflowReady&&(!Number.isFinite(Date.parse(value.exportUntil))||Date.parse(value.exportUntil)<=Date.parse(value.createdAt)
+      ||Date.parse(value.exportUntil)>Date.parse(value.expiresAt)+7*86400000))throw new TrialClientError('INVALID_RESPONSE');
   return value;
 }
 function sampleValue(value,trial,mutation=false) {
@@ -33,12 +36,12 @@ function sampleValue(value,trial,mutation=false) {
     ||allowance.reason!==null&&!reasons.includes(allowance.reason)||allowance.setupAvailable!==(allowance.reason===null)
     ||allowance.spending!=='approved'&&allowance.reason!==allowance.spending||allowance.billingCapGuaranteed!==false)
     throw new TrialClientError('INVALID_RESPONSE');
-  for(const [pair,max] of [[allowance.setupAttempts,10],[allowance.providerCalls,200]])if(!exact(pair,['used','limit'])
+  for(const [pair,max] of [[allowance.setupAttempts,10],[allowance.providerCalls,600]])if(!exact(pair,['used','limit'])
     ||!Number.isSafeInteger(pair.used)||pair.used<0||!Number.isSafeInteger(pair.limit)||pair.limit<0||pair.limit>max||pair.used>pair.limit
     ||allowance.setupAvailable&&pair.used>=pair.limit)throw new TrialClientError('INVALID_RESPONSE');
   const repo=value.repository,uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
   if(value.template!=='checkout-v1'||!['not-started','preparing','failed','ready'].includes(value.phase)||typeof value.retryable!=='boolean'
-    ||value.workflowReady!==false||mutation&&(typeof value.replayed!=='boolean'||value.phase!=='ready')
+    ||typeof value.workflowReady!=='boolean'||value.workflowReady&&value.phase!=='ready'||value.phase==='ready'&&value.workflowReady!==trial.workflowReady||mutation&&(typeof value.replayed!=='boolean'||value.phase!=='ready')
     ||value.errorCode!==null&&(typeof value.errorCode!=='string'||!/^[A-Z_]{1,64}$/.test(value.errorCode)))throw new TrialClientError('INVALID_RESPONSE');
   if(value.phase==='not-started') {
     if(repo!==null||value.errorCode!==null||value.retryable!==true)throw new TrialClientError('INVALID_RESPONSE');

@@ -109,6 +109,12 @@ export function candidateAgentInstructions({ workspace, runId, origin, cli }) {
       lines.push('Configure the explicit check definition for the current requirements in Review. Use check --help for the approved definition file, hash and immutable image; do not reuse a stale command definition.');
     }
     lines.push('For an agreed repair, use assign --help for a new isolated candidate; inspect the existing run and project admission first. Acceptance and merge remain in the review UI.');
+  } else if(workspace.trial?.workflowReady) {
+    lines.push('Use the trial coding-agent MCP connection supplied in a private file. Never paste its credential into this chat.',
+      'node scripts/trial-agent-mcp.mjs --connection <absolute-private-connection.json>',
+      'Read projects_git_trial_workspace, claim agreed work, report start, and read its pinned source. Publish only the bounded checkout.mjs implementation, then submit the returned exact commit.',
+      'This trial does not provide raw Git credentials. The owner runs checks, assigns the separate reviewer connection, and makes acceptance and merge decisions.',
+      'Expected origin: '+origin+'\nExpected workspace: '+workspace.id);
   } else {
     lines.push('This is a hosted workspace. Use the existing repository CLI with --connection and the owner-provided private connection file; read docs/hosted-agent-client.md. Obtain credentials through the existing host, never from this prompt.',
       'An already-configured Projects Git MCP connection can read this task with projects_git_get_task. It uses the same private connection and builder permissions; see docs/mcp.md.',

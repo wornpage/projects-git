@@ -26,39 +26,48 @@ export function checkedTrialCleanup(value:unknown):TrialCleanupResult {
 // deletion targets by listing a namespace or accepting names from HTTP input.
 export async function cleanupTrialResources(storage:Storage,snapshot:HostedSnapshot,artifacts:Artifacts|undefined,
   validate:()=>Promise<void>,now=Date.now()):Promise<TrialCleanupResult> {
-  const name=trialSampleName(snapshot.workspace.id),operations=Object.entries(snapshot.operations).filter(([,op])=>op.resourceName);
+  const sample=trialSampleName(snapshot.workspace.id),operations=Object.entries(snapshot.operations).filter(([,op])=>op.resourceName);
   const result=(state:TrialCleanupResult['state'],reason:string|null,deleted=0):TrialCleanupResult=>({state,resources:operations.length,deleted,reason});
   // Validate the complete deletion set before the first provider effect.
-  if(operations.length>1||Object.values(snapshot.workspace.projects??{}).some(p=>p.repositoryName!==name)
-    ||Object.keys(snapshot.forks).length||snapshot.workspace.tasks.length||snapshot.workspace.runs.length)return result('blocked','UNTRACKED_RESOURCE');
+  const projects=new Set(Object.keys(snapshot.workspace.projects??{})),tasks=new Set(snapshot.workspace.tasks.map(t=>t.id)),runs=new Set(snapshot.workspace.runs.map(r=>r.id));
+  if(operations.length>11||Object.keys(snapshot.jobs??{}).length||Object.keys(snapshot.recoveryImports??{}).length
+    ||Object.entries(snapshot.repositories).some(([task,name])=>!tasks.has(task)||name!==sample)
+    ||Object.values(snapshot.workspace.projects??{}).some(p=>p.repositoryName!==sample)
+    ||snapshot.workspace.tasks.some(t=>!projects.has(t.projectId!)||snapshot.repositories[t.id]!==sample)
+    ||snapshot.workspace.runs.some(r=>!tasks.has(r.taskId))
+    ||Object.entries(snapshot.forks).some(([run,fork])=>!runs.has(run)||!operations.some(([,op])=>op.itemId===run&&op.resourceName===fork.name)))return result('blocked','UNTRACKED_RESOURCE');
   if(!operations.length)return Object.keys(snapshot.workspace.projects??{}).length?result('blocked','UNTRACKED_RESOURCE'):result('complete',null);
-  const [key,op]=operations[0];
-  if(op.kind!=='repository-create'||op.resourceName!==name||op.seedTemplate!==TRIAL_SAMPLE.id
-    ||op.marker!==`Projects Git creation: ${snapshot.workspace.id}:${key}\n\n${TRIAL_SAMPLE.description}`)
-    return result('blocked','OWNERSHIP_UNCONFIRMED');
-  if((op.leaseUntil??0)>now)return result('pending','OPERATION_IN_FLIGHT');
+  if(new Set(operations.map(([,op])=>op.resourceName)).size!==operations.length)return result('blocked','UNTRACKED_RESOURCE');
+  for(const [key,op] of operations){
+    const owned=op.kind==='repository-create'?op.resourceName===sample&&op.seedTemplate===TRIAL_SAMPLE.id&&op.marker===`Projects Git creation: ${snapshot.workspace.id}:${key}\n\n${TRIAL_SAMPLE.description}`
+      :['assign','claim'].includes(op.kind)&&/^agent-[a-f0-9-]{36}$/.test(op.resourceName!)&&op.marker==='projects-agent-git:'+snapshot.workspace.id+':'+key&&runs.has(op.itemId!);
+    if(!owned)return result('blocked','OWNERSHIP_UNCONFIRMED');
+  }
+  if(Object.values(snapshot.operations).some(op=>op.state==='pending'&&(op.leaseUntil??0)>now))return result('pending','OPERATION_IN_FLIGHT');
   if(!artifacts)return result('blocked','REPOSITORY_BINDING_UNAVAILABLE');
   storage.sql.exec('CREATE TABLE IF NOT EXISTS trial_cleanup_resources(name TEXT PRIMARY KEY,repository_id TEXT NOT NULL,marker TEXT NOT NULL,state TEXT NOT NULL)');
-  const known=storage.sql.exec<Receipt>('SELECT * FROM trial_cleanup_resources WHERE name=?',name).toArray()[0];
-  if(known&&(known.marker!==op.marker||op.repositoryId&&known.repository_id!==op.repositoryId))return result('blocked','OWNERSHIP_CHANGED');
   let calls=0;
   const effect=async<T>(work:()=>Promise<T>):Promise<T>=>{
     if(++calls>TRIAL_CLEANUP_CALLS)throw new ApiError(409,'CLEANUP_CALL_LIMIT','The cleanup attempt allowance is used.');
     await validate();return work();
   };
+  const clean=async(op:HostedSnapshot['operations'][string]):Promise<TrialCleanupResult>=>{const name=op.resourceName!;
+    const one=(state:TrialCleanupResult['state'],reason:string|null,deleted=0):TrialCleanupResult=>({state,resources:1,deleted,reason});
+    const known=storage.sql.exec<Receipt>('SELECT * FROM trial_cleanup_resources WHERE name=?',name).toArray()[0];
+    if(known&&(known.marker!==op.marker||op.repositoryId&&known.repository_id!==op.repositoryId))return one('blocked','OWNERSHIP_CHANGED');
   try{
     let handle:ArtifactsRepo;
     try{handle=await effect(()=>artifacts.get(name));}
     catch(error){
       if(!absent(error))throw error;
-      if(!known&&!op.repositoryId)return result('pending','CREATION_OUTCOME_UNKNOWN');
-      return result('complete',null,1);
+      if(!known&&!op.repositoryId)return one('pending','CREATION_OUTCOME_UNKNOWN');
+      return one('complete',null,1);
     }
     using repo=handle;
     const info=await effect(()=>repo.info());
     if(typeof info.id!=='string'||!info.id||info.id.length>200||info.name!==name||info.description!==op.marker
-      ||op.repositoryId&&info.id!==op.repositoryId||known&&info.id!==known.repository_id)return result('blocked','OWNERSHIP_CHANGED');
-    if(known)return result(known.state==='deleted'?'blocked':'pending',known.state==='deleted'?'RESOURCE_REAPPEARED':'DELETE_OUTCOME_UNKNOWN');
+      ||op.repositoryId&&info.id!==op.repositoryId||known&&info.id!==known.repository_id)return one('blocked','OWNERSHIP_CHANGED');
+    if(known)return one(known.state==='deleted'?'blocked':'pending',known.state==='deleted'?'RESOURCE_REAPPEARED':'DELETE_OUTCOME_UNKNOWN');
     const inventory=async()=>{
       const value=await effect(()=>repo.listTokens());
       if(!Array.isArray(value.tokens)||!Number.isSafeInteger(value.total)||value.total!==value.tokens.length||value.total>16
@@ -67,19 +76,22 @@ export async function cleanupTrialResources(storage:Storage,snapshot:HostedSnaps
       return value.tokens;
     };
     for(const token of await inventory())if(token.state==='active')await effect(()=>repo.revokeToken(token.id));
-    if((await inventory()).some(t=>t.state==='active'))return result('pending','TOKEN_REVOCATION_UNCONFIRMED');
+    if((await inventory()).some(t=>t.state==='active'))return one('pending','TOKEN_REVOCATION_UNCONFIRMED');
     const latest=await effect(()=>repo.info());
-    if(latest.id!==info.id||latest.name!==name||latest.description!==op.marker)return result('blocked','OWNERSHIP_CHANGED');
+    if(latest.id!==info.id||latest.name!==name||latest.description!==op.marker)return one('blocked','OWNERSHIP_CHANGED');
     // Later attempts inspect an uncertain deletion; they never blindly resend it.
     await effect(()=>{
       storage.sql.exec("INSERT INTO trial_cleanup_resources(name,repository_id,marker,state) VALUES(?,?,?,'deleting')",name,info.id,op.marker);
       return artifacts.delete(name);
     });
-    try{using remaining=await effect(()=>artifacts.get(name));return result('pending','DELETE_UNCONFIRMED');}
+    try{using remaining=await effect(()=>artifacts.get(name));return one('pending','DELETE_UNCONFIRMED');}
     catch(error){if(!absent(error))throw error;}
     storage.sql.exec("UPDATE trial_cleanup_resources SET state='deleted' WHERE name=?",name);
-    return result('complete',null,1);
-  }catch(error){return result('pending',error instanceof ApiError?error.code:'PROVIDER_OUTCOME_UNKNOWN');}
+    return one('complete',null,1);
+  }catch(error){return one('pending',error instanceof ApiError?error.code:'PROVIDER_OUTCOME_UNKNOWN');}};
+  let deleted=0;
+  for(const [,op] of operations){const item=await clean(op);deleted+=item.deleted??0;if(item.state!=='complete')return result(item.state,item.reason,deleted);}
+  return result('complete',null,deleted);
 }
 
 export function purgeTrialWorkspace(storage:Storage,workspaceId:string,receipt:TrialCleanupResult):void {

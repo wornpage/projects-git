@@ -68,7 +68,7 @@ export function createProjectsView({getContext, disclosure, collections, selectP
           ? el('button',{type:'button',class:'button button-primary',disabled:busy,onclick:createStarter},busy?'Preparing starter…':'Create my starter project') : null)) : null,
       next?el('section',{class:'next-action-bar','aria-label':'Next workspace action'},el('div',{},el('span',{class:'section-kicker'},nextRow.project.name),el('strong',{},next.title)),
         el('button',{type:'button',class:'button button-primary',onclick:()=>switchView(next.view,next.taskId,next.runId??null)},next.action+' →')):null,
-      workspace.authentication && !workspace.authentication.permissions.manage ? null : secondaryCreate ? disclosure('directory-create-options','Create a project',el('div',{class:'directory-actions'},
+      workspace.trial||workspace.authentication && !workspace.authentication.permissions.manage ? null : secondaryCreate ? disclosure('directory-create-options','Create a project',el('div',{class:'directory-actions'},
         el('button',{type:'button',class:'button button-small',disabled:busy,onclick:()=>openTaskComposer('repository')},'+ New project'),
         workspace.capabilities?.demo ? el('button',{type:'button',class:'button button-small',onclick:()=>openTaskComposer('sample')},'Try a sample project') : null)) : el('div',{class:'directory-actions'},
         el('button',{type:'button',class:'button button-primary button-small',disabled:busy,onclick:()=>openTaskComposer('repository')},'+ New project'),

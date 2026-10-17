@@ -48,6 +48,7 @@ export const DEMO_ASSETS = Object.freeze([
   "ui/task-composer.js",
   "ui/task-creation.js",
   "ui/task-lifecycle.js",
+  "ui/trial-connections.js",
   "ui/views/evidence.js",
   "ui/views/projects.js",
   "ui/views/queue.js",

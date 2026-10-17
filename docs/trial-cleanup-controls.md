@@ -1,6 +1,6 @@
 # Trial cleanup and resource controls
 
-Status: implemented for the supplied-sample preview, with local proof only. No
+Status: implemented for the supplied-sample preview and bounded full workflow, with local proof only. No
 Cloudflare resource, hosted workflow, deployment or monetary allowance is approved
 by this source change. The supplied configurations have `approval: null` and zero
 new-resource allowances. The private app and challenge artifacts are unchanged.
@@ -29,8 +29,9 @@ unpause or silent approval renewal.
 These controls bound application work. **They are not a guaranteed Cloudflare
 invoice cap.** They do not meter billing, Access seats, incoming HTTP traffic,
 storage retention charges or every Git transport packet. Responses explicitly
-report `billingCapGuaranteed: false`. Operator-funded models and hosted checks
-remain disabled. Hosted launch still requires verified account costs, an approved
+report `billingCapGuaranteed: false`. Operator-funded models remain disabled. The
+full workflow reserves bounded checks before execution; the sample-only preview
+has no execution binding. Hosted launch still requires verified account costs, an approved
 monetary allowance and edge abuse controls. No prices or dollar conversion are
 invented here.
 
@@ -44,15 +45,16 @@ Sample token inventories are limited to 16 complete, distinct, known-state token
 The registry schedules its own Durable Object alarm on admission and closure.
 Cleanup becomes due after `cleanupDelayMs` from closure or expiry. The minimum is
 five minutes, beyond this slice's three-minute write-token lifetime; supplied
-unapproved templates retain for one day. This is a retention grace period, not an
-export feature. Exports remain unavailable.
+unapproved templates retain for one day. Full-workflow owners can export source and
+history before expiry and during the expiry retention window, up to three attempts.
+Closing immediately removes export access. The sample-only preview has no export.
 
 | Boundary | Enforcement |
 | --- | --- |
 | Scheduling | At most five due trials per alarm; claim each attempt durably before RPC |
 | Recovery allowance | Six retained attempts with backoff; crashes consume their claim; exhaustion blocks further automatic work |
 | Active work | Coordinator fences new calls and waits for active calls and retained creation leases |
-| Deletion targets | One fixed sample from the exact retained creation intent; no namespace listing or browser-supplied names |
+| Deletion targets | One fixed sample and at most ten assigned candidate forks from exact retained intents; no namespace listing or browser-supplied names |
 | Ownership | Match repository name, ID where known, exact creation marker and current metadata |
 | Credentials | Confirm complete inventory and revoke active tokens before deleting |
 | Provider work | At most 32 operations per cleanup attempt; uncertain results remain pending |
@@ -70,10 +72,10 @@ The Artifacts namespace must be dedicated to this runtime, with no other
 application writer. The binding deletes by name; it has no conditional-ID deletion
 parameter. Namespace exclusivity and hosted behavior must be qualified before launch.
 
-This slice intentionally blocks cleanup of retained tasks, runs, forks and untracked
-resources. Enabling workflows requires extending the same inventory and effect
-leases first. Future credential hashes in the registry need a scoped purge before
-the final completed receipt; they are not part of the current sample-only runtime.
+Full-workflow cleanup validates task, run and fork relationships before any provider
+effect, and blocks untracked resources or model jobs. Active calls and publication
+leases fence deletion. Registry credential hashes are purged before the final
+completed receipt, including when a prior coordinator purge already succeeded.
 Minimal admission/abuse records remain and are not advertised as total erasure.
 
 ## Visitor UI

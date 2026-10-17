@@ -4,6 +4,7 @@ import {trialSampleFixture} from './helpers/trial-sample.mjs';
 import {handler,req,admit,token} from './helpers/trial-http.mjs';
 import {unapprovedTrialResources} from './helpers/trial-policy.mjs';
 import {retainedTrialCleanup} from '../src/cloudflare/trial-cleanup.ts';
+import {cleanupTrialResources} from '../src/cloudflare/trial-cleanup.ts';
 
 const prepare=(f,jwt)=>handler(req('/api/trial/sample',jwt,{}),f.env);
 async function prepared(t){const f=await trialSampleFixture(t),jwt=await token(),grant=await admit(f,jwt);assert.equal((await prepare(f,jwt)).status,201);return{f,jwt,grant};}
@@ -14,6 +15,15 @@ async function end(f,jwt,grant){
 }
 function retryNow(f){f.sql.storage.sql.exec('UPDATE trial_cleanup SET next_at=? WHERE next_at IS NOT NULL',Date.now()-1);}
 const status=async(f,jwt)=>(await handler(req('/api/trial',jwt),f.env)).json();
+
+test('unexpected job or repository records block cleanup before any provider effect',async t=>{
+  const {f,grant}=await prepared(t),snapshot=f.store(grant.workspaceId).read(),before=f.calls.length;
+  for(const extra of [{jobs:{unexpected:{}}},{repositories:{unexpected:'foreign-repository'}}]){
+    const result=await cleanupTrialResources(f.contexts.get(grant.workspaceId).storage,{...snapshot,...extra},f.artifacts,async()=>{});
+    assert.equal(result.state,'blocked');assert.equal(result.reason,'UNTRACKED_RESOURCE');
+  }
+  assert.equal(f.calls.length,before);
+});
 
 test('unapproved trial setup performs no provider creation, Git push or implicit approval',async t=>{
   const f=await trialSampleFixture(t,{policyOverrides:{resources:unapprovedTrialResources}}),jwt=await token();await admit(f,jwt);

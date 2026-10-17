@@ -162,6 +162,7 @@ export function systemAuthority(policy: AccessPolicy): HostedAuthority {
 
 export function authorizeRoute(principal: AccessPrincipal, method: string, path: string): void {
   if (principal.kind === 'owner') return;
+  if(principal.provider==='trial-credential'&&principal.kind==='agent'&&['GET','POST'].includes(method)&&/^\/api\/runs\/[a-f0-9-]{36}\/source$/.test(path))return;
   if (principal.kind === 'reviewer') {
     if (method === 'GET' && (path === '/api/review-inbox' || /^\/api\/runs\/[a-f0-9-]{36}\/review-context$/.test(path))
       || method === 'POST' && /^\/api\/runs\/[a-f0-9-]{36}\/(code-review|review-inference)$/.test(path)) return;

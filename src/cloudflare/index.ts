@@ -1,6 +1,6 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { AccessVerifier, accessPolicy, assertAuthority, authorizeRoute, systemAuthority, ownerBinding } from './access.ts';
-import type { AccessPolicy, AccessPrincipal, HostedAuthority } from './access.ts';
+import type { AccessPolicy, AccessPrincipal, HostedAuthority,HumanAccessIdentity } from './access.ts';
 import {currentPolicy} from './current-policy.ts';
 import { publicEntrance } from '../entrance/handler.mjs';
 import { privateWorkbench } from './workbench-assets.mjs';
@@ -21,8 +21,13 @@ import { ApiError, bodyJson, errorResponse, idempotencyKey, json, requireSameOri
 import { ArtifactGit } from './git-transport.mjs';
 import { WorkerChecks } from './sandbox.ts';
 import { chatProvider } from '../core/agent.mjs';
-import {isTrial,coordinatorWorkspaceId,trialRegistry,assertTrialRoute,assertNoTrialBackground,configuredTrialPolicy} from './trial-scope.ts';
-import {assertTrialActive,trialAccessPolicy,trialStatus,trialGrant} from './trial-admission.ts';
+import {isTrial,coordinatorWorkspaceId,trialRegistry,assertTrialRoute,assertNoTrialBackground,configuredTrialPolicy,trialWorkflowEnabled} from './trial-scope.ts';
+import {scopedTrialArtifacts} from './trial-artifacts.ts';
+import {TrialSourcePublication} from './trial-source-publication.ts';
+import {trialWorkflowUsage,TRIAL_WORKFLOW_LIMITS} from './trial-workflow.ts';
+import {assertTrialActive,trialAccessPolicy,trialStatus,trialGrant,trialCleanupDue} from './trial-admission.ts';
+import {readArtifactSnapshot} from './artifacts.ts';
+import {buildWorkspaceBackup} from '../core/workspace-backup.mjs';
 import type {TrialGrant,TrialPolicy} from './trial-admission.ts';
 import {cleanupTrialResources,purgeTrialWorkspace,retainedTrialCleanup} from './trial-cleanup.ts';
 import type {TrialCleanupResult} from './trial-cleanup.ts';
@@ -148,26 +153,30 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     return this.env.MODEL_API_KEY && this.env.MODEL ? chatProvider({ endpoint: this.env.MODEL_ENDPOINT, apiKey: this.env.MODEL_API_KEY, model: this.env.MODEL }) : undefined;
   }
 
-  private controller(authority: HostedAuthority,trial?:TrialGrant): HostedController {
+  private controller(authority: HostedAuthority,trial?:TrialGrant,sampleSetup=false): HostedController {
     const provider = this.modelProvider();
+    const workflow=Boolean(trial&&trialWorkflowEnabled(this.env));
     let trialFailure:unknown;
     const validateTrial=async()=>{
       try {
         if(this.trialCleanupRunning||retainedTrialCleanup(this.ctx.storage))throw new ApiError(403,'TRIAL_CLOSED','Trial cleanup fences new work.');
-        if(authority.principal.kind!=='owner')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Sample setup requires the trial owner.');
+        if(authority.principal.kind==='system')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Trial work requires a current identity.');
         assertTrialActive(trial!);
         const fresh=trialGrant(await trialRegistry(this.env).authorize(trial!.workspaceId,authority.principal,configuredTrialPolicy(this.env)));
-        if(JSON.stringify(trialAccessPolicy(fresh))!==JSON.stringify(authority.policy)||fresh.policyRevision!==trial!.policyRevision
+        if(JSON.stringify(trialAccessPolicy(fresh,workflow))!==JSON.stringify(authority.policy)||fresh.policyRevision!==trial!.policyRevision
           ||fresh.createdAt!==trial!.createdAt||fresh.expiresAt!==trial!.expiresAt)
           throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Sample setup no longer matches its authenticated trial.');
         assertTrialActive(fresh);Object.assign(trial!,fresh);
       }catch(error){trialFailure=error;throw error;}
     };
-    return new HostedController(this.store, this.artifacts(), authority, {
+    const reserve=async(kind:'setup'|'read'|'create'|'issue'|'push'|'fork'|'check')=>{
+      const principal=authority.principal;if(principal.kind==='system')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Trial resources require a current identity.');
+      trialGrant(await trialRegistry(this.env).reserveResource(trial!.workspaceId,principal,configuredTrialPolicy(this.env),kind));
+    };
+    const artifacts=workflow&&!sampleSetup?scopedTrialArtifacts(this.artifacts(),()=>this.store.read(),reserve,validateTrial):this.artifacts();
+    return new HostedController(this.store, artifacts, authority, {
       guard:trial?()=>{if(trialFailure)throw trialFailure;assertTrialActive(trial);}:undefined,
-      trial:trial?{workspaceId:trial.workspaceId,validate:validateTrial,
-        reserve:async kind=>{const principal=authority.principal;if(principal.kind!=='owner')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Trial resources require the owner.');
-          trialGrant(await trialRegistry(this.env).reserveResource(trial!.workspaceId,principal,configuredTrialPolicy(this.env),kind));},
+      trial:trial?{workspaceId:trial.workspaceId,workflow,validate:validateTrial,reserve,
         allowance:async()=>{
           const principal=authority.principal;if(principal.kind!=='owner')throw new ApiError(403,'TRIAL_SAMPLE_FORBIDDEN','Trial allowance requires the owner.');
           const reply=await trialRegistry(this.env).controls({issuer:principal.issuer,audience:authority.policy.audience,
@@ -177,7 +186,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
         }}:undefined,
       currentPolicy: () => currentPolicy(this.env.CURRENT_POLICY, this.env.WORKSPACE_ID),
       ensureSubscription:(repository,validate)=>this.ensureSubscription(repository,validate),
-      checks: { verify: (source, commit, signal, attemptId) => this.verifyCheckout(source, commit, signal, attemptId) }, git: this.gitTransport(), provider,
+      checks: { verify: async(source, commit, signal, attemptId) => {if(trial)await reserve('check');return this.verifyCheckout(source, commit, signal, attemptId);} }, git: this.gitTransport(), provider,
       repositoryChecks: { observe: (attemptId, index, files, argv, input, timeoutMs) => {
         this.requireExecutor(attemptId);
         return this.env.REPOSITORY_CHECKS.getByName(attemptId + ':' + index).observe(files, argv, input, timeoutMs);
@@ -210,7 +219,7 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     this.requireExecutor(attemptId);
     const abort = new AbortController(), key = attemptId!;
     const combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal;
-    const finished = new WorkerChecks(this.env.LOADER).verify(source, commit, combined);
+    const finished = new WorkerChecks(isTrial(this.env)?this.env.TRIAL_LOADER!:this.env.LOADER).verify(source, commit, combined);
     const execution = {abort, finished}; this.checkoutExecutions.set(key, execution);
     try { return await finished; }
     finally { if (this.checkoutExecutions.get(key) === execution) this.checkoutExecutions.delete(key); }
@@ -296,6 +305,37 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     }
   }
 
+  async exportTrial(identity:HumanAccessIdentity,policy:TrialPolicy) {
+    if(!trialWorkflowEnabled(this.env)||this.trialCleanupRunning||retainedTrialCleanup(this.ctx.storage))throw new ApiError(403,'TRIAL_CLOSED','Trial data is not available for export.');
+    const workspaceId=coordinatorWorkspaceId(this.ctx,this.env);
+    const validate=async()=>{
+      const grant=trialGrant(await trialRegistry(this.env).read(identity,policy));
+      if(grant.workspaceId!==workspaceId||grant.ownerSubject!==identity.subject||grant.issuer!==identity.issuer||grant.audience!==identity.audience)throw new ApiError(403,'WORKSPACE_FORBIDDEN','Export belongs to a different trial.');
+      if(grant.closedAt!==null)throw new ApiError(403,'TRIAL_CLOSED','Closed trials cannot export.');
+      if(Date.now()>=trialCleanupDue(grant,policy))throw new ApiError(403,'TRIAL_EXPIRED','The export window has ended.');
+    };
+    this.activeCalls++;
+    try {
+      await validate();trialGrant(await trialRegistry(this.env).reserveExport(identity,policy));
+      const {snapshot,backupLedgers}=this.store.captureBackup(),history=await buildWorkspaceBackup(snapshot,new Date().toISOString(),backupLedgers);
+      const targets=Object.values(snapshot.workspace.projects??{}).map(project=>({name:project.repositoryName,commit:project.mainCommit,runId:null as string|null}));
+      for(const run of snapshot.workspace.runs){const fork=snapshot.forks[run.id];if(fork&&run.headCommit)targets.push({name:fork.name,commit:run.headCommit,runId:run.id});}
+      if(targets.length>11)throw new ApiError(413,'TRIAL_WORKFLOW_LIMIT','Export exceeds the trial resource limit.');
+      const sources=[];
+      for(const target of targets){
+        await validate();const operation=Object.values(snapshot.operations).find(op=>op.resourceName===target.name);
+        if(!operation?.repositoryId||!operation.marker)throw new ApiError(409,'TRIAL_SOURCE_CHANGED','Export resource ownership is unconfirmed.');
+        using repo=await this.artifacts().get(target.name);const info=await repo.info();
+        if(info.id!==operation.repositoryId||info.name!==target.name||info.description!==operation.marker)throw new ApiError(409,'TRIAL_SOURCE_CHANGED','An export repository was replaced.');
+        const source=await readArtifactSnapshot(repo,target.commit);
+        if(source.files.length>16||source.files.reduce((bytes,file)=>bytes+file.base64.length,0)>128*1024)throw new ApiError(413,'TRIAL_SOURCE_LIMIT','Export source exceeds the trial allowance.');
+        sources.push({runId:target.runId,repository:target.name,...source});
+      }
+      await validate();if(this.store.identity().revision!==snapshot.revision)throw new ApiError(409,'STALE_EXPORT','Trial history changed during export.');
+      return {format:'projects-git-trial-export/v1',workspaceId,history,sources,boundary:'Source snapshots and retained workflow history; not a Git object database or renewed authority.'};
+    }finally{this.activeCalls--;}
+  }
+
   async cleanupTrial(policy:TrialPolicy):Promise<TrialCleanupResult> {
     if(!isTrial(this.env))throw new ApiError(403,'TRIAL_ROUTING_REQUIRED','This is not a trial coordinator.');
     const workspaceId=coordinatorWorkspaceId(this.ctx,this.env);
@@ -309,6 +349,9 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
       await validate();
       const prior=retainedTrialCleanup(this.ctx.storage);if(prior)return prior;
       if(this.activeCalls)return {state:'pending',resources:null,deleted:null,reason:'OPERATION_IN_FLIGHT'};
+      if(this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trial_source_publications'").toArray().length
+        &&this.ctx.storage.sql.exec('SELECT 1 FROM trial_source_publications WHERE lease_until>? LIMIT 1',Date.now()).toArray().length)
+        return {state:'pending',resources:null,deleted:null,reason:'OPERATION_IN_FLIGHT'};
       const result=await cleanupTrialResources(this.ctx.storage,this.store.read(),this.env.TRIAL_ARTIFACTS,validate);
       if(result.state==='complete'){
         await validate();
@@ -333,14 +376,27 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
     let trial:TrialGrant|undefined;
     const workspaceId=coordinatorWorkspaceId(this.ctx,this.env);
     if(isTrial(this.env)) {
-      assertTrialRoute(call.method,call.path);
+      assertTrialRoute(call.method,call.path,trialWorkflowEnabled(this.env));
       if(!call.trialPolicy)throw new ApiError(503,'TRIAL_POLICY_REQUIRED','The authenticated Worker must supply its current trial policy.');
       trial=trialGrant(await trialRegistry(this.env).authorize(workspaceId,call.principal,call.trialPolicy));
-      if(JSON.stringify(call.policy)!==JSON.stringify(trialAccessPolicy(trial)))throw new ApiError(403,'TRIAL_POLICY_MISMATCH','Trial authority differs from the retained admission.');
+      if(JSON.stringify(call.policy)!==JSON.stringify(trialAccessPolicy(trial,trialWorkflowEnabled(this.env))))throw new ApiError(403,'TRIAL_POLICY_MISMATCH','Trial authority differs from the retained admission.');
     }
     assertAuthority(authority, workspaceId);
     authorizeRoute(call.principal, call.method, call.path);
-    controller = this.controller(authority,trial);
+    controller = this.controller(authority,trial,call.path==='/api/trial/sample');
+      const trialSource=/^\/api\/runs\/([a-f0-9-]{36})\/source$/.exec(call.path);
+      if(trialSource&&trial&&trialWorkflowEnabled(this.env)){
+        const validate=async()=>{await controller!.trialAssignmentContext(trialSource[1]);};
+        const reserve=async(kind:'read'|'create'|'issue'|'fork'|'push')=>{trialGrant(await trialRegistry(this.env).reserveResource(workspaceId,call.principal,call.trialPolicy!,kind));};
+        const publication=new TrialSourcePublication(this.ctx.storage,scopedTrialArtifacts(this.artifacts(),()=>this.store.read(),reserve,validate),this.gitTransport(),
+          run=>controller!.trialAssignmentContext(run),()=>reserve('push'));
+        if(call.method==='GET'){
+          const source=await controller.trialSource(trialSource[1]);
+          const row=this.ctx.storage.sql.exec<{state:string;head_commit:string|null}>('SELECT state,head_commit FROM trial_source_publications WHERE run_id=?',trialSource[1]).toArray()[0];
+          return reply({...source,publication:{state:row?.state??'not-started',headCommit:row?.head_commit??null}});
+        }
+        return reply(await publication.publish(trialSource[1],call.body,call.key));
+      }
       if(call.path==='/api/trial/sample') {
         if(!trial)throw new ApiError(404,'NOT_FOUND','Trial sample setup is not available in this application.');
         if(call.search)throw new ApiError(400,'INVALID_TRIAL_SAMPLE','Sample setup accepts no query parameters.');
@@ -365,6 +421,11 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
         const snapshot = controller.workspacePage(pageRequest);
         if(trial) {
           assertTrialActive(trial);
+          if(trialWorkflowEnabled(this.env))return reply({...snapshot,sourceRevision:this.store.identity().revision,
+            capacity:{...snapshot.capacity,limit:TRIAL_WORKFLOW_LIMITS.activeRuns},
+            trial:{...trialStatus(trial),workflowReady:true,usage:trialWorkflowUsage(this.store.read()),limits:TRIAL_WORKFLOW_LIMITS,
+              checks:await trialRegistry(this.env).checkAllowance(workspaceId,call.principal,call.trialPolicy!)},
+            capabilities:{...snapshot.capabilities,repository:false,repositoryCatalog:false,repositoryCreate:false,model:false,repositoryChecks:false,baseUpdate:false}});
           return reply({...snapshot,sourceRevision:this.store.identity().revision,trial:trialStatus(trial),
             authentication:{...snapshot.authentication,permissions:{manage:false,review:false,merge:false}},
             capabilities:Object.fromEntries(Object.keys(snapshot.capabilities).map(name=>[name,false]))});
@@ -445,7 +506,14 @@ export class WorkspaceCoordinator extends DurableObject<Env> {
       const fail = /^\/api\/runs\/([a-f0-9-]{36})\/fail$/.exec(call.path);
       if (fail) return reply(await controller.fail(fail[1], call.body));
       const complete = /^\/api\/runs\/([a-f0-9-]{36})\/submit$/.exec(call.path);
-      if (complete) return reply(await controller.complete(complete[1], call.body));
+      if (complete) {
+        if(trial&&trialWorkflowEnabled(this.env)){
+          const exists=this.ctx.storage.sql.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='trial_source_publications'").toArray().length;
+          const row=exists?this.ctx.storage.sql.exec<{state:string;head_commit:string}>('SELECT state,head_commit FROM trial_source_publications WHERE run_id=?',complete[1]).toArray()[0]:null;
+          if(row?.state!=='complete'||row.head_commit!==call.body.headCommit)throw new ApiError(409,'TRIAL_SOURCE_REQUIRED','Publish the bounded checkout source before submitting this exact commit.');
+        }
+        return reply(await controller.complete(complete[1], call.body));
+      }
       const review = /^\/api\/runs\/([a-f0-9-]{36})\/review$/.exec(call.path);
       const reviewAssignments = /^\/api\/runs\/([a-f0-9-]{36})\/review-assignments$/.exec(call.path);
       if (reviewAssignments) return reply(await controller.assignReviewers(reviewAssignments[1],call.body,call.key));
@@ -530,11 +598,11 @@ export async function dispatchWorkspaceRequest(request:Request,env:Env,policy:Ac
   if (!workspaceId || !/^[A-Za-z0-9_.-]{1,100}$/.test(workspaceId)) throw new ApiError(503, "WORKSPACE_NOT_CONFIGURED", "Configure a valid workspace identity.");
   const mutation = request.method !== "GET" && request.method !== "HEAD";
   if (mutation) requireSameOrigin(request);
-  const forbiddenSecrets = [request.headers.get('Cf-Access-Jwt-Assertion'), request.headers.get('CF-Access-Client-Secret'), env.MODEL_API_KEY].filter((value): value is string => Boolean(value));
-  const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? WORKSPACE_BACKUP_REQUEST_BYTES : url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
+  const forbiddenSecrets = [request.headers.get('Cf-Access-Jwt-Assertion'), request.headers.get('CF-Access-Client-Secret'),request.headers.get('Authorization')?.replace(/^Bearer /,''), env.MODEL_API_KEY].filter((value): value is string => Boolean(value));
+  const body = mutation ? await bodyJson(request, forbiddenSecrets, ['/api/workspace/backup-preview','/api/workspace/restore'].includes(url.pathname) ? WORKSPACE_BACKUP_REQUEST_BYTES : url.pathname === '/api/projects/restore' ? 1100 * 1024 : url.pathname === '/api/tasks' || url.pathname.endsWith('/checks') || url.pathname.endsWith('/source') || /^\/api\/projects\/[a-f0-9-]{36}\/access$/.test(url.pathname) ? 128 * 1024 : 32 * 1024) : {};
   for(const expectedWorkspace of [request.headers.get('X-Workspace-Id'),body.expectedWorkspaceId])
     if (expectedWorkspace !== undefined && expectedWorkspace !== null && expectedWorkspace !== workspaceId) throw new ApiError(403, 'WORKSPACE_FORBIDDEN', 'The request targets a different workspace.');
-  const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore','/api/trial/sample'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
+  const needsKey = request.method === "POST" && (["/api/tasks", '/api/repositories', '/api/model-runs', '/api/projects/restore','/api/workspace/restore','/api/trial/sample'].includes(url.pathname) || /^\/api\/tasks\/[^/]+\/agents$/.test(url.pathname) || /^\/api\/projects\/[^/]+\/(claim|access)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/(source|checks|verify|update-base|code-review|review-assignments|review-inference)$/.test(url.pathname) || /^\/api\/runs\/[^/]+\/findings\/[^/]+\/decision$/.test(url.pathname));
   const key = needsKey ? idempotencyKey(request) : "";
   const stub = env.WORKSPACES.getByName(workspaceId);
   return await stub.api({ principal, policy, forbiddenSecrets, method: request.method, path: url.pathname, body, key, search: url.search,

@@ -31,3 +31,21 @@ test('closing a connection panel discards a delayed credential response',async()
   resolve(Response.json({token:'pgt1_'+'c'.repeat(64),principal:{provider:'trial-credential',kind:'agent',workspaceId,expiresAt:Math.floor(Date.now()/1000)+600}}));await call;
   assert.equal(descendants(component.node).find(n=>n.textContent==='Download private connection').hidden,true);
 });
+
+test('hiding during issuance discards its delayed secret and retains the pending request key',async()=>{
+  const {document}=installFakeDOM();let visibility,resolve;document.addEventListener=(_event,fn)=>visibility=fn;document.removeEventListener=()=>{};
+  const pending=new Promise(done=>resolve=done),workspaceId='trial-'+'a'.repeat(64),keys=[];
+  const component=createTrialConnections({workspaceId,captureSession:()=>()=>true,origin:'https://trial.example.test',fetcher:async(path,options)=>{
+    if(path.endsWith('/session'))return Response.json({identityKey:'b'.repeat(64)});
+    keys.push(options.headers['Idempotency-Key']);return keys.length===1?pending:Response.json({replayed:true,token:null});
+  }});
+  component.node.querySelector('select').value='agent';const create=descendants(component.node).find(n=>n.tagName==='BUTTON'&&n.textContent==='Create / replace connection');
+  const call=create.dispatch('click');await new Promise(done=>setImmediate(done));
+  document.hidden=true;visibility();document.hidden=false;visibility();
+  // The app session guard has not yet observed the external identity change.
+  resolve(Response.json({token:'pgt1_'+'c'.repeat(64),principal:{provider:'trial-credential',kind:'agent',workspaceId,expiresAt:Math.floor(Date.now()/1000)+600}}));await call;
+  assert.equal(descendants(component.node).find(n=>n.textContent==='Download private connection').hidden,true);
+  assert.equal(create.textContent,'Retry same creation');await create.dispatch('click');
+  assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);assert.equal(descendants(component.node).find(n=>n.textContent==='Download private connection').hidden,true);
+  component.dispose();
+});

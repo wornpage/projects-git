@@ -16,7 +16,7 @@ export function readTrialResources(value:unknown):TrialResourcePolicy {
     ||v.approvalExpiresAt!==null&&(!Number.isSafeInteger(v.approvalExpiresAt)||v.approvalExpiresAt<0||v.approvalExpiresAt>8.64e15)
     ||(v.approval===null)!==(v.approvalExpiresAt===null)
     ||!Number.isSafeInteger(v.cleanupDelayMs)||v.cleanupDelayMs<300_000||v.cleanupDelayMs>7*86400_000)throw invalid();
-  for(const [key,max] of [['dailySetups',100],['totalSetups',1000],['setupAttempts',10],['providerCalls',200]] as const)
+  for(const [key,max] of [['dailySetups',100],['totalSetups',1000],['setupAttempts',10],['providerCalls',600]] as const)
     if(!Number.isSafeInteger(v[key])||v[key]<0||v[key]>max||(v.approval===null?v[key]!==0:v[key]<1))throw invalid();
   return {approval:v.approval,approvalExpiresAt:v.approvalExpiresAt,dailySetups:v.dailySetups,totalSetups:v.totalSetups,
     setupAttempts:v.setupAttempts,providerCalls:v.providerCalls,cleanupDelayMs:v.cleanupDelayMs};
@@ -31,6 +31,8 @@ export class TrialResourceStore {
     storage.sql.exec('CREATE TABLE IF NOT EXISTS trial_resource_stop(id INTEGER PRIMARY KEY CHECK(id=1),reason TEXT NOT NULL)');
     storage.sql.exec(`CREATE TABLE IF NOT EXISTS trial_resource_usage(workspace_id TEXT PRIMARY KEY,started_at INTEGER NOT NULL,
       attempts INTEGER NOT NULL,calls INTEGER NOT NULL,create_started INTEGER NOT NULL)`);
+    storage.sql.exec('CREATE TABLE IF NOT EXISTS trial_check_usage(workspace_id TEXT NOT NULL,day INTEGER NOT NULL,calls INTEGER NOT NULL,PRIMARY KEY(workspace_id,day))');
+    storage.sql.exec('CREATE TABLE IF NOT EXISTS trial_export_usage(workspace_id TEXT PRIMARY KEY,calls INTEGER NOT NULL)');
   }
   private usage(workspaceId:string) {return this.storage.sql.exec<Usage>('SELECT * FROM trial_resource_usage WHERE workspace_id=?',workspaceId).toArray()[0];}
   private reason(now=this.now()):string|null {
@@ -67,8 +69,8 @@ export class TrialResourceStore {
       }else this.storage.sql.exec('UPDATE trial_resource_usage SET attempts=attempts+1 WHERE workspace_id=?',workspaceId);
     });
   }
-  reserveEffect(workspaceId:string,kind:'read'|'create'|'issue'|'push'):void {
-    if(!['read','create','issue','push'].includes(kind))throw new ApiError(400,'INVALID_TRIAL_EFFECT','Unsupported resource effect.');
+  reserveEffect(workspaceId:string,kind:'read'|'create'|'issue'|'push'|'fork'):void {
+    if(!['read','create','issue','push','fork'].includes(kind))throw new ApiError(400,'INVALID_TRIAL_EFFECT','Unsupported resource effect.');
     this.storage.transactionSync(()=>{
       this.assertEnabled();const prior=this.usage(workspaceId);
       if(!prior)throw new ApiError(409,'TRIAL_RESOURCE_REQUIRED','Reserve this trial setup before provider work.');
@@ -77,6 +79,28 @@ export class TrialResourceStore {
       // send a second create while its first outcome could still be in flight.
       if(kind==='create'&&prior.create_started)throw new ApiError(409,'TRIAL_CREATE_OUTCOME_UNKNOWN','The original creation outcome needs inspection. No replacement will be created.');
       this.storage.sql.exec('UPDATE trial_resource_usage SET calls=calls+1,create_started=max(create_started,?) WHERE workspace_id=?',kind==='create'?1:0,workspaceId);
+    });
+  }
+  checkStatus(workspaceId:string) {
+    const day=Math.floor(this.now()/86400_000)*86400_000;
+    const own=this.storage.sql.exec<{n:number}>('SELECT coalesce(sum(calls),0) n FROM trial_check_usage WHERE workspace_id=?',workspaceId).one().n;
+    const daily=this.storage.sql.exec<{n:number}>('SELECT coalesce(sum(calls),0) n FROM trial_check_usage WHERE day=?',day).one().n;
+    return {trial:{used:own,limit:20},daily:{used:daily,limit:20},utcDay:new Date(day).toISOString().slice(0,10)};
+  }
+  reserveCheck(workspaceId:string):void {
+    this.storage.transactionSync(()=>{
+      this.assertEnabled();if(!this.usage(workspaceId))throw new ApiError(409,'TRIAL_RESOURCE_REQUIRED','Prepare the sample before running checks.');
+      const count=this.checkStatus(workspaceId);
+      if(count.trial.used>=count.trial.limit||count.daily.used>=count.daily.limit)throw new ApiError(429,'TRIAL_RESOURCE_LIMIT','The retained checkout-check allowance is used.');
+      const day=Math.floor(this.now()/86400_000)*86400_000;
+      this.storage.sql.exec('INSERT INTO trial_check_usage(workspace_id,day,calls) VALUES(?,?,1) ON CONFLICT(workspace_id,day) DO UPDATE SET calls=calls+1',workspaceId,day);
+    });
+  }
+  reserveExport(workspaceId:string):void {
+    this.storage.transactionSync(()=>{
+      const row=this.storage.sql.exec<{calls:number}>('SELECT calls FROM trial_export_usage WHERE workspace_id=?',workspaceId).toArray()[0];
+      if((row?.calls??0)>=3)throw new ApiError(429,'TRIAL_RESOURCE_LIMIT','This trial has used its 3 / 3 export attempts.');
+      this.storage.sql.exec('INSERT INTO trial_export_usage(workspace_id,calls) VALUES(?,1) ON CONFLICT(workspace_id) DO UPDATE SET calls=calls+1',workspaceId);
     });
   }
 }

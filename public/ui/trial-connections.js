@@ -11,7 +11,7 @@ export function trialConnectionDownload(result,workspaceId,role,origin) {
 // Ephemeral connection controls. Download only on an explicit click; never store
 // the credential in localStorage, sessionStorage, a URL, or the task record.
 export function createTrialConnections({workspaceId,captureSession,fetcher=fetch,origin=location.origin}) {
-  let disposed=false,busy=false,pending=null,secret=null,abort=null;
+  let disposed=false,busy=false,pending=null,secret=null,abort=null,generation=0;
   const current=captureSession();
   const role=el('select',{'aria-label':'Connection role'},el('option',{value:'agent'},'Coding agent'),el('option',{value:'reviewer'},'Independent reviewer'));
   const notice=el('p',{role:'status','aria-live':'polite',class:'small'}),download=el('button',{type:'button',class:'button',hidden:true,onclick:()=>{
@@ -30,19 +30,21 @@ export function createTrialConnections({workspaceId,captureSession,fetcher=fetch
   async function act(revoke=false) {
     if(busy||disposed||!current())return;
     clear();busy=true;role.disabled=true;create.disabled=true;remove.disabled=true;abort=new AbortController();
-    const selected=role.value,action=revoke?'revoke':'create';
+    const selected=role.value,action=revoke?'revoke':'create',attempt=generation;
+    const live=()=>!disposed&&attempt===generation&&!document.hidden&&current();
     pending??={role:selected,action,key:crypto.randomUUID()};
     try {
       if(pending.role!==selected||pending.action!==action)throw Error('Retry the pending connection operation before switching actions.');
       const session=await call('/api/trial/session');
+      if(!live())return;
       if(typeof session.identityKey!=='string'||!/^[a-f0-9]{64}$/.test(session.identityKey))throw Error('The signed-in identity could not be confirmed.');
       const result=await call('/api/trial/credentials'+(revoke?'/revoke':''),{role:selected},pending.key,session.identityKey);
-      if(disposed||!current()||root.isConnected===false)return;
+      if(!live()||root.isConnected===false)return;
       pending=null;
       if(revoke){if(result.revoked!==true)throw Error('Revocation was not confirmed.');notice.textContent='Connection revoked.';}
       else if(result.replayed&&result.token===null)notice.textContent='That creation was recorded, but its secret is no longer available. Create a replacement to revoke it and receive a new connection.';
       else {secret=trialConnectionDownload(result,workspaceId,selected,origin);download.hidden=false;notice.textContent='Save this connection now. It expires '+new Date(result.principal.expiresAt*1000).toLocaleTimeString()+'.';}
-    }catch(error){if(!disposed&&current())notice.textContent=error.name==='AbortError'?'Connection request interrupted. Check its outcome before retrying.':error.message;}
+    }catch(error){if(live())notice.textContent=error.name==='AbortError'?'Connection request interrupted. Check its outcome before retrying.':error.message;}
     finally {busy=false;create.disabled=Boolean(pending&&pending.action!=='create');remove.disabled=Boolean(pending&&pending.action!=='revoke');role.disabled=Boolean(pending);create.textContent=pending?.action==='create'?'Retry same creation':'Create / replace connection';}
   }
   const create=el('button',{type:'button',class:'button button-primary',onclick:()=>act()},'Create / replace connection');
@@ -53,6 +55,8 @@ export function createTrialConnections({workspaceId,captureSession,fetcher=fetch
     el('details',{},el('summary',{},'Connect your coding tool'),el('p',{},'Install the Projects Git source, then configure your tool to launch this MCP server with the absolute path to the private connection file:'),
       el('pre',{},'node scripts/trial-agent-mcp.mjs --connection <absolute-private-connection.json>'),
       el('p',{class:'small'},'The agent supplies the checkout implementation. Publishing, checks, independent review, your decision and merge remain separate.')));
-  const hidden=()=>{if(document.hidden)clear();};document.addEventListener('visibilitychange',hidden);
-  return {node:root,dispose(){disposed=true;clear();abort?.abort();document.removeEventListener('visibilitychange',hidden);}};
+  const suspend=()=>{generation++;clear();abort?.abort();};
+  const hidden=()=>{if(document.hidden)suspend();};document.addEventListener('visibilitychange',hidden);
+  globalThis.addEventListener?.('pagehide',suspend);
+  return {node:root,dispose(){disposed=true;suspend();document.removeEventListener('visibilitychange',hidden);globalThis.removeEventListener?.('pagehide',suspend);}};
 }

@@ -14,7 +14,7 @@ function fixture(t,changes={}){
 
 test('resource policy has no implicit approval, unlimited values or unsupported fields',()=>{
   assert.deepEqual(readTrialResources(unapprovedTrialResources),unapprovedTrialResources);
-  for(const value of [undefined,{},[],{...approvedTrialResources,extra:true},{...approvedTrialResources,providerCalls:201},
+  for(const value of [undefined,{},[],{...approvedTrialResources,extra:true},{...approvedTrialResources,providerCalls:601},
     {...approvedTrialResources,setupAttempts:1.5},{...approvedTrialResources,approvalExpiresAt:null},
     {...unapprovedTrialResources,totalSetups:1},{...unapprovedTrialResources,cleanupDelayMs:0}])
     assert.throws(()=>readTrialResources(value),{code:'TRIAL_NOT_CONFIGURED'});

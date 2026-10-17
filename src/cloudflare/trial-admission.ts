@@ -4,6 +4,7 @@ import {checkedTrialCleanup} from './trial-cleanup.ts';
 import type {TrialCleanupResult} from './trial-cleanup.ts';
 import {readTrialResources,TrialResourceStore,TRIAL_CLEANUP_ATTEMPTS} from './trial-controls.ts';
 import type {TrialResourcePolicy} from './trial-controls.ts';
+import type {TrialCredentialPrincipal,TrialCredentialRole} from './trial-credentials.ts';
 
 export interface TrialPolicy {revision:string;issuer:string;audience:string;durationMs:number;dailyAdmissions:number;activeTrials:number;totalAdmissions:number;resources:TrialResourcePolicy}
 export interface TrialGrant {workspaceId:string;issuer:string;audience:string;ownerSubject:string;createdAt:number;expiresAt:number;closedAt:number|null;policyRevision:string}
@@ -16,8 +17,13 @@ export interface TrialRegistry {
   authorize(workspaceId:string,principal:AccessPrincipal,policy:TrialPolicy):Promise<TrialReply>;
   cleanupGrant(workspaceId:string,policy:TrialPolicy):Promise<TrialReply>;
   cleanupStatus(identity:HumanAccessIdentity,policy:TrialPolicy):Promise<TrialCleanupResult>;
-  reserveResource(workspaceId:string,principal:AccessPrincipal,policy:TrialPolicy,kind:'setup'|'read'|'create'|'issue'|'push'):Promise<TrialReply>;
+  reserveResource(workspaceId:string,principal:AccessPrincipal,policy:TrialPolicy,kind:'setup'|'read'|'create'|'issue'|'push'|'fork'|'check'):Promise<TrialReply>;
   controls(identity:HumanAccessIdentity,policy:TrialPolicy):Promise<TrialReply & {allowance?:ReturnType<TrialResourceStore['status']>}>;
+  authenticateCredential(token:string,policy:TrialPolicy):Promise<TrialReply & {principal?:TrialCredentialPrincipal}>;
+  issueCredential(identity:HumanAccessIdentity,policy:TrialPolicy,role:TrialCredentialRole,key:string):Promise<ReturnType<import('./trial-credentials.ts').TrialCredentials['issue']> extends Promise<infer T>?T:never>;
+  revokeCredential(identity:HumanAccessIdentity,policy:TrialPolicy,role:TrialCredentialRole):Promise<{revoked:boolean}>;
+  checkAllowance(workspaceId:string,principal:AccessPrincipal,policy:TrialPolicy):Promise<ReturnType<TrialResourceStore['checkStatus']>>;
+  reserveExport(identity:HumanAccessIdentity,policy:TrialPolicy):Promise<TrialReply>;
 }
 const rpcErrors={
   TRIAL_CAPACITY_FULL:[429,'Trial capacity is full. The public read-only sample remains available.'],
@@ -36,6 +42,7 @@ const rpcErrors={
   TRIAL_RESOURCE_LIMIT:[429,'The retained trial resource allowance is used.'],
   TRIAL_RESOURCE_REQUIRED:[409,'Reserve trial setup before resource effects.'],
   TRIAL_CREATE_OUTCOME_UNKNOWN:[409,'Inspect the original creation outcome before any further write.'],
+  TRIAL_CREDENTIAL_INVALID:[401,'Use a current trial credential.'],
 } as const;
 type TrialFailure=keyof typeof rpcErrors;
 export type TrialReply={ok:true;grant:TrialGrant}|{ok:false;code:TrialFailure};
@@ -65,7 +72,7 @@ export function trialGrant(reply:TrialReply):TrialGrant {
   return grant;
 }
 export const TRIAL_REGISTRY_NAME='trial-admissions-v1';
-export const trialCleanupDue=(grant:TrialGrant,policy:TrialPolicy)=>(grant.closedAt??grant.expiresAt)+policy.resources.cleanupDelayMs;
+export const trialCleanupDue=(grant:TrialGrant,policy:TrialPolicy)=>Math.min(grant.closedAt??grant.expiresAt,grant.expiresAt)+policy.resources.cleanupDelayMs;
 
 export function readTrialPolicy(raw:string):TrialPolicy {
   let value:TrialPolicy;
@@ -92,9 +99,10 @@ function assertHuman(identity:HumanAccessIdentity,policy:TrialPolicy,now:number)
     throw new ApiError(403,'TRIAL_IDENTITY_FORBIDDEN','A current verified trial identity is required.');
 }
 
-export function trialAccessPolicy(grant:TrialGrant):AccessPolicy {
+export function trialAccessPolicy(grant:TrialGrant,workflow=false):AccessPolicy {
   return {issuer:grant.issuer,audience:grant.audience,workspaceId:grant.workspaceId,ownerSubject:grant.ownerSubject,
-    agentClientIds:[],reviewerClientIds:[],reviewerSubjects:[],memberSubjects:[]};
+    agentClientIds:workflow?['agent-'+grant.workspaceId]:[],reviewerClientIds:workflow?['reviewer-'+grant.workspaceId]:[],reviewerSubjects:[],memberSubjects:[],
+    ...(workflow?{credentialProvider:'trial-credential' as const}:{})};
 }
 export function assertTrialActive(grant:TrialGrant,now=Date.now()):void {
   if(grant.closedAt!==null)throw new ApiError(403,'TRIAL_CLOSED','This trial is closed. No new workspace access is permitted.');
@@ -188,7 +196,7 @@ export class TrialAdmissionStore {
     if(grant.workspaceId!==workspaceId)throw new ApiError(403,'WORKSPACE_FORBIDDEN','This identity does not own this trial workspace.');
     assertTrialActive(grant,this.now());return grant;
   }
-  async reserveResource(workspaceId:string,principal:AccessPrincipal,kind:'setup'|'read'|'create'|'issue'|'push'):Promise<TrialGrant> {
+  async reserveResource(workspaceId:string,principal:AccessPrincipal,kind:'setup'|'read'|'create'|'issue'|'push'|'fork'|'check'):Promise<TrialGrant> {
     await this.authorize(workspaceId,principal);
     // Refresh synchronously after the awaited identity check, then reserve in
     // the same event-loop turn. Closure cannot slip between this read and write.
@@ -197,8 +205,13 @@ export class TrialAdmissionStore {
     assertHuman({issuer:principal.issuer,audience:this.policy.audience,subject:principal.id,displayName:principal.displayName,
       issuedAt:principal.issuedAt,expiresAt:principal.expiresAt},this.policy,now);
     assertTrialActive(grant,now);
-    if(kind==='setup')this.resources.reserveSetup(workspaceId);else this.resources.reserveEffect(workspaceId,kind);
+    if(kind==='setup')this.resources.reserveSetup(workspaceId);else if(kind==='check')this.resources.reserveCheck(workspaceId);else this.resources.reserveEffect(workspaceId,kind);
     return grant;
+  }
+  retainedGrant(workspaceId:string):TrialGrant {
+    const row=this.storage.sql.exec<Row>('SELECT * FROM trial_admissions WHERE workspace_id=?',workspaceId).toArray()[0];
+    if(!row)throw new ApiError(404,'TRIAL_NOT_ADMITTED','No admitted trial owns this workspace.');
+    return this.grant(row);
   }
   cleanupGrant(workspaceId:string):TrialGrant {
     const row=this.storage.sql.exec<Row>('SELECT * FROM trial_admissions WHERE workspace_id=?',workspaceId).toArray()[0];
