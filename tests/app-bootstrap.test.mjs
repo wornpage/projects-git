@@ -13,7 +13,7 @@ const update=source.slice(start,end);
 for(const view of ['review','evidence'])test(`cold ${view} deep link renders its loading chrome without reading unloaded work`,()=>{
   const nodes=new Map();
   const $=selector=>{
-    if(!nodes.has(selector))nodes.set(selector,{textContent:'',classList:{toggle(){}},setAttribute(){},removeAttribute(){}});
+    if(!nodes.has(selector))nodes.set(selector,{textContent:'',dataset:{},classList:{toggle(){}},setAttribute(){},removeAttribute(){}});
     return nodes.get(selector);
   };
   const title=view==='review'?'Changes & checks':'Candidate record';
@@ -26,4 +26,5 @@ for(const view of ['review','evidence'])test(`cold ${view} deep link renders its
   });
   assert.equal($('#page-title').textContent,title);
   assert.equal($('#new-project').disabled,true);
+  assert.equal($('#main').dataset.view,view);
 });

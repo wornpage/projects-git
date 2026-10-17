@@ -115,7 +115,7 @@ export function createEvidenceView({
       el("thead", { role: "rowgroup" }, el("tr", { role: "row" }, columns.map(title => el("th", { scope: "col", role: "columnheader" }, title)))),
       el("tbody", { role: "rowgroup" }, (rows?.items??[]).map(candidate => {
         const candidateTask = workspace.tasks.find(task => task.id === candidate.taskId);
-        const inspect = el("worn-button", { label: candidate.label, size: "sm", onclick: () => switchView("review", candidate.taskId, candidate.id) });
+        const inspect = el("worn-button", { label: candidate.label, size: "sm", variant: candidate===rows.items[0]?'primary':'default', onclick: () => switchView("review", candidate.taskId, candidate.id) });
         return el("tr", { role: "row" },
           cell("Candidate", [inspect, el("p", { class: "evidence-task" }, `Task ${taskNumber(candidateTask)} · ${candidateTask.title}`)]),
           cell("Head commit", el("span", { class: "mono", title: candidate.headCommit || "No commit" }, shortSha(candidate.headCommit))),
@@ -126,7 +126,8 @@ export function createEvidenceView({
     return el('div', {},
       view!=='history' && task ? el('div', {}, taskHeader(task),
         candidateNav(task), run ? el('div', {},
-          el('p', { class: 'record-outcome' }, candidateOutcome(workspace, run).label + ' · ' + candidateOutcome(workspace, run).next),
+          el('section', { class: 'next-action-bar','aria-label':'Next candidate action' },el('p',{},candidateOutcome(workspace, run).label + ' · ' + candidateOutcome(workspace, run).next),
+            el('button',{type:'button',class:'button button-primary',onclick:()=>run.status==='merged'?switchView('history',task.id,null):switchView('review',task.id,run.id,{section:candidateOutcome(workspace,run).section})},run.status==='merged'?'Open project history':candidateOutcome(workspace,run).action+' →')),
           el('div', { class: 'evidence-facts' }, fact('Full head commit', run.headCommit || 'No commit'), fact('Task base commit', run.baseCommit),
             fact(completed?.acceptance.label ?? 'Reported checks', evidence ? evidence.passed + ' / ' + evidence.total : 'No report'),
             completed ? fact('Acceptance-time verified at', completed.acceptance.verifiedAt ?? 'Not retained') : null,

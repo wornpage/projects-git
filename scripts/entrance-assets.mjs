@@ -9,7 +9,7 @@ export async function entranceAssets() {
     metafile:true,format:'esm',platform:'browser',logLevel:'silent'});
   const names = Object.keys(built.metafile.inputs).map(path=>relative(resolve(root,'public'),resolve(root,path)).replaceAll('\\','/'));
   if (names.some(path=>path.startsWith('../') || !path.endsWith('.js'))) throw Error('Demo module graph escaped public JavaScript.');
-  return [...new Set([...names,'styles.css','action-feedback.css','syntax.css','demo/demo.css','vendor/wornpage-button-0.2.3/worn-button.css'])].sort();
+  return [...new Set([...names,'theme.css','styles.css','workbench.css','action-feedback.css','syntax.css','demo/demo.css','vendor/wornpage-button-0.2.3/worn-button.css'])].sort();
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const path = resolve(root,'src/entrance/assets.mjs');

@@ -26,6 +26,19 @@ test('paging, filter reset and a replaced workspace scope keep all records reach
  scope='owner-b';page=draw();assert.equal(page.from,1);assert.equal(renders,2);
 });
 
+test('collapsing mobile options preserves the active filter and original denominator',async()=>{
+ installFakeDOM();const items=[{id:1,name:'Ready',status:'ready'},{id:2,name:'Waiting',status:'waiting'}];
+ const pager=createCollectionPager({getScope:()=> 'workspace',render(){}});
+ const draw=()=>pager({id:'tasks',label:'Tasks',items,text:item=>item.name,filters:[['all','All'],['ready','Ready']],matches:(item,value)=>value==='all'||item.status===value});
+ let page=draw();await page.controls.querySelector('#tasks-options-toggle').dispatch('click');page=draw();
+ assert.equal(page.controls.querySelector('#tasks-options').attrs['data-expanded'],'true');
+ const filter=page.controls.querySelector('#tasks-filter');filter.value='ready';await filter.dispatch('change');
+ page=draw();await page.controls.querySelector('#tasks-options-toggle').dispatch('click');page=draw();
+ assert.equal(page.controls.querySelector('#tasks-options').attrs['data-expanded'],'false');
+ assert.match(page.controls.querySelector('#tasks-options-toggle').textContent,/active/);
+ assert.equal(page.matched,1);assert.equal(page.total,2);assert.deepEqual(page.items.map(item=>item.id),[1]);
+});
+
 test('a large report history preserves exact earlier failure denominators and provenance',async()=>{
  installFakeDOM();const entries=Array.from({length:60},(_,i)=>({label:'Report '+i,report:{commit:String(i).padStart(40,'a'),taskRevision:i+1,passed:i?3:0,total:i?3:2,source:'independent-local-checks',output:i?'passed':'Retained failure',verifiedAt:'2026-10-11T00:00:00Z'}}));
  const before=structuredClone(entries),disclosure=(id,title,...body)=>el('details',{id},el('summary',{},title),...body);

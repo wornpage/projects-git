@@ -86,8 +86,12 @@ test('worker timeout is bounded and late replies/errors cannot take over a later
 test('every syntax foreground retains at least 4.5:1 contrast on every supported code background',async()=>{
   const css=await readFile(new URL('../public/syntax.css',import.meta.url),'utf8');
   const colors=[...css.matchAll(/\.syntax-token-[a-z]+\{color:(#[a-f0-9]{6})\}/g)].map(match=>match[1]);assert.equal(colors.length,8);
-  const theme=await readFile(new URL('../public/styles.css',import.meta.url),'utf8'),reviewer=await readFile(new URL('../public/reviewer.css',import.meta.url),'utf8');
-  const backgrounds=[...['bg','add-bg','delete-bg'].map(name=>theme.match(new RegExp('--worn-diff-'+name+':\\s*(#[a-f0-9]{6})'))[1]),reviewer.match(/pre\{[^}]*background:(#[a-f0-9]{6})/)[1]];
+  const theme=await readFile(new URL('../public/theme.css',import.meta.url),'utf8'),reviewer=await readFile(new URL('../public/reviewer.css',import.meta.url),'utf8');
+  assert.match(reviewer,/pre\s*\{[^}]*background:\s*var\(--worn-diff-bg\)/,'Reviewer source uses the shared code background');
+  assert.match(await readFile(new URL('../public/reviewer.html',import.meta.url),'utf8'),/href="\/theme\.css"/);
+  const backgrounds=['bg','add-bg','delete-bg'].map(name=>{
+    const match=theme.match(new RegExp('--worn-diff-'+name+':\\s*(#[a-f0-9]{6})'));assert.ok(match,'Missing code background '+name);return match[1];
+  });
   const brightness=hex=>{const c=hex.slice(1).match(/../g).map(value=>parseInt(value,16)/255).map(value=>value<=.04045?value/12.92:((value+.055)/1.055)**2.4);return .2126*c[0]+.7152*c[1]+.0722*c[2];};
   for(const color of colors)for(const background of backgrounds){
     const ratio=(Math.max(brightness(color),brightness(background))+.05)/(Math.min(brightness(color),brightness(background))+.05);

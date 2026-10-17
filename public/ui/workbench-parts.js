@@ -66,8 +66,8 @@ export function createWorkbenchParts({
       el('div',{class:'task-context-meta'},el('span',{class:'status status-'+outcome.tone},outcome.label),
         el('span',{},'Requirements r'+(task.revision??1)),el('span',{},'Coordinator · '+(task.owner??'Not assigned'))),
       prerequisitesPanel(task),
-      el('button',{class:'text-link',type:'button',onclick:()=>switchView('overview',task.id,null)},
-        task.criteria.length+' requirement'+(task.criteria.length===1?'':'s')+' · Read task brief'));
+      el('button',{class:'text-link',type:'button','aria-label':'Read task brief · '+task.criteria.length+' requirements · revision '+(task.revision??1),onclick:()=>switchView('overview',task.id,null)},
+        el('span',{},task.criteria.length+' requirement'+(task.criteria.length===1?'':'s')),el('span',{class:'task-brief-label'},' · Read task brief')));
   }
 
 
@@ -93,9 +93,8 @@ export function createWorkbenchParts({
   function candidateNav(task) {
     const run = currentRun(), candidates=taskRuns(task.id);
     if (!run) return null;
-    return el('section',{class:'candidate-surface','aria-label':'Selected candidate'},
+    return el('section',{id:'candidate-navigation',class:'candidate-surface','aria-label':'Selected candidate · '+run.label},
       el('div',{class:'candidate-surface-header'},el('span',{class:'section-kicker'},'CANDIDATE '+(candidates.findIndex(item=>item.id===run.id)+1)+' OF '+candidates.length+' · THIS TASK')),
-      el('div',{class:'candidate-identity'},el('strong',{},run.label),runStatus(run)),
       el('button',{class:'text-link',onclick:()=>switchView('work',task.id,null)},'Back to all '+candidates.length+' candidates'));
   }
 

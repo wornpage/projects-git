@@ -7,22 +7,48 @@ history** retains candidates across that project; **Candidate record** holds one
 candidate's reports and decisions.
 
 On narrow screens, **Navigate** opens these same project, task and candidate links,
-plus **New project** for owners, in the existing side panel. The original nodes,
+plus **New project** and **Installation** when available, in the existing side panel. The original nodes,
 counters and handlers move into the panel and return to the sidebar on close.
 Desktop keeps its sidebar; the phone header stays compact while the full scoped
 navigation and counts remain available.
+
+On phones, Navigate also contains Find work, connection status and identity.
+The page title shares a row with project controls; repeated project metadata is
+available in Project settings. New task stays on the Task queue. Filter/sort
+options expand beside search and remain marked when active. Review uses a single
+tab row, and multi-file diffs expand their file list only when needed. Paused
+admission, prerequisites, failed/stale checks and mapping warnings stay visible.
+
+All owner screens and shared dialogs use the presentation in `public/workbench.css`;
+the owner and reviewer applications share `public/theme.css` design tokens.
+This provides warm surfaces, teal primary actions,
+consistent controls and compact project context. Queue rows separate task identity,
+status and candidate links. Candidate cards emphasize inspection; agent summaries
+and checkout details are expandable while failed checks, revision warnings and
+execution limits remain visible. The four review stages retain their distinct
+states and controls. Filters and pagination continue to show matching and total
+counts; the styling does not change acceptance, verification or merge rules.
 
 The header keeps Find work on one line and groups connection state above the
 signed-in identity. Long identities truncate visually while retaining their full
 text and title. Breadcrumbs have their own space on desktop; smaller layouts use
 the selected project and navigation below. The decorative initial badge is removed.
 
-A single project shows its name without a project picker. The picker appears only
-when the full workspace contains multiple projects, including projects outside
-the loaded page. **Browse all projects** appears only when more projects are
-available than the picker currently lists. Creation remains a separate button.
+A project picker stays visible in the sidebar on desktop and the compact header
+on phones and tablets. It lists recent and pinned projects, **All projects** with
+the full workspace count, and **New project** for owners. All projects opens the
+paginated directory, including projects not loaded into the picker. Creation also
+remains available on the Projects page and in Navigate. Pinning lives in Project
+settings. Navigation totals remain available in Navigate and collection views.
 Task details uses the task title and status; tasks are chosen from the queue,
 without repeating a task dropdown above the detail pane.
+
+Each collection emphasizes its next task; other tools use labeled disclosures.
+Review displays one of its four sections at a time on desktop and phones. Passing
+candidates open on Changes, with a next step into the guarded decision form.
+Missing, failed or pending checks and pending independent review open their own
+stage. Acceptance and merge controls retain all existing guards. Shared type,
+spacing and control tokens are checked with `npm run check:design`.
 
 Vertical sidebars use compact, consistent gaps between navigation rows and scroll
 when the available height cannot hold every task and candidate link. Side panels
@@ -78,7 +104,7 @@ Row counts use all tasks in that project, including integrated tasks. Queue
 counts appear when there is queued work; empty repositories show **0 tasks**.
 The read-only projection does not change permissions, admission or workflow state.
 
-The sidebar contains at most eight recent/pinned project shortcuts, including
+The picker contains at most eight recent/pinned project shortcuts, including
 the current project. Up to four projects can be pinned. Browser storage contains
 only their IDs, scoped to workspace and identity; labels and counts are read
 from the server. **Projects** and **Find work** remain available for the complete

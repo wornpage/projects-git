@@ -79,7 +79,7 @@ test('acceptance without a note records only the chosen commit and revision afte
   const f=fixture(),node=f.panel();await f.type('#reviewer-'+f.run.id,'Reviewer');
   assert.equal(f.$('#accept-'+f.run.id).disabled,false);assert.equal(f.calls.length,0);
   assert.equal(f.$('#review-note-'+f.run.id).attrs.required,undefined);
-  assert.match(node.textContent,/Optional for acceptance; required for rejection/);
+  assert.match(node.textContent,/Optional when accepting; explain rejections/);
   await f.submit(node);assert.equal(f.calls.length,1);
   assert.deepEqual(f.calls[0].body,{decision:'accept',reviewer:'Reviewer',note:'Accepted commit '+f.run.headCommit+' for requirements r'+f.task.revision+'.',headCommit:f.run.headCommit,taskRevision:f.task.revision,ownerVersion:f.task.ownerVersion,comparisons:[]});
   assert.ok(f.calls[0].path.endsWith('/review'));assert.ok(!f.calls.some(call=>call.path.endsWith('/merge')));

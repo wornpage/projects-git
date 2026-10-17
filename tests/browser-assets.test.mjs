@@ -56,6 +56,9 @@ test('pinned browser component and external CSS retain release integrity under t
   assert.ok(visited.has('/installation-readiness.js'));
   const feedback=await fetch(url+'/action-feedback.css');assert.equal(feedback.status,200);assert.match(feedback.headers.get('content-type'),/text\/css/);
   const syntaxCss=await fetch(url+'/syntax.css');assert.equal(syntaxCss.status,200);assert.match(syntaxCss.headers.get('content-type'),/text\/css/);
+  for (const file of ['theme.css','workbench.css']) {
+    const stylesheet=await fetch(url+'/'+file);assert.equal(stylesheet.status,200);assert.match(stylesheet.headers.get('content-type'),/text\/css/);
+  }
   const syntaxWorker=await fetch(url+'/vendor/prism-1.30.0/syntax-worker.js');
   assert.equal(syntaxWorker.status,200);assert.match(syntaxWorker.headers.get('content-type'),/javascript/);
   assert.match(await syntaxWorker.text(),/Permission is hereby granted, free of charge/);

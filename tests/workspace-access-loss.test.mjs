@@ -13,6 +13,11 @@ const cleanup=source.slice(source.indexOf('function leaveWorkspace()'),source.in
 const snapshot=id=>({id,version:1,tasks:[],runs:[],events:[],authentication:{principal:{kind:'owner',id,displayName:id+'@example.test'}},trial:{expiresAt:'2026-10-24T12:00:00Z'}});
 const defer=()=>{let resolve;const promise=new Promise(done=>resolve=done);return{promise,resolve};};
 
+test('access-loss cleanup only addresses elements present in the current shell',()=>{
+  const html=readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
+  for(const [,id] of cleanup.matchAll(/\$\('#([^']+)'\)/g))assert.ok(html.includes('id="'+id+'"'),'Missing shell element: '+id);
+});
+
 test('a current action denial clears rendered A data, including hidden dialogs and identity labels',async()=>{
   const {$,document,nodes}=installFakeDOM(),closed=[],reset=[],content=$('#content');
   const privateIds=['identity-status','project-navigation','project-header','inspector-content','project-connection-content','task-drafts','announcement',
@@ -49,7 +54,7 @@ test('a current action denial clears rendered A data, including hidden dialogs a
 test('navigation cleanup removes private commands and ignores a delayed catalog after disconnect',async()=>{
   const {$}=installFakeDOM(),pending=defer();let workspace=snapshot('a');
   const navigation=createNavigation({getContext:()=>({workspace}),dialogs:{register(){},show:()=>{$('#command-dialog').open=true;}},
-    announce(){},selectProject(){},switchView(){},projectDiscovery:{find:()=>pending.promise}});
+    announce(){},selectProject(){},switchView(){},prepareOpen:()=>null,projectDiscovery:{find:()=>pending.promise}});
   navigation.openCommands();$('#command-query').value='private A query';
   workspace=null;navigation.leave();$('#command-dialog').close();
   pending.resolve({items:[{id:'a-project',name:'Private A project',taskCount:1,candidateCount:1}]});await new Promise(resolve=>setImmediate(resolve));

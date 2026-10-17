@@ -40,7 +40,10 @@ test('20-file view renders only the selected section and preserves selection wit
   let panel=view(run);
   assert.equal(nodes(panel).filter(node=>node.className==='diff-file-button').length,20);
   assert.ok(nodes(panel).filter(node=>node.className?.startsWith('diff-line ')).length<=200);
+  const files=nodes(panel).find(node=>node.className?.includes('diff-files-toggle'));
+  await files.dispatch('click');assert.equal(files.attrs['aria-expanded'],'true');
   await nodes(panel).filter(node=>node.className==='diff-file-button')[19].dispatch('click');
+  assert.equal(files.attrs['aria-expanded'],'false');
   assert.equal(panel.querySelector('h3').textContent,paths[19]);
   panel=view({...run});assert.equal(panel.querySelector('h3').textContent,paths[19]);
   panel=view({...run,headCommit:'c'.repeat(40)});assert.equal(panel.querySelector('h3').textContent,paths[0]);

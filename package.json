@@ -8,6 +8,7 @@
     "node": ">=24.19.0"
   },
   "scripts": {
+    "check:design": "node scripts/check-design-tokens.mjs",
     "setup:check": "node scripts/setup-check.mjs",
     "dev": "node src/local/server.mjs",
     "dev:demo": "wrangler dev --local --config wrangler.demo.jsonc --ip 127.0.0.1 --port 8894 --inspector-port 9294",
@@ -21,7 +22,7 @@
     "build:entrance": "node scripts/entrance-assets.mjs && wrangler deploy --config wrangler.entrance-preview.jsonc --dry-run --outdir dist/entrance",
     "build:demo": "wrangler deploy --config wrangler.demo.jsonc --dry-run --outdir dist/demo",
     "build:subscriptions": "wrangler deploy --config wrangler.subscriptions.jsonc --dry-run --outdir dist/subscriptions",
-    "check": "npm run test && npm run typecheck && npm run build",
+    "check": "npm run check:design && npm run test && npm run typecheck && npm run build",
     "dev:cloudflare": "wrangler dev --local"
   },
   "license": "MIT",

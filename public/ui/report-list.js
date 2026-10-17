@@ -7,7 +7,7 @@ export function createReportList({id, title, entries, definition, disclosure}) {
   let selected = entries.length - 1;
   let offset=Math.max(0,Math.ceil(entries.length/25)-1)*25;
   const detail = el('section', {class:'selected-report', id:id+'-detail', 'aria-label':entries.length > 1 ? 'Selected report' : 'Report details'});
-  const list=el('div',{class:'report-list','aria-label':'Retained reports'}),navigation=el('div',{class:'collection-page-controls'});
+  const list=el('div',{class:'report-list',role:'group','aria-label':'Retained reports'}),navigation=el('div',{class:'collection-page-controls'});
   let buttons=[];
   function drawRows(){
     const page=collectionPage(entries,{query:'',filter:'all',sort:'order',offset},{pageSize:25});offset=page.offset;

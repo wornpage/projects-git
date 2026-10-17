@@ -104,13 +104,14 @@ function findingFields(paths,onRemove){
 async function openReview(item,opener=document.activeElement){
   const epoch=++reviewEpoch,session=viewerSession,path=`/api/runs/${item.runId}/code-review`;
   refreshReviewControls=()=>{};
-  status('Reading the committed candidate…');const container=byId('review');container.replaceChildren();
+  status('Reading the committed candidate…');const container=byId('review');container.replaceChildren();byId('inbox').classList.remove('review-open');
   let packet;try{packet=await api(`/api/runs/${item.runId}/review-context`);}catch(error){if(epoch===reviewEpoch)status(error.message,true);return;}
   if(epoch!==reviewEpoch)return;
   if(packet.context.workspaceId!==item.workspaceId||packet.context.runId!==item.runId||packet.context.reviewAssignmentId!==item.assignmentId){
     status('This assignment changed while opening it. Refresh your inbox and ask the owner for the current review link.',true);return;
   }
   const title=element('h2',item.taskTitle+' · '+item.runLabel),context=packet.context;title.id='review-title';title.tabIndex=-1;
+  byId('inbox').classList.add('review-open');
   const details=element('section','','card');details.append(title,
     element('p',`Head ${context.headCommit} · Base ${context.baseCommit} · requirements r${context.taskRevision}`),
     element('p',context.requirements?.purpose??''));
@@ -138,6 +139,7 @@ async function openReview(item,opener=document.activeElement){
   function updateButtons(){const total=rows.filter(field=>field.row.isConnected).length;
     const submitting=activeSubmissions.has(path);controls.disabled=!canSubmit||submitting;
     add.disabled=total>=50||!canSubmit;submit.disabled=!canSubmit||submitting||verdict.value==='changes_requested'&&!total;
+    add.classList.toggle('primary-action',canSubmit&&!submitting&&verdict.value==='changes_requested'&&!total);
     count.textContent=submitting?'An assessment for this candidate is still being submitted. Wait for its outcome before submitting again.':
       `${total} / 50 findings. Changes requested requires at least one finding.`;}
   refreshReviewControls=updateButtons;
@@ -190,7 +192,7 @@ async function loadInbox(){
   if(epoch!==inboxEpoch)return;
   const identity=[inbox.workspaceId,inbox.principal.kind,inbox.principal.id].join(':');
   if(viewerKey!==identity){viewerSession={};pending.clear();activeSubmissions.clear();refreshReviewControls=()=>{};openedLink='';
-    reviewEpoch++;byId('review').replaceChildren();}
+    reviewEpoch++;byId('review').replaceChildren();byId('inbox').classList.remove('review-open');}
   viewerKey=identity;viewerKind=inbox.principal.kind;
   byId('reviewer-sign-in').hidden=true;
   byId('identity').textContent=(inbox.reviewerName?`${inbox.reviewerName} · `:'')+`Signed in: ${inbox.principal.displayName} · ${inbox.principal.kind}`;
@@ -209,11 +211,12 @@ async function loadInbox(){
   });filters.append(reload);
   card.append(filters);
   const visible=inboxFilter==='all'?inbox.items:inbox.items.filter(item=>item.assignmentScope===inboxFilter);
+  const nextItem=visible.find(item=>['pending','pass','changes_requested'].includes(item.status));
   if(!visible.length)card.append(element('p','No reviews in this view.','muted'));
   for(const item of visible){const row=element('div','','item'),text=element('div');text.append(element('strong',item.taskTitle),
     element('span',`${item.runLabel} · ${item.headCommit?.slice(0,10)??'No commit'}`),element('span',reviewRequestLabel(item.status),'request-state'));
     if(item.status==='stale')text.append(element('span','Ask the owner to renew the assignment for the current code and checks.'));
-    const button=element('button','Inspect candidate');button.type='button';button.disabled=!['pending','pass','changes_requested'].includes(item.status);button.addEventListener('click',async()=>{button.disabled=true;button.textContent='Reading candidate…';
+    const button=element('button','Inspect candidate',item===nextItem?'primary-action':'');button.type='button';button.disabled=!['pending','pass','changes_requested'].includes(item.status);button.addEventListener('click',async()=>{button.disabled=true;button.textContent='Reading candidate…';
       const opening=openReview(item,button),openingEpoch=reviewEpoch;
       try{await opening;}finally{button.disabled=false;button.textContent='Inspect candidate';if(openingEpoch===reviewEpoch&&button.isConnected&&document.activeElement===document.body)button.focus({preventScroll:true});}});row.append(text,button);card.append(row);}
   section.append(card);restoreFocus(focus);status(inbox.total?'Choose an assigned candidate.':'No reviews are assigned to this identity.');

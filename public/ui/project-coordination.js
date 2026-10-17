@@ -12,7 +12,7 @@ export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCa
       ||filter==='queued'&&taskQueued(workspace,workspace.tasks.find(task=>task.id===card.id))||filter==='active'&&workspace.runs.some(run=>run.taskId===card.id&&(['assigned','running'].includes(run.status)||run.verificationPending))
       ||filter==='decision'&&['Review changes','Continue to merge'].includes(card.outcome.action),
     sorts:[['order','Queue order'],['name','Task name'],['newest','Newest first']],sortKey:(card,sort)=>sort==='name'?card.title.toLowerCase():workspace.tasks.find(task=>task.id===card.id).createdAt});
-  return el('section',{'aria-label':'Project task queue'},
+  return el('section',{class:'queue-surface','aria-label':'Project task queue'},
     rows.controls,
     model.admissionPaused?el('p',{class:'capability-note'},'New assignments are paused. Existing work remains available.'):null,
     rows.items.length?el('ul',{class:'task-collection collection-list','aria-label':'Tasks in this project'},rows.items.map(card=>
@@ -21,10 +21,10 @@ export function projectCoordinationView({workspace,projectId,onOpenTask,onOpenCa
           if(event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();onOpenTask(card.id);
         }},card.title),el('p',{class:'small muted'},'Requirements r'+card.revision+(card.dependencies.waiting.length?' · '+card.dependencies.waiting.length+' prerequisites waiting':''))),
         el('span',{class:'status'},card.outcome.label),
-        el('a',{class:'text-link small',href:'?view=work&task='+encodeURIComponent(card.id),
+        el('a',{class:'queue-candidates-link text-link small',href:'?view=work&task='+encodeURIComponent(card.id),
           'aria-label':card.retainedCandidates+' candidate'+(card.retainedCandidates===1?'':'s')+' for '+card.title,onclick:event=>{
             if(event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;event.preventDefault();onOpenCandidates(card.id);
-          }},card.retainedCandidates+' candidate'+(card.retainedCandidates===1?'':'s')))))
+          }},card.retainedCandidates+' candidate'+(card.retainedCandidates===1?'':'s'),el('span',{'aria-hidden':'true'},' →')))))
       : el('p',{},model.totalTasks?'No matching tasks. Clear the filters to browse the full queue.':'No tasks yet. Add a task to this project.'),
     rows.navigation,
     el('p',{class:'definition-note'},model.totalCandidates+' retained candidate'+(model.totalCandidates===1?'':'s')

@@ -39,7 +39,7 @@ export function createReviewView({
     for(const id of selected)if(!options.some(option=>option.id===id))selected.delete(id);
     const selectedCount=el('p',{class:'small',role:'status'},`${selected.size} / 8 reviewers selected`);
     const canAssign=independentlyVerified(run)&&run.evidence?.total>0&&run.evidence.passed===run.evidence.total&&run.evidence.exitCode===0&&!run.verificationPending;
-    const assignButton=el('button',{id:'assign-reviewers-'+run.id,type:'submit',class:'button button-small',
+    const assignButton=el('button',{id:'assign-reviewers-'+run.id,type:'submit',class:'button button-small'+(requestState==='pending'?'':' button-primary'),
       disabled:getContext().busy||!selected.size||selected.size>8||!canAssign,'aria-describedby':'reviewer-selection-help-'+run.id},current?'Renew review request':'Request review');
     const assigned=options.filter(option=>current?.reviewerIds.includes(option.id));
     const canShare=current&&['pending','pass','changes_requested'].includes(requestState);
@@ -149,6 +149,7 @@ export function createReviewView({
     const canReadContext=workspace.authentication?.permissions.review || actor?.kind==='reviewer'&&run.reviewAssignments?.at(-1)?.reviewerIds.includes(actor.id);
     const next = reviewNextStep(workspace, run, {demo});
     const requestControls = reviewerAssignmentPanel(workspace, run);
+    const awaitingReview=!state.passed&&workspace.reviewRequests?.[run.id]==='pending';
     const resultLabel = demo ? 'Sample review: ' + ({passed:'passed',pending:'not recorded','changes-requested':'changes requested',stale:'stale',historical:'historical',invalid:'invalid',unavailable:'unavailable'}[state.state]) : state.label;
     const boundaries = el('ol', {class:'review-boundaries', 'aria-label':'Review authority boundaries'},
       el('li',{},el('strong',{},'Builder'),el('span',{},'Produces the candidate commit')),
@@ -158,11 +159,12 @@ export function createReviewView({
     return panel('Independent code review',el('div',{class:'panel-body'},
       el('div',{class:'review-result','data-state':state.state},el('p',{class:'review-result-label',role:'status'},resultLabel),
         demo ? el('p',{class:'small review-sample-note'},'Illustrative review · invented example records. Browsing does not authenticate a reviewer or run checks.') : null,
-        !demo && !hosted ? el('p',{class:'small'},'Local loopback decisions are attribution. This mode does not authenticate an independent reviewer or establish a security boundary between local processes.') : null),
+        !demo && !hosted ? el('p',{class:'small'},'Local attribution only · no authenticated independent reviewer.') : null),
       el('section',{class:'review-next-step','aria-label':'Next review step'},
         el('h3',{},'Next step'),el('p',{class:'review-next-owner'},next.owner),el('p',{},next.next),
         el('dl',{class:'review-waiting'},el('dt',{},'Waiting on'),el('dd',{},next.waiting.length === 0 ? 'Nothing for this candidate.' : next.waiting.length === 1 ? next.waiting[0] : el('ul',{},next.waiting.map(text=>el('li',{},text))))),
         el('p',{class:'small review-integration-mode'},'Integration: '+next.integration)),
+      awaitingReview?el('button',{type:'button',class:'button button-primary',onclick:()=>refresh(true)},'Refresh review status'):null,
       assessment ? el('article',{class:'review-assessment-card'},
         el('h3',{},state.passed ? 'Recorded assessment' : state.state === 'changes-requested' ? 'Requested changes' : 'Earlier assessment · not current approval'),
         el('p',{class:'review-assessment-meta'},`${assessment.identity.displayName} · ${dateTime(assessment.at)} · commit ${shortSha(assessment.context.headCommit)}`),
@@ -241,7 +243,7 @@ export function createReviewView({
       addCheck,
       el('button', { id:'check-submit-'+run.id, type:'submit', class:'button button-primary', disabled:busy, title:busy?'Wait for the current operation.':'Run these checks against this exact commit.' }, actionFeedback.get(actionKey('checks',task,run))?.phase==='pending' ? 'Checking commit…' : 'Run independent checks'),
       resultNotice, reportButton, actionNotice(actionKey('checks',task,run)));
-    return el('button',{type:'button',class:'button button-small',onclick:()=>openInspector('Independent check setup',form)},run.evidence?'Configure checks for this revision':'Configure independent checks');
+    return el('button',{type:'button',class:'button button-primary button-small check-setup-action',onclick:()=>openInspector('Independent check setup',form)},run.evidence?'Configure checks for this revision':'Configure independent checks');
   }
 
   function revisionEvidence(run) {
@@ -252,7 +254,7 @@ export function createReviewView({
     const stale = !!run.evidence && checked !== revision;
     const commands = task.origin === 'connected-git' || task.verificationProfile === 'commands';
     const hasChecks = run.checksConfigured || task.origin === 'connected-git' && run.evidence;
-    const canVerify = !task.acceptedRunId && !task.mergedCommit && run.status === "awaiting_review" && workspace.capabilities?.verify && !independentlyVerified(run) && (!commands || hasChecks && !stale);
+    const canVerify = !run.verificationPending && !task.acceptedRunId && !task.mergedCommit && run.status === "awaiting_review" && workspace.capabilities?.verify && !independentlyVerified(run) && (!commands || hasChecks && !stale);
     const earlier=earlierReportPanel(workspace,run,disclosure);
     if (!stale && !canVerify && !earlier) return null;
     if (!stale && !canVerify) return earlier;
@@ -260,7 +262,7 @@ export function createReviewView({
       el("p", {}, `Current requirements: revision ${revision}. ` + (checked === null ? 'No report recorded for this candidate yet.' : `This report: revision ${checked}.`)),
       stale ? el("p", { class: "inline-error" }, "The requirements changed. The commit is retained, but its earlier checks cannot authorize acceptance.") : null,
       el("p", { class: "small muted" }, commands && stale ? 'Open Configure checks for this revision below. Review and update the definition before running it; the previous definition cannot check revised requirements.' : commands ? 'Checks are pinned to a commit and requirements revision. Configure current checks below when requirements change.' : 'Rechecking runs the independent checkout contract without generating code. Additional written criteria still require human review.'),
-      canVerify ? el("button", { id:'recheck-'+run.id, type:'button', class: "button button-small", disabled: busy, title: busy ? 'Wait for the current action to finish.' : 'Recheck this exact commit against the current requirements.', onclick: async () => {
+      canVerify ? el("button", { id:'recheck-'+run.id, type:'button', class: "button button-primary button-small", disabled: busy, title: busy ? 'Wait for the current action to finish.' : 'Recheck this exact commit against the current requirements.', onclick: async () => {
         const result = await mutate(() => runOperation(`/api/runs/${encodeURIComponent(run.id)}/verify`, { headCommit: run.headCommit, taskRevision: revision }), 'Recheck request recorded. Follow the current verification report before accepting.',
           {key:actionKey('recheck',task,run),pending:'Rechecking the retained commit against current requirements. No agent code is regenerated.'});
         if (result) await revealVerification(workspace.id, task.id, run.id, captureReviewSurface());
@@ -287,7 +289,7 @@ export function createReviewView({
     }
     const body = el('div', { class: 'panel-body' },
       client ? el('label',{for:'resolution-client'},'Agent for resolution work',client) : null,
-      el('p', { class: 'small' }, 'This candidate starts at ' + shortSha(task.baseCommit) + '; the last observed project main is ' + shortSha(project.mainCommit) + '. The server reads main again before updating. A new candidate keeps the earlier commits, reports and decisions in the record.'),
+      el('p', { class: 'small' }, 'Base ' + shortSha(task.baseCommit) + ' · observed main ' + shortSha(project.mainCommit) + '. The server rechecks main. Updating retains this candidate and creates a replacement that needs fresh checks and review.'),
       el('div', { class: 'review-buttons' },
         el('button', { id:'reapply-'+run.id, type:'button', class: 'button button-primary', disabled: busy || active, title: active ? 'Finish this task’s assigned work first.' : 'Reapply this change to current main. New verification and review are required.', onclick: () => update('reapply') }, 'Update candidate base'),
         el('button', { id:'resolve-'+run.id, type:'button', class: 'button', disabled: busy || active || !project.acceptingWork, title: !project.acceptingWork ? 'Enable new agent work in the project home.' : 'Prepare a checkout on current main so an agent can resolve the original change.', onclick: () => update('resolve') }, 'Prepare resolution checkout')),
@@ -304,44 +306,62 @@ export function createReviewView({
     if (!run) return el('div', {}, taskHeader(task), panel('Review', el('p', { class: 'no-candidate' }, 'No candidates have been assigned.')));
     const checks = run.verificationPending ? 'Running' : !run.evidence ? 'Not run' : `${run.evidence.passed} / ${run.evidence.total} · ${independentlyVerified(run) ? 'current' : 'reported'}`;
     const decision = run.status === 'merged' ? 'Merged' : run.review?.decision === 'accept' ? 'Accepted' : run.review?.decision === 'reject' ? 'Rejected' : 'Not recorded';
+    const outcome = candidateOutcome(workspace,run);
     const fileCount = run.changedFiles?.length ?? 0;
-    const tabs=[['Changes',fileCount+(fileCount===1?' file':' files'),'candidate-changes'],['Checks',checks,'verification'],['Independent review',independentReviewStatus(workspace,run).state,'code-review'],['Owner decision',decision,'review-decision']];
+    const independentState=independentReviewStatus(workspace,run).state;
+    const tabs=[['Changes',fileCount+(fileCount===1?' file':' files'),'candidate-changes'],['Checks',checks,'verification'],['Independent review',independentState==='unavailable'?'Hosted only':independentState,'code-review'],['Owner decision',decision,'review-decision']];
     const fragment=typeof location==='object'?location.hash?.slice(1):null;
-    const nextSection=workspace.provider==='cloudflare-artifacts' && ['awaiting_review','accepted'].includes(run.status)
-      && independentlyVerified(run) && run.evidence.passed===run.evidence.total && run.evidence.total>0 && run.evidence.exitCode===0
-      ? independentReviewStatus(workspace,run).passed ? 'review-decision' : 'code-review' : 'verification';
-    const active=tabs.some(([, ,id])=>id===fragment)?fragment:nextSection;
+    const nextSection=outcome.section==='evidence'?'verification':outcome.section;
+    const active=tabs.some(([, ,id])=>id===fragment)?fragment:outcome.label==='Checks pass · review next'?'candidate-changes':nextSection;
+    const checking=run.verificationPending;
+    const failed=outcome.label==='Checks failed';
+    const base=baseUpdatePanel(task,run);
+    const baseRequired=Boolean(base)&&outcome.label==='Update base needed';
+    if(baseRequired&&base.tagName==='DETAILS')base.open=true;
+    const retainedChecks=revisionEvidence(run),configureChecks=verificationSetup(task,run);
+    if(retainedChecks?.querySelector('#recheck-'+run.id)&&configureChecks)configureChecks.classList.remove('button-primary');
     const grid=el('div',{class:'review-grid','data-active-section':active},
-      el('div',{class:'review-verification',id:'verification',tabindex:'-1'},evidenceChecks(run),mergeReportPanel(workspace,run,disclosure),revisionEvidence(run),verificationSetup(task,run)),
+      el('div',{class:'review-verification'+(failed||checking?' check-followup':''),id:'verification',tabindex:'-1'},evidenceChecks(run),mergeReportPanel(workspace,run,disclosure),retainedChecks,configureChecks,
+        checking?el('button',{type:'button',class:'button button-primary',onclick:()=>refresh(true)},'Refresh check status'):failed&&!demo?el('button',{type:'button',class:'button button-primary',onclick:()=>openContinuation(run.id)},'Continue repair in your agent ↗'):null),
       el('div',{class:'review-independent',id:'code-review',tabindex:'-1'},independentReviewPanel(workspace,run)),
       el('div',{class:'review-decision'},reviewPanel(run,task)),
       el('div',{class:'review-changes',id:'candidate-changes',tabindex:'-1'},diffPanel(run),
         el('p',{class:'head-hint'},run.label+' · Head '+(run.headCommit||'Awaiting commit')),
         run.error?el('p',{class:'inline-error'},run.error):null));
-    const links=tabs.map(([label,value,id])=>el('a',{href:'#'+id,'aria-controls':id,'aria-current':id===active?'location':null,
-      onclick:event=>{
-        event.preventDefault();grid.setAttribute('data-active-section',id);
+    function selectSection(id) {
+        grid.setAttribute('data-active-section',id);
+        surface.setAttribute('data-guided',String(id===nextSection));
+        nextAction.hidden=id===nextSection&&outcome.section!=='evidence'||baseRequired;
+        nextBanner.hidden=baseRequired||id==='review-decision'&&nextSection==='review-decision';
         links.forEach((link,index)=>{if(tabs[index][2]===id)link.setAttribute('aria-current','location');else link.removeAttribute('aria-current');});
         if(typeof history==='object')history.replaceState(history.state,'','#'+id);
         onSectionChange(id);
         const target=document.getElementById(id);
         target?.focus({preventScroll:true});
         target?.scrollIntoView({block:'start',behavior:'instant'});
-      }},el('span',{},label),el('strong',{},value)));
+    }
+    const shortLabels={'candidate-changes':'Changes',verification:'Checks','code-review':'Review','review-decision':'Decision'};
+    const links=tabs.map(([label,value,id])=>el('a',{href:'#'+id,'aria-label':label+' · '+value,'aria-controls':id,'aria-current':id===active?'location':null,
+      onclick:event=>{event.preventDefault();selectSection(id);}},el('span',{class:'review-tab-label'},label),el('span',{class:'review-tab-short'},shortLabels[id]),el('strong',{},value)));
     const hasPrerequisites = Boolean(task.dependsOn?.length);
-    return el('div',{},
+    const nextAction=el('button',{id:'review-next-action',type:'button',class:'button button-primary',hidden:active===nextSection&&outcome.section!=='evidence'||baseRequired,onclick:()=>{
+      if(outcome.section==='evidence')switchView('evidence',task.id,run.id);
+      else selectSection(nextSection);
+    }},outcome.action+' →');
+    const nextBanner=el('div',{class:'review-next','data-compact-summary':String(outcome.label==='Checks pass · review next'),hidden:baseRequired||active==='review-decision'&&nextSection==='review-decision'},el('p',{},outcome.next),nextAction);
+    const surface=el('div',{class:'review-workflow','data-guided':String(active===nextSection),'data-base-required':String(baseRequired)},
       hasPrerequisites ? taskHeader(task) : el('p',{class:'review-identity'},task.title+' · Requirements r'+(task.revision??1)),
-      baseUpdatePanel(task,run),
+      base,
       publicationPanel(task,run),
       el('nav',{class:'review-jumps','aria-label':'Review sections'},links),
-      el('div',{class:'review-next'},
-        el('p',{},candidateOutcome(workspace,run).next),
-        demo ? null : el('button',{id:'continue-agent-'+run.id,type:'button',class:'button button-small',onclick:()=>openContinuation(run.id)},'Continue in your agent ↗')),
+      nextBanner,
       grid,
+      demo?null:disclosure('candidate-tools-'+run.id,'Candidate tools',el('button',{id:'continue-agent-'+run.id,type:'button',class:'button button-small',onclick:()=>openContinuation(run.id)},'Continue in your agent ↗')),
       disclosure('review-context-'+task.id+'-'+run.id,'Task brief, candidate details and agent summary',
         hasPrerequisites ? null : taskHeader(task),
         candidateNav(task),
         run.summary?el('p',{class:'review-agent-summary'},run.summary):null));
+    return surface;
   }
   return reviewView;
 }

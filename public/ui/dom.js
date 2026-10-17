@@ -32,8 +32,13 @@ export function explainDisabledButtons() {
       wrapper.removeAttribute('title');
       if (button.id) wrapper.id = `help-${button.id}`;
       wrapper.tabIndex = reason ? 0 : -1;
-      if (reason) wrapper.setAttribute('aria-label', `${button.textContent.trim()}: ${reason}`);
-      else wrapper.removeAttribute('aria-label');
+      if (reason) {
+        wrapper.setAttribute('role', 'group');
+        wrapper.setAttribute('aria-label', `${button.textContent.trim()}: ${reason}`);
+      } else {
+        wrapper.removeAttribute('role');
+        wrapper.removeAttribute('aria-label');
+      }
     }
   }
 }

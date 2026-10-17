@@ -2,7 +2,7 @@ import {$, el} from './dom.js';
 import {commandEntries} from '../workbench-state.js';
 
 // The palette navigates existing work; it never submits a workflow mutation.
-export function createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery}) {
+export function createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery, prepareOpen}) {
   let commandIndex = 0;
   let displayedCommands = [];
   let request=0,catalog=null,displayedScope=null;
@@ -59,10 +59,11 @@ export function createNavigation({getContext, dialogs, announce, selectProject, 
   function openCommands() {
     if (!getContext().workspace) { announce('Connect to the workspace before finding work.'); return; }
     if ($('#command-dialog').open) { $('#command-dialog').close(); return; }
+    const opener=prepareOpen();
     if (document.querySelector('dialog[open]')) return;
     commandIndex = 0;
     $('#command-query').value = '';
-    dialogs.show('command-dialog', '#command-query');
+    dialogs.show('command-dialog', '#command-query',opener);
     void renderCommands();
   }
 

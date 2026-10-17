@@ -1,14 +1,14 @@
 /* Shared by the workspace and the standalone reviewer page. */
 .error-banner {
-  position:fixed; inset-inline:16px; bottom:16px; z-index:1000;
+  position:fixed; inset-inline:var(--space-16); bottom:var(--space-16); z-index:1000;
   width:fit-content; max-width:min(720px,calc(100vw - 32px)); margin:0 auto;
-  padding:13px 16px; border:1px solid var(--worn-danger-border,#d6a29d);
+  padding:var(--space-12) var(--space-16); border:1px solid var(--worn-danger-border,#d6a29d);
   background:var(--worn-danger-bg,#fff1ef); color:var(--worn-danger-text,#922e24);
-  display:flex; align-items:flex-start; justify-content:space-between; gap:18px;
-  border-radius:var(--worn-radius-sm,8px); box-shadow:0 6px 24px #21322b26;
-  font-size:13px; line-height:1.65;
+  display:flex; align-items:flex-start; justify-content:space-between; gap:var(--space-16);
+  border-radius:var(--worn-radius-sm,var(--worn-radius)); box-shadow:0 6px 24px #21322b26;
+  font-size:var(--text-13); line-height:var(--leading-reading);
 }
 .error-banner[hidden] { display:none; }
 #error-text { min-width:0; max-height:30vh; overflow:auto; overflow-wrap:anywhere; }
-#dismiss-error { flex:0 0 44px; min-width:44px; min-height:44px; border:0; background:transparent; color:inherit; padding:3px 7px; font-size:20px; }
-@media(max-width:620px) { .error-banner { padding:12px; } }
+#dismiss-error { flex:0 0 var(--control-size); min-width:var(--control-size); min-height:var(--control-size); border:0; background:transparent; color:inherit; padding:var(--space-2) var(--space-8); font-size:var(--text-18); }
+@media(max-width:620px) { .error-banner { padding:var(--space-12); } }

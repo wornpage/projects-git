@@ -15,7 +15,7 @@ export function createTaskComposer({getContext, saveSession, updateChrome, showE
     owner=taskStack;lastCount=taskStack.length;selected=Math.max(0,Math.min(selected,taskStack.length-1));
     const source=$('#task-source').value, sample=source==='sample', task=taskStack[selected], index=selected;
     const isCurrent=()=>getContext().taskStack===taskStack&&getContext().workspace?.id===workspace.id&&$('#task-source').value===source;
-    const list=el('div',{class:'draft-list','aria-label':'Draft tasks'}), labels=[];
+    const list=el('div',{class:'draft-list',role:'group','aria-label':'Draft tasks'}), labels=[];
     taskStack.forEach((draft,position)=>{
       const title=el('strong',{},draft.title||'Define a task');labels.push(title);
       list.append(el('button',{type:'button',class:'draft-row','aria-pressed':position===selected,
