@@ -52,8 +52,27 @@ function fixture() {
   }});
   context.compactNavigation=controller;
   const flushClose=async()=>{await new Promise(resolve=>setImmediate(resolve));for(const close of queuedCloses.splice(0))close();};
-  return {nodes,sidebar,panel,state,controller,document,openInspector,flushClose,Node,context,dialogs};
+  return {nodes,sidebar,panel,state,controller,document,openInspector,flushClose,Node,context,dialogs,root};
 }
+
+test('the actual access-loss cleanup rescues static navigation from an open drawer before deleting private content',async()=>{
+  const f=fixture(),home=f.nodes['workspace-home'],views=f.nodes['project-views'],newProject=f.nodes['new-project'];
+  let clicks=0;home.addEventListener('click',()=>clicks++);
+  f.nodes['open-workspace-navigation'].dispatch('click');assert.equal(f.controller.isOpen(),true);
+  f.state.workspace=null;
+  const find=selector=>{
+    let node=f.document.querySelector(selector);if(!node){node=new f.Node(selector.slice(1));f.root.append(node);}return node;
+  };
+  f.document.querySelectorAll=()=>[f.nodes['inspector-dialog']].filter(node=>node.open);
+  Object.assign(f.context,{$:find,browserSession:{leave(){}},actions:{reset(){}},taskCreation:{restore(){}},projectDiscovery:{leave(){}},
+    navigation:{leave(){}},artifactPicker:{reset(){}},requirementsForm:{leave(){}},verificationDrafts:new Map(),retainedSearches:new Map(),forkCredentials:new Map(),saveLocation(){},clearError(){},
+    el:()=>new f.Node()});
+  const start=app.indexOf('function leaveWorkspace()'),end=app.indexOf('\nfunction connectionFailed(',start);
+  runInNewContext(app.slice(start,end)+'\nleaveWorkspace();',f.context);await f.flushClose();
+  assert.equal(f.nodes['inspector-dialog'].open,false);assert.equal(f.panel.children.length,0);assert.equal(f.nodes['project-navigation'].children.length,0);
+  for(const node of [home,views,newProject]){assert.equal(node.isConnected,true);assert.equal(node.parent,f.sidebar);}
+  assert.equal(f.document.getElementById('task-count'),f.nodes['task-count']);home.dispatch('click');assert.equal(clicks,1);
+});
 
 test('phone navigation reuses live counters and handlers and restores the same nodes after native close',async()=>{
   const f=fixture(),views=f.nodes['project-views'],home=f.nodes['workspace-home'];

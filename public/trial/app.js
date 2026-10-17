@@ -10,4 +10,7 @@ if(location.pathname==='/trial/signup') {
   client.refresh();
   addEventListener('pagehide',()=>client.suspend());
   addEventListener('pageshow',event=>{if(event.persisted)client.refresh();});
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden)client.suspend();else client.refresh();
+  });
 }

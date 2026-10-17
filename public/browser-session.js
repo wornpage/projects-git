@@ -73,5 +73,9 @@ export function createBrowserSession({drafts, disclosures, assignmentRequests, o
     if (!text(value, 100)) throw new Error('Reviewer name must be text of at most 100 characters.');
     reviewerName = value.trim();
   }
-  return {enter, save, rememberReviewerName, getReviewerName: () => reviewerName, get warning() { return warning; }};
+  function leave() {
+    key=null;warning=false;reviewerName='';
+    for(const map of [drafts,disclosures,assignmentRequests,operationRequests,projectSelections])map.clear();
+  }
+  return {enter, leave, save, rememberReviewerName, getReviewerName: () => reviewerName, get warning() { return warning; }};
 }

@@ -44,3 +44,15 @@ test('a failed catalog read can retry without clearing project pins',async()=>{
  unavailable=true;workspace.version++;await discovery.sync('p3');assert.match(discovery.error(),/unavailable/);assert.equal(discovery.pinned('p3'),true);
  unavailable=false;discovery.retry();await new Promise(resolve=>setImmediate(resolve));assert.equal(discovery.error(),'');assert.equal(discovery.pinned('p3'),true);assert.equal(discovery.items()[0].id,'p3');
 });
+
+test('leaving clears cached names and fences delayed catalogs without overwriting owner shortcuts',async()=>{
+  const workspace=fixture(),local=storage();let delayed=false,resolve;
+  const discovery=createProjectDiscovery({getContext:()=>({workspace}),api:async path=>{
+    const catalog=projectCatalog(workspace,parseProjectCatalog(path.split('?')[1]));
+    return delayed?new Promise(done=>{resolve=()=>done(catalog);}):catalog;
+  },storage:local,onChange(){},captureSession:()=>()=>true});
+  await discovery.sync('p1');assert.equal(discovery.items()[0].name,'Project 1');const before=[...local.data];
+  delayed=true;workspace.version++;const pending=discovery.sync('p1');
+  discovery.leave();assert.equal(discovery.items().length,0);assert.equal(discovery.pinned('p1'),false);
+  resolve();await pending;assert.equal(discovery.items().length,0);assert.deepEqual([...local.data],before);
+});

@@ -71,12 +71,8 @@ let lastError = "";
 
 // Compose UI owners here; they receive current state and explicit operations.
 function getContext() { return {workspace, view, selectedProject, selectedTask, selectedRun, demo:Boolean(demo), busy: actions.busy, sessionWarning: browserSession.warning}; }
-const api = demo ? demo.createDemoApi() : createApiClient({captureSession: () => connection.captureSession(), onAuthRequired: () => {
-  browserTools?.disable('Browser tools stopped because this session needs sign-in.');
-  for(const dialog of document.querySelectorAll('dialog[open]')) { dialogs.skipFocusRestore(dialog.id); dialog.close(); }
-  $('#auth-panel').hidden = false;
-  $('#auth-panel').querySelector('a').focus();
-}});
+const api = demo ? demo.createDemoApi() : createApiClient({captureSession: () => connection.captureSession(),
+  onAccessLost: error => connection.invalidate(error)});
 const connection = createWorkspaceConnection({api, getWorkspace: () => workspace, setWorkspace: value => { workspace = value; },
   getPath: workspacePath,
   normalizeSnapshot: value => value.page ? value : projectWorkspace(value,{...parseWorkspacePage(workspacePath().split('?')[1]),at:null},value.sourceRevision??value.version),
@@ -109,7 +105,8 @@ const compactNavigation=createCompactNavigation({document,getWorkspace:()=>works
 const collections=createCollectionPager({getScope:()=>JSON.stringify([workspace.id,workspace.authentication?.principal??null]),render});
 const navigation = createNavigation({getContext, dialogs, announce, selectProject, switchView, projectDiscovery});
 const {openContinuation} = createContinuationDialog({getContext, api, dialogs, showError, downloadJson, captureSession:connection.captureSession});
-const {openRevision, renderRevisionPreview} = createRequirementsForm({getContext, api, dialogs, refresh, announce});
+const requirementsForm = createRequirementsForm({getContext, api, dialogs, refresh, announce});
+const {openRevision, renderRevisionPreview} = requirementsForm;
 const browserSession = createBrowserSession({drafts, disclosures, assignmentRequests, operationRequests, projectSelections, onWarning: showError});
 const taskCreation = createTaskCreation({getContext, currentProject, selectProject,
   selectTask: taskId => { selectedTask = taskId; selectedRun = null; }, switchView, api, refresh,
@@ -678,17 +675,45 @@ function workspaceReceived(data, previous, {force, recoveredError}) {
   render(force);
   if ($('#revision-dialog').open) renderRevisionPreview();
 }
-function connectionFailed(error) {
+function leaveWorkspace() {
+  // Restore moved navigation nodes before deleting identity-owned drawer/cards.
+  compactNavigation.restore();
+  $('#project-navigation').after($('#project-views'));
+  for(const dialog of document.querySelectorAll('dialog[open]')){dialogs.skipFocusRestore(dialog.id);dialog.close();}
+  browserSession.leave();actions.reset();taskCreation.restore(null);
+  projectDiscovery.leave();navigation.leave();artifactPicker.reset();requirementsForm.leave();
+  verificationDrafts.clear();retainedSearches.clear();forkCredentials.clear();
+  view='projects';selectedTask=null;selectedRun=null;selectedProject=null;projectOffset=0;pageRevision=null;
+  renderKey='';navigationKey='';projectHeaderKey='';
+  for(const id of ['identity-status','project-navigation','project-header','inspector-content','project-connection-content','task-drafts','announcement',
+    'task-source-note','task-creation-status','repository-inspection-status','model-availability','model-budget','continuation-notice','git-note-notice'])$('#'+id).replaceChildren();
+  $('#identity-status').title='';$('#workspace-name').textContent='Project workspace';
+  $('#project-breadcrumb').textContent='Workspace';$('#provider-label').textContent='Workspace access required';
+  $('#inspector-title').textContent='Details';$('#project-connection-title').textContent='Connect agent';
+  for(const id of ['project-total','task-count','work-count','review-count'])$('#'+id).textContent='0';
+  for(const id of ['workspace-access-controls','project-header','project-views','task-views','candidate-views'])$('#'+id).hidden=true;
+  for(const id of ['continuation-text','git-note-preview'])$('#'+id).value='';
+  $('#task-source').replaceChildren(el('option',{value:'repository'},'New project · connect code'),el('option',{value:'sample'},'New project · checkout starter'));
+  saveLocation();clearError();
+}
+function connectionFailed(error,{previous}={}) {
   browserTools.disable('Browser tools stopped while this workspace connection is unavailable.');
+  if(error.accessLost)leaveWorkspace();
   showError(error.message); updateConnectionStatus();
   $('#provider-dot').classList.remove('connected');
   content.setAttribute('aria-busy', 'false');
   const unavailableItem = ['PROJECT_NOT_FOUND','RUN_NOT_FOUND'].includes(error.code);
+  const trialDenied=error.code?.startsWith('TRIAL_')||Boolean(previous?.trial);
   if (!workspace) content.replaceChildren(el('div', {class:'panel'}, el('div', {class:'empty-state'},
-    el('h2', {}, error.auth ? 'Connect to continue' : unavailableItem ? 'Work unavailable' : 'Workspace unavailable'),
-    el('p', {}, error.auth ? 'Sign in through Cloudflare Access to open this workspace.' : unavailableItem ? 'That project or task is not available in this workspace. Open Projects to choose available work.' : 'The workspace could not load. Check the connection, then reconnect.'),
-    unavailableItem ? el('a',{class:'button',href:location.pathname+'?view=projects'},'Open Projects')
+    el('h2', {}, error.auth ? 'Connect to continue' : error.accessLost ? 'Workspace access required' : unavailableItem ? 'Work unavailable' : 'Workspace unavailable'),
+    el('p', {}, error.auth ? 'Sign in through Cloudflare Access to open this workspace.' : error.accessLost ? 'Your access to this workspace is no longer available. Check your signed-in identity and trial status before continuing.' : unavailableItem ? 'That project or task is not available in this workspace. Open Projects to choose available work.' : 'The workspace could not load. Check the connection, then reconnect.'),
+    error.accessLost&&!error.auth ? el('a',{class:'button',href:trialDenied?'/trial/signup':'/cdn-cgi/access/logout'},trialDenied?'Check identity and trial status':'Sign out to change identity')
+      : unavailableItem ? el('a',{class:'button',href:location.pathname+'?view=projects'},'Open Projects')
       : !error.auth ? el('button', {class:'button', onclick: () => refresh(true)}, 'Reconnect') : null)));
+  if(error.accessLost){
+    $('#auth-panel').hidden=!error.auth;
+    (error.auth?$('#auth-panel').querySelector('a'):content.querySelector('a')).focus();
+  }
 }
 
 $('#adopt-owner').addEventListener('click',async()=>{
