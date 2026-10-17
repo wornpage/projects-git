@@ -61,4 +61,3 @@ export async function gitHttpFixture(t) {
     candidateRemote: candidate.remote, candidateToken: 'candidate-read-token', candidateBranch: candidate.branch, baseCommit, headCommit, beforePush: async () => {} });
   return { root, work, git, transport, candidate, merge, baseCommit, received, interceptReceive: hook => { beforeReceive = hook; } };
 }
-
